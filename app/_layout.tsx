@@ -1,14 +1,14 @@
 import { StatusBar, View, Text } from 'react-native';
 import { Component, ReactNode, useState, useEffect, Suspense } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 // Keep splash screen visible while we load
 SplashScreen.preventAutoHideAsync();
 
-// Lazy load ALL native modules to prevent crashes
+// Lazy load router and gesture handler to prevent crashes
 let Slot: any;
 let GestureHandlerRootView: any;
-let SafeAreaProvider: any;
 
 try {
   Slot = require('expo-router').Slot;
@@ -28,30 +28,6 @@ try {
 } catch (e) {
   console.warn('[RootLayout] GestureHandlerRootView not available:', e);
   GestureHandlerRootView = View;
-}
-
-try {
-  const safeAreaContext = require('react-native-safe-area-context');
-  SafeAreaProvider = safeAreaContext.SafeAreaProvider;
-  // Ensure the module is initialized
-  if (!SafeAreaProvider) {
-    throw new Error('SafeAreaProvider not found');
-  }
-} catch (e) {
-  console.error('[RootLayout] SafeAreaProvider not available:', e);
-  // Use a wrapper that provides default insets
-  SafeAreaProvider = ({ children }: { children: ReactNode }) => {
-    // Provide a context-like wrapper
-    const SafeAreaContext = require('react-native-safe-area-context').SafeAreaContext;
-    if (SafeAreaContext) {
-      return (
-        <SafeAreaContext.Provider value={{ top: 0, bottom: 0, left: 0, right: 0 }}>
-          {children}
-        </SafeAreaContext.Provider>
-      );
-    }
-    return <>{children}</>;
-  };
 }
 
 class ErrorBoundary extends Component<
