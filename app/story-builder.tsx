@@ -15,7 +15,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { GestureHandlerRootView, Swipeable, PanGestureHandler, State } from 'react-native-gesture-handler';
+import { GestureHandlerRootView, Swipeable, PanGestureHandler, LongPressGestureHandler, State } from 'react-native-gesture-handler';
 import { supabase } from '@/lib/supabase';
 import { Asset } from '@/types';
 import { exportStorySequence } from '@/utils/exportStory';
@@ -252,19 +252,7 @@ export default function StoryBuilderScreen() {
 
     const onHandlerStateChange = useCallback(
       (event: any) => {
-        if (event.nativeEvent.state === State.BEGAN) {
-          isDraggingRef.current = true;
-          swipeableRef.current?.close();
-          currentIndexRef.current = index;
-          lastSwapIndexRef.current = index;
-          handleDragStart(index);
-          Animated.spring(scaleAnim, {
-            toValue: 1.05,
-            useNativeDriver: true,
-            tension: 300,
-            friction: 10,
-          }).start();
-        } else if (
+        if (
           event.nativeEvent.state === State.END ||
           event.nativeEvent.state === State.CANCELLED
         ) {
@@ -286,7 +274,7 @@ export default function StoryBuilderScreen() {
           handleDragEnd();
         }
       },
-      [index, handleDragStart, handleDragEnd]
+      [handleDragEnd]
     );
 
     const animatedStyle = {
@@ -319,9 +307,35 @@ export default function StoryBuilderScreen() {
         renderRightActions={renderRightActions}
         overshootRight={false}
         friction={2}
+        enabled={draggedIndex !== index}
       >
-        <Animated.View style={[styles.photoCard, animatedStyle]}>
-          <View style={styles.photoCardContent}>
+        <LongPressGestureHandler
+          minDurationMs={300}
+          onHandlerStateChange={(event) => {
+            if (event.nativeEvent.state === State.ACTIVE) {
+              swipeableRef.current?.close();
+              isDraggingRef.current = true;
+              currentIndexRef.current = index;
+              lastSwapIndexRef.current = index;
+              handleDragStart(index);
+              Animated.spring(scaleAnim, {
+                toValue: 1.05,
+                useNativeDriver: true,
+                tension: 300,
+                friction: 10,
+              }).start();
+            }
+          }}
+        >
+          <PanGestureHandler
+            onGestureEvent={onGestureEvent}
+            onHandlerStateChange={onHandlerStateChange}
+            activeOffsetY={[-10, 10]}
+            failOffsetX={[-50, 50]}
+            enabled={draggedIndex === index || draggedIndex === null}
+          >
+            <Animated.View style={[styles.photoCard, animatedStyle]}>
+              <View style={styles.photoCardContent}>
             {/* Thumbnail with Index Badge */}
             <TouchableOpacity
               onPress={() => setPreviewAsset(asset)}
@@ -362,20 +376,14 @@ export default function StoryBuilderScreen() {
 
             {/* Actions */}
             <View style={styles.photoCardActions}>
-              <PanGestureHandler
-                onGestureEvent={onGestureEvent}
-                onHandlerStateChange={onHandlerStateChange}
-                activeOffsetY={[-5, 5]}
-                failOffsetX={[-20, 20]}
-                simultaneousHandlers={swipeableRef}
-              >
-                <Animated.View style={styles.dragHandle}>
-                  <Text style={styles.dragHandleIcon}>≡</Text>
-                </Animated.View>
-              </PanGestureHandler>
+              <View style={styles.dragHandle}>
+                <Text style={styles.dragHandleIcon}>≡</Text>
+              </View>
             </View>
           </View>
         </Animated.View>
+          </PanGestureHandler>
+        </LongPressGestureHandler>
       </Swipeable>
     );
   };
