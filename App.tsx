@@ -1,19 +1,21 @@
-import { Component, ReactNode } from 'react';
-import { View, Text } from 'react-native';
+import { Component, ReactNode, useState, useEffect } from 'react';
+import { View, Text, AppState, AppStateStatus } from 'react-native';
 
-// Lazy load ExpoRoot to prevent early native module initialization
-let ExpoRoot: any;
-try {
-  ExpoRoot = require('expo-router').ExpoRoot;
-} catch (e) {
-  console.error('[App] Failed to load ExpoRoot:', e);
-  ExpoRoot = () => (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-      <Text style={{ fontSize: 16, color: '#666', textAlign: 'center' }}>
-        Failed to load app router
-      </Text>
-    </View>
-  );
+// Delay loading ExpoRoot until native modules are definitely ready
+let ExpoRoot: any = null;
+let isExpoRootLoaded = false;
+
+function loadExpoRoot() {
+  if (isExpoRootLoaded) return ExpoRoot;
+  
+  try {
+    ExpoRoot = require('expo-router').ExpoRoot;
+    isExpoRootLoaded = true;
+    return ExpoRoot;
+  } catch (e) {
+    console.error('[App] Failed to load ExpoRoot:', e);
+    return null;
+  }
 }
 
 class AppErrorBoundary extends Component<
@@ -52,11 +54,62 @@ class AppErrorBoundary extends Component<
 }
 
 export default function App() {
+  const [isReady, setIsReady] = useState(false);
+  const [appState, setAppState] = useState<AppStateStatus>('active');
+
+  useEffect(() => {
+    // Wait for app to be in active state and native modules to be ready
+    const prepare = async () => {
+      try {
+        // Wait for app state to be active (ensures native bridge is ready)
+        if (appState !== 'active') {
+          const subscription = AppState.addEventListener('change', (nextAppState) => {
+            setAppState(nextAppState);
+            if (nextAppState === 'active') {
+              subscription.remove();
+              setTimeout(() => setIsReady(true), 1000);
+            }
+          });
+          return () => subscription.remove();
+        }
+        
+        // Additional delay to ensure native modules are initialized
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        setIsReady(true);
+      } catch (error) {
+        console.error('[App] Error during preparation:', error);
+        // Still try to load after delay
+        setTimeout(() => setIsReady(true), 2000);
+      }
+    };
+
+    prepare();
+  }, [appState]);
+
+  if (!isReady) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fafafa' }}>
+        <Text style={{ fontSize: 16, color: '#666' }}>Initializing...</Text>
+      </View>
+    );
+  }
+
   try {
+    const RootComponent = loadExpoRoot();
+    if (!RootComponent) {
+      return (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: '#fafafa' }}>
+          <Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 10, color: '#000' }}>
+            Failed to load router
+          </Text>
+        </View>
+      );
+    }
+
     const ctx = require.context('./app');
     return (
       <AppErrorBoundary>
-        <ExpoRoot context={ctx} />
+        <RootComponent context={ctx} />
       </AppErrorBoundary>
     );
   } catch (error) {
