@@ -1,10 +1,27 @@
-import { Slot } from 'expo-router';
 import { StatusBar, View, Text } from 'react-native';
-import { Component, ReactNode, useState, useEffect } from 'react';
+import { Component, ReactNode, useState, useEffect, Suspense } from 'react';
+import * as SplashScreen from 'expo-splash-screen';
 
-// Lazy load native modules to prevent crashes if they fail to initialize
+// Keep splash screen visible while we load
+SplashScreen.preventAutoHideAsync();
+
+// Lazy load ALL native modules to prevent crashes
+let Slot: any;
 let GestureHandlerRootView: any;
 let SafeAreaProvider: any;
+
+try {
+  Slot = require('expo-router').Slot;
+} catch (e) {
+  console.error('[RootLayout] Failed to load Slot:', e);
+  Slot = () => (
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+      <Text style={{ fontSize: 16, color: '#666', textAlign: 'center' }}>
+        Failed to load router
+      </Text>
+    </View>
+  );
+}
 
 try {
   GestureHandlerRootView = require('react-native-gesture-handler').GestureHandlerRootView;
@@ -62,19 +79,24 @@ export default function RootLayout() {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    // Delay initialization to ensure native modules are ready
-    const timer = setTimeout(() => {
-      setIsReady(true);
-    }, 100);
-    return () => clearTimeout(timer);
+    // Wait for native modules to be ready before rendering
+    const prepare = async () => {
+      try {
+        // Give native modules time to initialize
+        await new Promise(resolve => setTimeout(resolve, 500));
+        setIsReady(true);
+        await SplashScreen.hideAsync();
+      } catch (error) {
+        console.error('[RootLayout] Error during initialization:', error);
+        setIsReady(true); // Still try to render even if splash screen fails
+      }
+    };
+
+    prepare();
   }, []);
 
   if (!isReady) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fafafa' }}>
-        <Text style={{ fontSize: 16, color: '#666' }}>Loading...</Text>
-      </View>
-    );
+    return null; // Splash screen will show
   }
 
   try {
@@ -84,7 +106,15 @@ export default function RootLayout() {
           <GestureHandlerRootView style={{ flex: 1 }}>
             <View style={{ flex: 1, backgroundColor: '#fafafa' }}>
               <StatusBar barStyle="dark-content" />
-              <Slot />
+              <Suspense
+                fallback={
+                  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                    <Text style={{ fontSize: 16, color: '#666' }}>Loading...</Text>
+                  </View>
+                }
+              >
+                <Slot />
+              </Suspense>
             </View>
           </GestureHandlerRootView>
         </SafeAreaProvider>
@@ -92,6 +122,7 @@ export default function RootLayout() {
     );
   } catch (error) {
     console.error('[RootLayout] Error rendering:', error);
+    SplashScreen.hideAsync().catch(() => {});
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: '#fafafa' }}>
         <Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 10, color: '#000' }}>
