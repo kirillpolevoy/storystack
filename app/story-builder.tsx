@@ -209,68 +209,85 @@ export default function StoryBuilderScreen() {
     const scaleAnim = useRef(new Animated.Value(1)).current;
     const translateY = useRef(new Animated.Value(0)).current;
     const swipeableRef = useRef<Swipeable>(null);
-    const dragStartY = useRef(0);
-    const dragStartIndex = useRef(index);
-    const lastSwapIndex = useRef(index);
+    const currentIndexRef = useRef(index);
+    const lastSwapIndexRef = useRef(index);
+    const isDraggingRef = useRef(false);
 
-    const onGestureEvent = Animated.event(
-      [{ nativeEvent: { translationY: translateY } }],
-      {
-        useNativeDriver: true,
-        listener: (event: any) => {
-          const translationY = event.nativeEvent.translationY;
-          if (draggedIndex === index) {
+    // Update refs when index changes
+    useEffect(() => {
+      currentIndexRef.current = index;
+      if (!isDraggingRef.current) {
+        lastSwapIndexRef.current = index;
+      }
+    }, [index]);
+
+    const onGestureEvent = useCallback(
+      Animated.event(
+        [{ nativeEvent: { translationY: translateY } }],
+        {
+          useNativeDriver: true,
+          listener: (event: any) => {
+            if (!isDraggingRef.current) return;
+            
+            const translationY = event.nativeEvent.translationY;
+            const currentIndex = currentIndexRef.current;
+            
             // Calculate which index we should swap with based on drag distance
             const cardHeight = 128; // Approximate card height with margin
             const delta = translationY / cardHeight;
-            const newIndex = Math.round(index + delta);
+            const newIndex = Math.round(currentIndex + delta);
             const clampedIndex = Math.max(0, Math.min(orderedAssets.length - 1, newIndex));
             
             // Only swap if we've moved to a different position
-            if (clampedIndex !== lastSwapIndex.current && clampedIndex !== index) {
-              moveAsset(index, clampedIndex);
-              lastSwapIndex.current = clampedIndex;
+            if (clampedIndex !== lastSwapIndexRef.current && clampedIndex !== currentIndex) {
+              moveAsset(currentIndex, clampedIndex);
+              lastSwapIndexRef.current = clampedIndex;
+              currentIndexRef.current = clampedIndex;
             }
-          }
-        },
-      }
+          },
+        }
+      ),
+      [orderedAssets.length, moveAsset]
     );
 
-    const onHandlerStateChange = (event: any) => {
-      if (event.nativeEvent.state === State.BEGAN) {
-        swipeableRef.current?.close();
-        dragStartY.current = event.nativeEvent.y;
-        dragStartIndex.current = index;
-        lastSwapIndex.current = index;
-        handleDragStart(index);
-        Animated.spring(scaleAnim, {
-          toValue: 1.05,
-          useNativeDriver: true,
-          tension: 300,
-          friction: 10,
-        }).start();
-      } else if (
-        event.nativeEvent.state === State.END ||
-        event.nativeEvent.state === State.CANCELLED
-      ) {
-        Animated.parallel([
+    const onHandlerStateChange = useCallback(
+      (event: any) => {
+        if (event.nativeEvent.state === State.BEGAN) {
+          isDraggingRef.current = true;
+          swipeableRef.current?.close();
+          currentIndexRef.current = index;
+          lastSwapIndexRef.current = index;
+          handleDragStart(index);
           Animated.spring(scaleAnim, {
-            toValue: 1,
+            toValue: 1.05,
             useNativeDriver: true,
             tension: 300,
-            friction: 20,
-          }),
-          Animated.spring(translateY, {
-            toValue: 0,
-            useNativeDriver: true,
-            tension: 300,
-            friction: 20,
-          }),
-        ]).start();
-        handleDragEnd();
-        lastSwapIndex.current = index;
-      }
-    };
+            friction: 10,
+          }).start();
+        } else if (
+          event.nativeEvent.state === State.END ||
+          event.nativeEvent.state === State.CANCELLED
+        ) {
+          isDraggingRef.current = false;
+          Animated.parallel([
+            Animated.spring(scaleAnim, {
+              toValue: 1,
+              useNativeDriver: true,
+              tension: 300,
+              friction: 20,
+            }),
+            Animated.spring(translateY, {
+              toValue: 0,
+              useNativeDriver: true,
+              tension: 300,
+              friction: 20,
+            }),
+          ]).start();
+          handleDragEnd();
+        }
+      },
+      [index, handleDragStart, handleDragEnd]
+    );
 
     const animatedStyle = {
       transform: [
