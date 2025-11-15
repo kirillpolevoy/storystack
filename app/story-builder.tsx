@@ -209,7 +209,7 @@ export default function StoryBuilderScreen() {
     });
   }, []);
 
-  const canExport = storyName.trim().length > 0 && orderedAssets.length > 0;
+  const canExport = orderedAssets.length > 0;
 
   // Photo Card Component
   const PhotoCard = ({ asset, index }: { asset: Asset; index: number }) => {
@@ -419,17 +419,17 @@ export default function StoryBuilderScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={handleExport}
-                disabled={!canExport || isExporting}
+                disabled={isExporting}
                 style={[
                   styles.exportButton,
-                  (!canExport || isExporting) && styles.exportButtonDisabled,
+                  isExporting && styles.exportButtonDisabled,
                 ]}
-                activeOpacity={canExport && !isExporting ? 0.85 : 1}
+                activeOpacity={!isExporting ? 0.85 : 1}
               >
                 <Text
                   style={[
                     styles.exportButtonText,
-                    (!canExport || isExporting) && styles.exportButtonTextDisabled,
+                    isExporting && styles.exportButtonTextDisabled,
                   ]}
                 >
                   {isExporting ? 'Exporting…' : 'Export Story'}
