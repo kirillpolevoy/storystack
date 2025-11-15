@@ -98,8 +98,14 @@ export default function CampaignDetailScreen() {
   // Load all available tags from tag library
   useEffect(() => {
     const loadAvailableTags = async () => {
-      const tags = await getAllAvailableTags();
-      setAllAvailableTags(tags);
+      try {
+        const tags = await getAllAvailableTags();
+        setAllAvailableTags(tags);
+      } catch (error) {
+        console.error('[CampaignDetail] Failed to load available tags:', error);
+        // Continue with empty tags array
+        setAllAvailableTags([]);
+      }
     };
     loadAvailableTags();
   }, []);
@@ -108,8 +114,13 @@ export default function CampaignDetailScreen() {
   useEffect(() => {
     if (isTagModalOpen) {
       const loadAvailableTags = async () => {
-        const tags = await getAllAvailableTags();
-        setAllAvailableTags(tags);
+        try {
+          const tags = await getAllAvailableTags();
+          setAllAvailableTags(tags);
+        } catch (error) {
+          console.error('[CampaignDetail] Failed to reload available tags:', error);
+          // Continue with existing tags
+        }
       };
       loadAvailableTags();
     }

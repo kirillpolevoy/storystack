@@ -24,13 +24,7 @@
     }
   },
   "submit": {
-    "production": {
-      "ios": {
-        "appleId": "your-apple-id@example.com",
-        "ascAppId": "auto",
-        "appleTeamId": "auto"
-      }
-    }
+    "production": {}
   }
 }
 

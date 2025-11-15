@@ -116,8 +116,13 @@ export default function LibraryScreen() {
   useEffect(() => {
     if (isTagModalOpen) {
       const loadAvailableTags = async () => {
-        const tags = await getAllAvailableTags();
-        setAllAvailableTags(tags);
+        try {
+          const tags = await getAllAvailableTags();
+          setAllAvailableTags(tags);
+        } catch (error) {
+          console.error('[LibraryScreen] Failed to reload available tags:', error);
+          // Continue with existing tags
+        }
       };
       loadAvailableTags();
     }
