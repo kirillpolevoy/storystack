@@ -209,18 +209,11 @@ export default function StoryBuilderScreen() {
     });
   }, []);
 
-  // Placeholder AI suggestions
-  const getSuggestedTags = useCallback((asset: Asset): string[] => {
-    // Placeholder - in real app this would come from AI
-    return ['gold', 'layered', 'statement', 'holiday drop'];
-  }, []);
-
   const canExport = storyName.trim().length > 0 && orderedAssets.length > 0;
 
   // Photo Card Component
   const PhotoCard = ({ asset, index }: { asset: Asset; index: number }) => {
     const assetTags = localTags[asset.id] || asset.tags || [];
-    const suggestedTags = getSuggestedTags(asset);
     const scaleAnim = useRef(new Animated.Value(1)).current;
     const swipeableRef = useRef<Swipeable>(null);
 
@@ -309,41 +302,6 @@ export default function StoryBuilderScreen() {
                   <Text style={styles.noTagsText}>No tags</Text>
                 )}
               </View>
-
-              {/* Suggested Tags Row */}
-              {suggestedTags.length > 0 && (
-                <View style={styles.suggestedTagsRow}>
-                  <Text style={styles.suggestedTagsLabel}>Suggested tags:</Text>
-                  <View style={styles.suggestedTagsContainer}>
-                    {suggestedTags.map((tag, tagIndex) => {
-                      const isAdded = assetTags.includes(tag);
-                      return (
-                        <TouchableOpacity
-                          key={tagIndex}
-                          onPress={() => {
-                            if (isAdded) {
-                              handleRemoveTag(asset.id, tag);
-                            }
-                          }}
-                          style={[
-                            styles.suggestedTagChip,
-                            isAdded && styles.suggestedTagChipAdded,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.suggestedTagChipText,
-                              isAdded && styles.suggestedTagChipTextAdded,
-                            ]}
-                          >
-                            {tag}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </View>
-              )}
             </View>
 
             {/* Actions */}
@@ -718,42 +676,6 @@ const styles = StyleSheet.create({
   noTagsText: {
     fontSize: 13,
     color: COLORS.textTertiary,
-  },
-  suggestedTagsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  suggestedTagsLabel: {
-    fontSize: 11,
-    color: COLORS.textTertiary,
-    marginRight: 6,
-  },
-  suggestedTagsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  suggestedTagChip: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 10,
-    backgroundColor: COLORS.borderLight,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  suggestedTagChipAdded: {
-    backgroundColor: COLORS.accentLight,
-    borderColor: COLORS.accent,
-  },
-  suggestedTagChipText: {
-    fontSize: 10,
-    fontWeight: '500',
-    color: COLORS.textSecondary,
-  },
-  suggestedTagChipTextAdded: {
-    color: COLORS.accent,
   },
   photoCardActions: {
     flexDirection: 'row',
