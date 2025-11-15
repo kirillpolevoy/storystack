@@ -209,74 +209,68 @@ export default function StoryBuilderScreen() {
     const scaleAnim = useRef(new Animated.Value(1)).current;
     const translateY = useRef(new Animated.Value(0)).current;
     const swipeableRef = useRef<Swipeable>(null);
-    const dragY = useRef(0);
-    const isDragging = useRef(false);
-    const currentIndexRef = useRef(index);
+    const dragStartY = useRef(0);
+    const dragStartIndex = useRef(index);
+    const lastSwapIndex = useRef(index);
 
-    // Update ref when index changes
-    useEffect(() => {
-      currentIndexRef.current = index;
-    }, [index]);
-
-    const onGestureEvent = useCallback(
-      Animated.event(
-        [{ nativeEvent: { translationY: translateY } }],
-        {
-          useNativeDriver: true,
-          listener: (event: any) => {
-            dragY.current = event.nativeEvent.translationY;
-            if (isDragging.current && draggedIndex === currentIndexRef.current) {
-              // Calculate which index we should swap with
-              const cardHeight = 128; // Approximate card height
-              const newIndex = Math.round(currentIndexRef.current + dragY.current / cardHeight);
-              const clampedIndex = Math.max(0, Math.min(orderedAssets.length - 1, newIndex));
-              if (clampedIndex !== currentIndexRef.current && clampedIndex !== index) {
-                moveAsset(currentIndexRef.current, clampedIndex);
-                handleDragStart(clampedIndex);
-              }
+    const onGestureEvent = Animated.event(
+      [{ nativeEvent: { translationY: translateY } }],
+      {
+        useNativeDriver: true,
+        listener: (event: any) => {
+          const translationY = event.nativeEvent.translationY;
+          if (draggedIndex === index) {
+            // Calculate which index we should swap with based on drag distance
+            const cardHeight = 128; // Approximate card height with margin
+            const delta = translationY / cardHeight;
+            const newIndex = Math.round(index + delta);
+            const clampedIndex = Math.max(0, Math.min(orderedAssets.length - 1, newIndex));
+            
+            // Only swap if we've moved to a different position
+            if (clampedIndex !== lastSwapIndex.current && clampedIndex !== index) {
+              moveAsset(index, clampedIndex);
+              lastSwapIndex.current = clampedIndex;
             }
-          },
-        }
-      ),
-      [draggedIndex, orderedAssets.length, moveAsset, handleDragStart]
+          }
+        },
+      }
     );
 
-    const onHandlerStateChange = useCallback(
-      (event: any) => {
-        if (event.nativeEvent.state === State.BEGAN) {
-          isDragging.current = true;
-          handleDragStart(currentIndexRef.current);
+    const onHandlerStateChange = (event: any) => {
+      if (event.nativeEvent.state === State.BEGAN) {
+        swipeableRef.current?.close();
+        dragStartY.current = event.nativeEvent.y;
+        dragStartIndex.current = index;
+        lastSwapIndex.current = index;
+        handleDragStart(index);
+        Animated.spring(scaleAnim, {
+          toValue: 1.05,
+          useNativeDriver: true,
+          tension: 300,
+          friction: 10,
+        }).start();
+      } else if (
+        event.nativeEvent.state === State.END ||
+        event.nativeEvent.state === State.CANCELLED
+      ) {
+        Animated.parallel([
           Animated.spring(scaleAnim, {
-            toValue: 1.05,
+            toValue: 1,
             useNativeDriver: true,
             tension: 300,
-            friction: 10,
-          }).start();
-        } else if (
-          event.nativeEvent.state === State.END ||
-          event.nativeEvent.state === State.CANCELLED
-        ) {
-          isDragging.current = false;
-          Animated.parallel([
-            Animated.spring(scaleAnim, {
-              toValue: 1,
-              useNativeDriver: true,
-              tension: 300,
-              friction: 20,
-            }),
-            Animated.spring(translateY, {
-              toValue: 0,
-              useNativeDriver: true,
-              tension: 300,
-              friction: 20,
-            }),
-          ]).start();
-          handleDragEnd();
-          dragY.current = 0;
-        }
-      },
-      [handleDragStart, handleDragEnd]
-    );
+            friction: 20,
+          }),
+          Animated.spring(translateY, {
+            toValue: 0,
+            useNativeDriver: true,
+            tension: 300,
+            friction: 20,
+          }),
+        ]).start();
+        handleDragEnd();
+        lastSwapIndex.current = index;
+      }
+    };
 
     const animatedStyle = {
       transform: [
@@ -354,8 +348,9 @@ export default function StoryBuilderScreen() {
               <PanGestureHandler
                 onGestureEvent={onGestureEvent}
                 onHandlerStateChange={onHandlerStateChange}
-                activeOffsetY={[-10, 10]}
-                failOffsetX={[-50, 50]}
+                activeOffsetY={[-5, 5]}
+                failOffsetX={[-20, 20]}
+                simultaneousHandlers={swipeableRef}
               >
                 <Animated.View style={styles.dragHandle}>
                   <Text style={styles.dragHandleIcon}>≡</Text>
