@@ -75,13 +75,14 @@ export default function RootLayout() {
     // Wait for native modules to be ready before rendering
     const prepare = async () => {
       try {
-        // Give native modules time to initialize
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Longer delay to ensure all native modules (SafeAreaProvider, GestureHandler, etc.) are initialized
+        await new Promise(resolve => setTimeout(resolve, 1500));
         setIsReady(true);
         await SplashScreen.hideAsync();
       } catch (error) {
         console.error('[RootLayout] Error during initialization:', error);
-        setIsReady(true); // Still try to render even if splash screen fails
+        // Still try to render after delay even if splash screen fails
+        setTimeout(() => setIsReady(true), 500);
       }
     };
 
