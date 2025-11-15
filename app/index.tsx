@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
@@ -25,6 +25,10 @@ import { getAllAvailableTags } from '@/utils/getAllAvailableTags';
 
 export default function LibraryScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ 
+    existingAssetIds?: string;
+    storyName?: string;
+  }>();
   
   // useSafeAreaInsets requires SafeAreaProvider in _layout.tsx
   // If it crashes, the error boundary should catch it
@@ -100,6 +104,30 @@ export default function LibraryScreen() {
       loadAssets();
     }
   }, [campaignId, loadAssets]);
+
+  // Parse existing asset IDs from params (when adding to existing story)
+  const existingAssetIds = useMemo(() => {
+    const existingParam = params.existingAssetIds;
+    if (!existingParam) {
+      return [];
+    }
+    return existingParam.split(',').filter((id) => id.trim().length > 0);
+  }, [params.existingAssetIds]);
+
+  const isAddingToStory = existingAssetIds.length > 0;
+
+  // Pre-select existing assets when adding to story (but allow user to deselect)
+  useEffect(() => {
+    if (isAddingToStory && assets.length > 0 && existingAssetIds.length > 0) {
+      // Only pre-select if no assets are currently selected
+      if (selectedAssets.length === 0) {
+        const existingAssets = assets.filter((asset) => existingAssetIds.includes(asset.id));
+        if (existingAssets.length > 0) {
+          setSelectedAssets(existingAssets);
+        }
+      }
+    }
+  }, [isAddingToStory, assets, existingAssetIds]);
 
   // Load all available tags from tag library
   useEffect(() => {
@@ -601,11 +629,14 @@ export default function LibraryScreen() {
       return;
     }
     // Pass asset IDs as comma-separated string (more reliable than JSON in URL params)
-    const assetIds = selectedAssets.map((a) => a.id).join(',');
+    const newAssetIds = selectedAssets.map((a) => a.id).join(',');
     router.push({
       pathname: '/story-builder',
       params: {
-        assetIds,
+        assetIds: newAssetIds,
+        existingAssetIds: isAddingToStory ? existingAssetIds.join(',') : undefined,
+        mode: isAddingToStory ? 'add' : 'new',
+        storyName: params.storyName,
       },
     });
   };
@@ -752,7 +783,9 @@ export default function LibraryScreen() {
             }}
           >
             <Text className="text-center text-[17px] font-semibold text-white" style={{ letterSpacing: -0.2 }}>
-              Build Story ({selectedAssets.length} selected)
+              {isAddingToStory 
+                ? `Add to Story (${selectedAssets.length} selected)` 
+                : `Build Story (${selectedAssets.length} selected)`}
             </Text>
           </TouchableOpacity>
 

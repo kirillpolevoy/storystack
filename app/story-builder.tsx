@@ -47,10 +47,14 @@ export default function StoryBuilderScreen() {
     return null;
   }
 
-  const params = useLocalSearchParams<{ assetIds?: string | string[] }>();
+  const params = useLocalSearchParams<{ 
+    assetIds?: string | string[];
+    existingAssetIds?: string | string[];
+    mode?: 'new' | 'add';
+  }>();
   
-  // Parse asset IDs from params
-  const assetIds = useMemo(() => {
+  // Parse new asset IDs from params
+  const newAssetIds = useMemo(() => {
     const assetIdsParam = params.assetIds;
     if (!assetIdsParam) {
       return [];
@@ -64,10 +68,46 @@ export default function StoryBuilderScreen() {
     return [];
   }, [params.assetIds]);
 
+  // Parse existing asset IDs from params (for adding to existing story)
+  const existingAssetIds = useMemo(() => {
+    const existingParam = params.existingAssetIds;
+    if (!existingParam) {
+      return [];
+    }
+    if (Array.isArray(existingParam)) {
+      return existingParam;
+    }
+    if (typeof existingParam === 'string') {
+      return existingParam.split(',').filter((id) => id.trim().length > 0);
+    }
+    return [];
+  }, [params.existingAssetIds]);
+
+  // Determine if we're adding to existing story or creating new
+  const isAddMode = params.mode === 'add' || existingAssetIds.length > 0;
+  
+  // Combine existing and new asset IDs (deduplicated, preserving order)
+  const assetIds = useMemo(() => {
+    if (!isAddMode) {
+      return newAssetIds;
+    }
+    // Merge: existing first, then new (avoiding duplicates)
+    const existingSet = new Set(existingAssetIds);
+    const newIds = newAssetIds.filter((id) => !existingSet.has(id));
+    return [...existingAssetIds, ...newIds];
+  }, [isAddMode, existingAssetIds, newAssetIds]);
+
   const [assets, setAssets] = useState<Asset[]>([]);
   const [orderedAssets, setOrderedAssets] = useState<Asset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [storyName, setStoryName] = useState('');
+
+  // Initialize story name from params if provided
+  useEffect(() => {
+    if (params.storyName && !storyName) {
+      setStoryName(params.storyName);
+    }
+  }, [params.storyName]);
   const [isExporting, setIsExporting] = useState(false);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
   const [localTags, setLocalTags] = useState<Record<string, string[]>>({});
@@ -85,10 +125,19 @@ export default function StoryBuilderScreen() {
     }
 
     setIsLoading(true);
+    
+    // In add mode, only load new assets (not existing ones)
+    const idsToLoad = isAddMode ? newAssetIds : assetIds;
+    
+    if (idsToLoad.length === 0) {
+      setIsLoading(false);
+      return;
+    }
+
     const { data: assetData, error: assetError } = await supabase
       .from('assets')
       .select('*')
-      .in('id', assetIds);
+      .in('id', idsToLoad);
 
     if (assetError) {
       console.error('[StoryBuilder] asset fetch failed', assetError);
@@ -99,23 +148,53 @@ export default function StoryBuilderScreen() {
         const tags = Array.isArray(asset.tags) ? (asset.tags as string[]) : [];
         return { ...asset, publicUrl: data.publicUrl, tags } as Asset;
       });
-      // Preserve order from assetIds
-      const ordered = assetIds
-        .map((id) => mapped.find((a) => a.id === id))
-        .filter((a): a is Asset => a !== undefined);
-      setAssets(mapped);
-      setOrderedAssets(ordered);
       
-      // Initialize local tags
-      const initialTags: Record<string, string[]> = {};
-      ordered.forEach((asset) => {
-        initialTags[asset.id] = asset.tags || [];
-      });
-      setLocalTags(initialTags);
+      if (isAddMode) {
+        // In add mode: preserve existing assets and append new ones
+        setOrderedAssets((prev) => {
+          const existingIds = new Set(prev.map((a) => a.id));
+          const newAssets = mapped.filter((a) => !existingIds.has(a.id));
+          // Preserve order: existing first, then new (in the order they were selected)
+          const orderedNew = newAssetIds
+            .map((id) => newAssets.find((a) => a.id === id))
+            .filter((a): a is Asset => a !== undefined);
+          return [...prev, ...orderedNew];
+        });
+        
+        // Update assets map
+        setAssets((prev) => {
+          const updated = new Map(prev.map((a) => [a.id, a]));
+          mapped.forEach((asset) => updated.set(asset.id, asset));
+          return Array.from(updated.values());
+        });
+        
+        // Update local tags for new assets
+        setLocalTags((prev) => {
+          const updated = { ...prev };
+          mapped.forEach((asset) => {
+            updated[asset.id] = asset.tags || [];
+          });
+          return updated;
+        });
+      } else {
+        // New story: replace everything
+        const ordered = assetIds
+          .map((id) => mapped.find((a) => a.id === id))
+          .filter((a): a is Asset => a !== undefined);
+        setAssets(mapped);
+        setOrderedAssets(ordered);
+        
+        // Initialize local tags
+        const initialTags: Record<string, string[]> = {};
+        ordered.forEach((asset) => {
+          initialTags[asset.id] = asset.tags || [];
+        });
+        setLocalTags(initialTags);
+      }
     }
 
     setIsLoading(false);
-  }, [assetIds]);
+  }, [assetIds, isAddMode, newAssetIds]);
 
   useEffect(() => {
     if (assetIds.length > 0) {
@@ -257,7 +336,21 @@ export default function StoryBuilderScreen() {
     <GestureHandlerRootView style={styles.container}>
       <View style={styles.container}>
         {/* Header */}
-        <StoryHeader onBackPress={() => router.back()} />
+        <StoryHeader 
+          onBackPress={() => router.back()} 
+          onAddMorePress={() => {
+            // Navigate to library with current story's asset IDs
+            const currentAssetIds = orderedAssets.map((a) => a.id).join(',');
+            router.push({
+              pathname: '/',
+              params: {
+                existingAssetIds: currentAssetIds,
+                storyName: storyName,
+              },
+            });
+          }}
+          showAddMore={orderedAssets.length > 0}
+        />
 
         {isLoading ? (
           <View style={styles.centerContent}>
