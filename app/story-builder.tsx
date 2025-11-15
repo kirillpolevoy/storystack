@@ -282,55 +282,8 @@ export default function StoryBuilderScreen() {
         overshootRight={false}
         friction={2}
       >
-        <PanGestureHandler
-          onGestureEvent={onGestureEvent}
-          onHandlerStateChange={(event) => {
-            if (event.nativeEvent.state === State.BEGAN) {
-              const { translationX, translationY } = event.nativeEvent;
-              // Only start drag if vertical movement is greater than horizontal
-              if (Math.abs(translationY) > Math.abs(translationX)) {
-                swipeableRef.current?.close();
-                isDraggingRef.current = true;
-                currentIndexRef.current = index;
-                lastSwapIndexRef.current = index;
-                handleDragStart(index);
-                Animated.spring(scaleAnim, {
-                  toValue: 1.05,
-                  useNativeDriver: true,
-                  tension: 300,
-                  friction: 10,
-                }).start();
-              }
-            } else if (
-              event.nativeEvent.state === State.END ||
-              event.nativeEvent.state === State.CANCELLED
-            ) {
-              if (isDraggingRef.current) {
-                isDraggingRef.current = false;
-                Animated.parallel([
-                  Animated.spring(scaleAnim, {
-                    toValue: 1,
-                    useNativeDriver: true,
-                    tension: 300,
-                    friction: 20,
-                  }),
-                  Animated.spring(translateY, {
-                    toValue: 0,
-                    useNativeDriver: true,
-                    tension: 300,
-                    friction: 20,
-                  }),
-                ]).start();
-                handleDragEnd();
-              }
-            }
-          }}
-          activeOffsetY={[-20, 20]}
-          failOffsetX={[-10, 10]}
-          simultaneousHandlers={swipeableRef}
-        >
-          <Animated.View style={[styles.photoCard, animatedStyle]}>
-            <View style={styles.photoCardContent}>
+        <Animated.View style={[styles.photoCard, animatedStyle]}>
+          <View style={styles.photoCardContent}>
             {/* Thumbnail with Index Badge */}
             <TouchableOpacity
               onPress={() => setPreviewAsset(asset)}
@@ -371,13 +324,56 @@ export default function StoryBuilderScreen() {
 
             {/* Actions */}
             <View style={styles.photoCardActions}>
-              <View style={styles.dragHandle}>
-                <Text style={styles.dragHandleIcon}>≡</Text>
-              </View>
+              <PanGestureHandler
+                onGestureEvent={onGestureEvent}
+                onHandlerStateChange={(event) => {
+                  if (event.nativeEvent.state === State.BEGAN) {
+                    swipeableRef.current?.close();
+                    isDraggingRef.current = true;
+                    currentIndexRef.current = index;
+                    lastSwapIndexRef.current = index;
+                    handleDragStart(index);
+                    Animated.spring(scaleAnim, {
+                      toValue: 1.05,
+                      useNativeDriver: true,
+                      tension: 300,
+                      friction: 10,
+                    }).start();
+                  } else if (
+                    event.nativeEvent.state === State.END ||
+                    event.nativeEvent.state === State.CANCELLED
+                  ) {
+                    if (isDraggingRef.current) {
+                      isDraggingRef.current = false;
+                      Animated.parallel([
+                        Animated.spring(scaleAnim, {
+                          toValue: 1,
+                          useNativeDriver: true,
+                          tension: 300,
+                          friction: 20,
+                        }),
+                        Animated.spring(translateY, {
+                          toValue: 0,
+                          useNativeDriver: true,
+                          tension: 300,
+                          friction: 20,
+                        }),
+                      ]).start();
+                      handleDragEnd();
+                    }
+                  }
+                }}
+                activeOffsetY={[-10, 10]}
+                failOffsetX={[-5, 5]}
+                simultaneousHandlers={swipeableRef}
+              >
+                <Animated.View style={styles.dragHandle}>
+                  <Text style={styles.dragHandleIcon}>≡</Text>
+                </Animated.View>
+              </PanGestureHandler>
             </View>
           </View>
         </Animated.View>
-        </PanGestureHandler>
       </Swipeable>
     );
   };
