@@ -3,6 +3,7 @@
     "name": "StoryStack",
     "slug": "storystack",
     "version": "1.0.0",
+    "scheme": "storystack",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "splash": {
