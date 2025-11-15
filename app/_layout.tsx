@@ -43,17 +43,31 @@ class ErrorBoundary extends Component<
 }
 
 export default function RootLayout() {
-  return (
-    <ErrorBoundary>
-      <SafeAreaProvider>
-        <GestureHandlerRootView style={{ flex: 1 }}>
-          <View style={{ flex: 1, backgroundColor: '#fafafa' }}>
-            <StatusBar barStyle="dark-content" />
-            <Slot />
-          </View>
-        </GestureHandlerRootView>
-      </SafeAreaProvider>
-    </ErrorBoundary>
-  );
+  try {
+    return (
+      <ErrorBoundary>
+        <SafeAreaProvider>
+          <GestureHandlerRootView style={{ flex: 1 }}>
+            <View style={{ flex: 1, backgroundColor: '#fafafa' }}>
+              <StatusBar barStyle="dark-content" />
+              <Slot />
+            </View>
+          </GestureHandlerRootView>
+        </SafeAreaProvider>
+      </ErrorBoundary>
+    );
+  } catch (error) {
+    console.error('[RootLayout] Error rendering:', error);
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: '#fafafa' }}>
+        <Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 10, color: '#000' }}>
+          Failed to load app
+        </Text>
+        <Text style={{ fontSize: 14, color: '#666', textAlign: 'center' }}>
+          {error instanceof Error ? error.message : 'Unknown error'}
+        </Text>
+      </View>
+    );
+  }
 }
 

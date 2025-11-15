@@ -8,16 +8,22 @@ const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
 let supabaseClient: SupabaseClient | null = null;
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn(
-    '[Supabase] Missing EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY. Supabase features will be disabled.',
-  );
-} else {
-  supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      persistSession: false,
-    },
-  });
+try {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.warn(
+      '[Supabase] Missing EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY. Supabase features will be disabled.',
+    );
+  } else {
+    supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+      },
+    });
+    console.log('[Supabase] Client initialized successfully');
+  }
+} catch (error) {
+  console.error('[Supabase] Failed to initialize client:', error);
+  supabaseClient = null;
 }
 
 export const supabase = supabaseClient;
