@@ -281,48 +281,53 @@ export default function StoryBuilderScreen() {
         renderRightActions={renderRightActions}
         overshootRight={false}
         friction={2}
-        enabled={draggedIndex !== index}
       >
         <PanGestureHandler
           onGestureEvent={onGestureEvent}
           onHandlerStateChange={(event) => {
             if (event.nativeEvent.state === State.BEGAN) {
-              swipeableRef.current?.close();
-              isDraggingRef.current = true;
-              currentIndexRef.current = index;
-              lastSwapIndexRef.current = index;
-              handleDragStart(index);
-              Animated.spring(scaleAnim, {
-                toValue: 1.05,
-                useNativeDriver: true,
-                tension: 300,
-                friction: 10,
-              }).start();
+              const { translationX, translationY } = event.nativeEvent;
+              // Only start drag if vertical movement is greater than horizontal
+              if (Math.abs(translationY) > Math.abs(translationX)) {
+                swipeableRef.current?.close();
+                isDraggingRef.current = true;
+                currentIndexRef.current = index;
+                lastSwapIndexRef.current = index;
+                handleDragStart(index);
+                Animated.spring(scaleAnim, {
+                  toValue: 1.05,
+                  useNativeDriver: true,
+                  tension: 300,
+                  friction: 10,
+                }).start();
+              }
             } else if (
               event.nativeEvent.state === State.END ||
               event.nativeEvent.state === State.CANCELLED
             ) {
-              isDraggingRef.current = false;
-              Animated.parallel([
-                Animated.spring(scaleAnim, {
-                  toValue: 1,
-                  useNativeDriver: true,
-                  tension: 300,
-                  friction: 20,
-                }),
-                Animated.spring(translateY, {
-                  toValue: 0,
-                  useNativeDriver: true,
-                  tension: 300,
-                  friction: 20,
-                }),
-              ]).start();
-              handleDragEnd();
+              if (isDraggingRef.current) {
+                isDraggingRef.current = false;
+                Animated.parallel([
+                  Animated.spring(scaleAnim, {
+                    toValue: 1,
+                    useNativeDriver: true,
+                    tension: 300,
+                    friction: 20,
+                  }),
+                  Animated.spring(translateY, {
+                    toValue: 0,
+                    useNativeDriver: true,
+                    tension: 300,
+                    friction: 20,
+                  }),
+                ]).start();
+                handleDragEnd();
+              }
             }
           }}
-          activeOffsetY={[-15, 15]}
-          failOffsetX={[-50, 50]}
-          minPointers={1}
+          activeOffsetY={[-20, 20]}
+          failOffsetX={[-10, 10]}
+          simultaneousHandlers={swipeableRef}
         >
           <Animated.View style={[styles.photoCard, animatedStyle]}>
             <View style={styles.photoCardContent}>
