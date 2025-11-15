@@ -15,7 +15,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
 import { supabase } from '@/lib/supabase';
 import { Asset } from '@/types';
 import { exportStorySequence } from '@/utils/exportStory';
@@ -71,7 +71,6 @@ export default function StoryBuilderScreen() {
   const [storyName, setStoryName] = useState('');
   const [isExporting, setIsExporting] = useState(false);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
-  const [editingTagsAssetId, setEditingTagsAssetId] = useState<string | null>(null);
   const [localTags, setLocalTags] = useState<Record<string, string[]>>({});
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
@@ -202,28 +201,12 @@ export default function StoryBuilderScreen() {
     }
   }, [storyName, orderedAssets]);
 
-  // Tag management
-  const handleAddTag = useCallback((assetId: string, tag: string) => {
-    setLocalTags((prev) => {
-      const currentTags = prev[assetId] || [];
-      if (!currentTags.includes(tag)) {
-        return { ...prev, [assetId]: [...currentTags, tag] };
-      }
-      return prev;
-    });
-  }, []);
-
+  // Tag management - only remove tags, no adding
   const handleRemoveTag = useCallback((assetId: string, tag: string) => {
     setLocalTags((prev) => {
       const currentTags = prev[assetId] || [];
       return { ...prev, [assetId]: currentTags.filter((t) => t !== tag) };
     });
-  }, []);
-
-  const handleSaveTags = useCallback((assetId: string, tagsString: string) => {
-    const tags = tagsString.split(',').map((t) => t.trim()).filter((t) => t.length > 0);
-    setLocalTags((prev) => ({ ...prev, [assetId]: tags }));
-    setEditingTagsAssetId(null);
   }, []);
 
   // Placeholder AI suggestions
@@ -239,6 +222,7 @@ export default function StoryBuilderScreen() {
     const assetTags = localTags[asset.id] || asset.tags || [];
     const suggestedTags = getSuggestedTags(asset);
     const scaleAnim = useRef(new Animated.Value(1)).current;
+    const swipeableRef = useRef<Swipeable>(null);
 
     const handleLongPress = useCallback(() => {
       Animated.spring(scaleAnim, {
@@ -265,114 +249,117 @@ export default function StoryBuilderScreen() {
       opacity: draggedIndex === index ? 0.8 : 1,
     };
 
-    return (
-      <Animated.View style={[styles.photoCard, animatedStyle]}>
-        <View style={styles.photoCardContent}>
-          {/* Thumbnail with Index Badge */}
-          <TouchableOpacity
-            onPress={() => setPreviewAsset(asset)}
-            activeOpacity={0.8}
-            style={styles.thumbnailContainer}
-          >
-            {asset.publicUrl ? (
-              <Image
-                source={{ uri: asset.publicUrl }}
-                style={styles.thumbnail}
-                resizeMode="cover"
-              />
-            ) : (
-              <View style={[styles.thumbnail, styles.thumbnailPlaceholder]}>
-                <Text style={styles.thumbnailPlaceholderText}>Loading</Text>
-              </View>
-            )}
-            <View style={styles.indexBadge}>
-              <Text style={styles.indexBadgeText}>{index + 1}</Text>
-            </View>
-          </TouchableOpacity>
+    const renderRightActions = () => (
+      <View style={styles.swipeDeleteContainer}>
+        <TouchableOpacity
+          onPress={() => {
+            swipeableRef.current?.close();
+            removeAsset(asset.id);
+          }}
+          activeOpacity={0.9}
+          style={styles.swipeDeleteButton}
+        >
+          <Text style={styles.swipeDeleteText}>Delete</Text>
+        </TouchableOpacity>
+      </View>
+    );
 
-          {/* Content */}
-          <View style={styles.photoCardContentRight}>
-            {/* Tags Row */}
-            <View style={styles.tagsRow}>
-              {assetTags.length > 0 ? (
-                assetTags.map((tag, tagIndex) => (
-                  <TouchableOpacity
-                    key={tagIndex}
-                    onPress={() => handleRemoveTag(asset.id, tag)}
-                    style={styles.tagChip}
-                  >
-                    <Text style={styles.tagChipText}>{tag}</Text>
-                    <Text style={styles.tagChipRemove}>×</Text>
-                  </TouchableOpacity>
-                ))
+    return (
+      <Swipeable
+        ref={swipeableRef}
+        renderRightActions={renderRightActions}
+        overshootRight={false}
+        friction={2}
+      >
+        <Animated.View style={[styles.photoCard, animatedStyle]}>
+          <View style={styles.photoCardContent}>
+            {/* Thumbnail with Index Badge */}
+            <TouchableOpacity
+              onPress={() => setPreviewAsset(asset)}
+              activeOpacity={0.8}
+              style={styles.thumbnailContainer}
+            >
+              {asset.publicUrl ? (
+                <Image
+                  source={{ uri: asset.publicUrl }}
+                  style={styles.thumbnail}
+                  resizeMode="cover"
+                />
               ) : (
-                <TouchableOpacity
-                  onPress={() => setEditingTagsAssetId(asset.id)}
-                  style={styles.addTagButton}
-                >
-                  <Text style={styles.addTagButtonText}>+ Add tags</Text>
-                </TouchableOpacity>
+                <View style={[styles.thumbnail, styles.thumbnailPlaceholder]}>
+                  <Text style={styles.thumbnailPlaceholderText}>Loading</Text>
+                </View>
+              )}
+              <View style={styles.indexBadge}>
+                <Text style={styles.indexBadgeText}>{index + 1}</Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Content */}
+            <View style={styles.photoCardContentRight}>
+              {/* Tags Row */}
+              <View style={styles.tagsRow}>
+                {assetTags.length > 0 ? (
+                  assetTags.map((tag, tagIndex) => (
+                    <View key={tagIndex} style={styles.tagChip}>
+                      <Text style={styles.tagChipText}>{tag}</Text>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.noTagsText}>No tags</Text>
+                )}
+              </View>
+
+              {/* Suggested Tags Row */}
+              {suggestedTags.length > 0 && (
+                <View style={styles.suggestedTagsRow}>
+                  <Text style={styles.suggestedTagsLabel}>Suggested tags:</Text>
+                  <View style={styles.suggestedTagsContainer}>
+                    {suggestedTags.map((tag, tagIndex) => {
+                      const isAdded = assetTags.includes(tag);
+                      return (
+                        <TouchableOpacity
+                          key={tagIndex}
+                          onPress={() => {
+                            if (isAdded) {
+                              handleRemoveTag(asset.id, tag);
+                            }
+                          }}
+                          style={[
+                            styles.suggestedTagChip,
+                            isAdded && styles.suggestedTagChipAdded,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.suggestedTagChipText,
+                              isAdded && styles.suggestedTagChipTextAdded,
+                            ]}
+                          >
+                            {tag}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
               )}
             </View>
 
-            {/* Suggested Tags Row */}
-            {suggestedTags.length > 0 && (
-              <View style={styles.suggestedTagsRow}>
-                <Text style={styles.suggestedTagsLabel}>Suggested tags:</Text>
-                <View style={styles.suggestedTagsContainer}>
-                  {suggestedTags.map((tag, tagIndex) => {
-                    const isAdded = assetTags.includes(tag);
-                    return (
-                      <TouchableOpacity
-                        key={tagIndex}
-                        onPress={() => {
-                          if (isAdded) {
-                            handleRemoveTag(asset.id, tag);
-                          } else {
-                            handleAddTag(asset.id, tag);
-                          }
-                        }}
-                        style={[
-                          styles.suggestedTagChip,
-                          isAdded && styles.suggestedTagChipAdded,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.suggestedTagChipText,
-                            isAdded && styles.suggestedTagChipTextAdded,
-                          ]}
-                        >
-                          {tag}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
-            )}
+            {/* Actions */}
+            <View style={styles.photoCardActions}>
+              <TouchableOpacity
+                onLongPress={handleLongPress}
+                onPressOut={handlePressOut}
+                style={styles.dragHandle}
+                activeOpacity={0.6}
+              >
+                <Text style={styles.dragHandleIcon}>≡</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-
-          {/* Actions */}
-          <View style={styles.photoCardActions}>
-            <TouchableOpacity
-              onLongPress={handleLongPress}
-              onPressOut={handlePressOut}
-              style={styles.dragHandle}
-              activeOpacity={0.6}
-            >
-              <Text style={styles.dragHandleIcon}>≡</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => removeAsset(asset.id)}
-              style={styles.deleteButton}
-              activeOpacity={0.6}
-            >
-              <Text style={styles.deleteButtonIcon}>×</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Animated.View>
+        </Animated.View>
+      </Swipeable>
     );
   };
 
@@ -428,20 +415,11 @@ export default function StoryBuilderScreen() {
                       }
                     }}
                     maxLength={50}
-                    style={[
-                      styles.textInput,
-                      storyName.trim().length === 0 && styles.textInputError,
-                    ]}
+                    style={styles.textInput}
                   />
-                  {storyName.trim().length === 0 ? (
-                    <Text style={styles.helperTextError}>
-                      A story name is required to export
-                    </Text>
-                  ) : (
-                    <Text style={styles.helperText}>
-                      This will also be the name of the exported album.
-                    </Text>
-                  )}
+                  <Text style={styles.helperText}>
+                    This will also be the name of the exported album.
+                  </Text>
                 </View>
               </View>
 
@@ -533,59 +511,6 @@ export default function StoryBuilderScreen() {
           </View>
         </Modal>
 
-        {/* Edit Tags Modal */}
-        <Modal
-          visible={editingTagsAssetId !== null}
-          transparent={true}
-          animationType="slide"
-          onRequestClose={() => setEditingTagsAssetId(null)}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Edit Tags</Text>
-              <Text style={styles.modalSubtitle}>
-                Enter tags separated by commas
-              </Text>
-              <TextInput
-                placeholder="e.g. gold, layered, statement"
-                placeholderTextColor={COLORS.textTertiary}
-                value={
-                  editingTagsAssetId
-                    ? (localTags[editingTagsAssetId] || []).join(', ')
-                    : ''
-                }
-                onChangeText={(text) => {
-                  if (editingTagsAssetId) {
-                    const tags = text.split(',').map((t) => t.trim()).filter((t) => t.length > 0);
-                    setLocalTags((prev) => ({ ...prev, [editingTagsAssetId]: tags }));
-                  }
-                }}
-                style={styles.modalTextInput}
-                multiline={false}
-                autoFocus={true}
-              />
-              <View style={styles.modalButtons}>
-                <TouchableOpacity
-                  onPress={() => setEditingTagsAssetId(null)}
-                  style={styles.modalCancelButton}
-                >
-                  <Text style={styles.modalCancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => {
-                    if (editingTagsAssetId) {
-                      const tagsString = (localTags[editingTagsAssetId] || []).join(', ');
-                      handleSaveTags(editingTagsAssetId, tagsString);
-                    }
-                  }}
-                  style={styles.modalSaveButton}
-                >
-                  <Text style={styles.modalSaveButtonText}>Save</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
       </View>
     </GestureHandlerRootView>
   );
@@ -709,17 +634,9 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     marginBottom: 8,
   },
-  textInputError: {
-    borderBottomColor: COLORS.error,
-  },
   helperText: {
     fontSize: 12,
     color: COLORS.textSecondary,
-    marginTop: 4,
-  },
-  helperTextError: {
-    fontSize: 12,
-    color: COLORS.error,
     marginTop: 4,
   },
   photoCard: {
@@ -797,25 +714,10 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '500',
     color: COLORS.accent,
-    marginRight: 4,
   },
-  tagChipRemove: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.accent,
-  },
-  addTagButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderStyle: 'dashed',
-  },
-  addTagButtonText: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: COLORS.textSecondary,
+  noTagsText: {
+    fontSize: 13,
+    color: COLORS.textTertiary,
   },
   suggestedTagsRow: {
     flexDirection: 'row',
@@ -856,7 +758,6 @@ const styles = StyleSheet.create({
   photoCardActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
   },
   dragHandle: {
     width: 40,
@@ -870,18 +771,25 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: -2,
   },
-  deleteButton: {
-    width: 32,
-    height: 32,
+  swipeDeleteContainer: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.errorLight,
-    borderRadius: 16,
+    justifyContent: 'flex-end',
+    height: '100%',
   },
-  deleteButtonIcon: {
-    fontSize: 20,
-    color: COLORS.error,
-    fontWeight: '600',
+  swipeDeleteButton: {
+    backgroundColor: '#FF3B30',
+    height: '100%',
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  swipeDeleteText: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '400',
+    letterSpacing: -0.41,
   },
   bottomBar: {
     position: 'absolute',
@@ -977,67 +885,5 @@ const styles = StyleSheet.create({
   previewImage: {
     width: SCREEN_WIDTH,
     height: SCREEN_WIDTH,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: COLORS.card,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 24,
-    paddingBottom: 40,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: COLORS.textPrimary,
-    marginBottom: 4,
-  },
-  modalSubtitle: {
-    fontSize: 14,
-    color: COLORS.textSecondary,
-    marginBottom: 16,
-  },
-  modalTextInput: {
-    fontSize: 16,
-    color: COLORS.textPrimary,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 12,
-    marginBottom: 20,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  modalCancelButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: COLORS.border,
-    alignItems: 'center',
-  },
-  modalCancelButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: COLORS.textPrimary,
-  },
-  modalSaveButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 16,
-    backgroundColor: COLORS.accent,
-    alignItems: 'center',
-  },
-  modalSaveButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#ffffff',
   },
 });
