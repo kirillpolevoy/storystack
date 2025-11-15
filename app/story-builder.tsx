@@ -3,7 +3,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
-  Animated,
   Image,
   Modal,
   ScrollView,
@@ -15,7 +14,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { GestureHandlerRootView, Swipeable, PanGestureHandler, State } from 'react-native-gesture-handler';
+import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
 import { supabase } from '@/lib/supabase';
 import { Asset } from '@/types';
 import { exportStorySequence } from '@/utils/exportStory';
@@ -72,7 +71,6 @@ export default function StoryBuilderScreen() {
   const [isExporting, setIsExporting] = useState(false);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
   const [localTags, setLocalTags] = useState<Record<string, string[]>>({});
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
   // Load assets from Supabase
   const loadAssets = useCallback(async () => {
@@ -126,25 +124,6 @@ export default function StoryBuilderScreen() {
       setIsLoading(false);
     }
   }, [assetIds, loadAssets]);
-
-  // Reordering functions
-  const moveAsset = useCallback((fromIndex: number, toIndex: number) => {
-    if (fromIndex === toIndex) return;
-    setOrderedAssets((prev) => {
-      const newOrder = [...prev];
-      const [removed] = newOrder.splice(fromIndex, 1);
-      newOrder.splice(toIndex, 0, removed);
-      return newOrder;
-    });
-  }, []);
-
-  const handleDragStart = useCallback((index: number) => {
-    setDraggedIndex(index);
-  }, []);
-
-  const handleDragEnd = useCallback(() => {
-    setDraggedIndex(null);
-  }, []);
 
   const removeAsset = useCallback((assetId: string) => {
     setOrderedAssets((prev) => prev.filter((a) => a.id !== assetId));
@@ -206,59 +185,7 @@ export default function StoryBuilderScreen() {
   // Photo Card Component
   const PhotoCard = ({ asset, index }: { asset: Asset; index: number }) => {
     const assetTags = localTags[asset.id] || asset.tags || [];
-    const scaleAnim = useRef(new Animated.Value(1)).current;
-    const translateY = useRef(new Animated.Value(0)).current;
     const swipeableRef = useRef<Swipeable>(null);
-    const currentIndexRef = useRef(index);
-    const lastSwapIndexRef = useRef(index);
-    const isDraggingRef = useRef(false);
-
-    // Update refs when index changes
-    useEffect(() => {
-      currentIndexRef.current = index;
-      if (!isDraggingRef.current) {
-        lastSwapIndexRef.current = index;
-      }
-    }, [index]);
-
-    const onGestureEvent = useCallback(
-      Animated.event(
-        [{ nativeEvent: { translationY: translateY } }],
-        {
-          useNativeDriver: true,
-          listener: (event: any) => {
-            if (!isDraggingRef.current) return;
-            
-            const translationY = event.nativeEvent.translationY;
-            const currentIndex = currentIndexRef.current;
-            
-            // Calculate which index we should swap with based on drag distance
-            const cardHeight = 128; // Approximate card height with margin
-            const delta = translationY / cardHeight;
-            const newIndex = Math.round(currentIndex + delta);
-            const clampedIndex = Math.max(0, Math.min(orderedAssets.length - 1, newIndex));
-            
-            // Only swap if we've moved to a different position
-            if (clampedIndex !== lastSwapIndexRef.current && clampedIndex !== currentIndex) {
-              moveAsset(currentIndex, clampedIndex);
-              lastSwapIndexRef.current = clampedIndex;
-              currentIndexRef.current = clampedIndex;
-            }
-          },
-        }
-      ),
-      [orderedAssets.length, moveAsset]
-    );
-
-
-    const animatedStyle = {
-      transform: [
-        { scale: scaleAnim },
-        { translateY: translateY },
-      ],
-      opacity: draggedIndex === index ? 0.8 : 1,
-      zIndex: draggedIndex === index ? 1000 : 1,
-    };
 
     const renderRightActions = () => (
       <View style={styles.swipeDeleteContainer}>
@@ -282,7 +209,7 @@ export default function StoryBuilderScreen() {
         overshootRight={false}
         friction={2}
       >
-        <Animated.View style={[styles.photoCard, animatedStyle]}>
+        <View style={styles.photoCard}>
           <View style={styles.photoCardContent}>
             {/* Thumbnail with Index Badge */}
             <TouchableOpacity
@@ -309,71 +236,19 @@ export default function StoryBuilderScreen() {
             {/* Content */}
             <View style={styles.photoCardContentRight}>
               {/* Tags Row */}
-              <View style={styles.tagsRow}>
-                {assetTags.length > 0 ? (
-                  assetTags.map((tag, tagIndex) => (
+              {assetTags.length > 0 && (
+                <View style={styles.tagsRow}>
+                  {assetTags.map((tag, tagIndex) => (
                     <View key={tagIndex} style={styles.tagChip}>
                       <Text style={styles.tagChipText}>{tag}</Text>
                     </View>
-                  ))
-                ) : (
-                  <Text style={styles.noTagsText}>No tags</Text>
-                )}
-              </View>
+                  ))}
+                </View>
+              )}
             </View>
 
-            {/* Actions */}
-            <View style={styles.photoCardActions}>
-              <PanGestureHandler
-                onGestureEvent={onGestureEvent}
-                onHandlerStateChange={(event) => {
-                  if (event.nativeEvent.state === State.BEGAN) {
-                    swipeableRef.current?.close();
-                    isDraggingRef.current = true;
-                    currentIndexRef.current = index;
-                    lastSwapIndexRef.current = index;
-                    handleDragStart(index);
-                    Animated.spring(scaleAnim, {
-                      toValue: 1.05,
-                      useNativeDriver: true,
-                      tension: 300,
-                      friction: 10,
-                    }).start();
-                  } else if (
-                    event.nativeEvent.state === State.END ||
-                    event.nativeEvent.state === State.CANCELLED
-                  ) {
-                    if (isDraggingRef.current) {
-                      isDraggingRef.current = false;
-                      Animated.parallel([
-                        Animated.spring(scaleAnim, {
-                          toValue: 1,
-                          useNativeDriver: true,
-                          tension: 300,
-                          friction: 20,
-                        }),
-                        Animated.spring(translateY, {
-                          toValue: 0,
-                          useNativeDriver: true,
-                          tension: 300,
-                          friction: 20,
-                        }),
-                      ]).start();
-                      handleDragEnd();
-                    }
-                  }
-                }}
-                activeOffsetY={[-10, 10]}
-                failOffsetX={[-5, 5]}
-                simultaneousHandlers={swipeableRef}
-              >
-                <Animated.View style={styles.dragHandle}>
-                  <Text style={styles.dragHandleIcon}>≡</Text>
-                </Animated.View>
-              </PanGestureHandler>
-            </View>
           </View>
-        </Animated.View>
+        </View>
       </Swipeable>
     );
   };
@@ -418,7 +293,9 @@ export default function StoryBuilderScreen() {
                 <View style={styles.storyNameCard}>
                   <View style={styles.inputLabelRow}>
                     <Text style={styles.inputLabel}>Story name</Text>
-                    <Text style={styles.characterCount}>{storyName.length}/50</Text>
+                    <Text style={[styles.characterCount, storyName.length > 40 && styles.characterCountWarning]}>
+                      {storyName.length}/50
+                    </Text>
                   </View>
                   <TextInput
                     placeholder="e.g. Aria launch, Layered looks, Holiday drop"
@@ -604,24 +481,23 @@ const styles = StyleSheet.create({
   },
   section: {
     paddingHorizontal: 20,
-    paddingTop: 24,
+    paddingTop: 32,
   },
   sectionHeader: {
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '500',
     color: COLORS.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 12,
+    marginBottom: 16,
+    letterSpacing: -0.2,
   },
   storyNameCard: {
     backgroundColor: COLORS.card,
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 20,
+    padding: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
+    shadowOpacity: 0.03,
+    shadowRadius: 8,
     elevation: 1,
   },
   inputLabelRow: {
@@ -631,52 +507,60 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   inputLabel: {
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '600',
     color: COLORS.textPrimary,
+    letterSpacing: -0.2,
   },
   characterCount: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '500',
     color: COLORS.textTertiary,
+    letterSpacing: -0.1,
+  },
+  characterCountWarning: {
+    color: COLORS.error,
   },
   textInput: {
-    fontSize: 16,
+    fontSize: 17,
     color: COLORS.textPrimary,
     paddingVertical: 12,
     paddingHorizontal: 0,
-    borderBottomWidth: 1,
+    borderBottomWidth: 1.5,
     borderBottomColor: COLORS.border,
     marginBottom: 8,
+    letterSpacing: -0.3,
   },
   helperText: {
-    fontSize: 12,
+    fontSize: 13,
     color: COLORS.textSecondary,
-    marginTop: 4,
+    marginTop: 6,
+    lineHeight: 18,
+    letterSpacing: -0.1,
   },
   photoCard: {
     backgroundColor: COLORS.card,
-    borderRadius: 16,
-    marginBottom: 12,
+    borderRadius: 20,
+    marginBottom: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
+    shadowOpacity: 0.03,
+    shadowRadius: 8,
     elevation: 1,
   },
   photoCardContent: {
     flexDirection: 'row',
-    padding: 16,
+    padding: 20,
     alignItems: 'flex-start',
   },
   thumbnailContainer: {
     position: 'relative',
-    marginRight: 12,
+    marginRight: 16,
   },
   thumbnail: {
-    width: 96,
-    height: 96,
-    borderRadius: 12,
+    width: 112,
+    height: 112,
+    borderRadius: 16,
     backgroundColor: COLORS.borderLight,
   },
   thumbnailPlaceholder: {
@@ -689,66 +573,45 @@ const styles = StyleSheet.create({
   },
   indexBadge: {
     position: 'absolute',
-    top: -4,
-    left: -4,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: COLORS.accent,
-    borderWidth: 2,
-    borderColor: COLORS.card,
+    bottom: 4,
+    right: 4,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: COLORS.card,
   },
   indexBadgeText: {
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: '700',
     color: '#ffffff',
   },
   photoCardContentRight: {
     flex: 1,
-    marginRight: 8,
+    justifyContent: 'center',
+    minHeight: 112,
   },
   tagsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginBottom: 8,
-    gap: 6,
+    gap: 8,
   },
   tagChip: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.accentLight,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginRight: 6,
-    marginBottom: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
   },
   tagChipText: {
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '500',
     color: COLORS.accent,
-  },
-  noTagsText: {
-    fontSize: 13,
-    color: COLORS.textTertiary,
-  },
-  photoCardActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  dragHandle: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dragHandleIcon: {
-    fontSize: 20,
-    color: COLORS.textTertiary,
-    fontWeight: '600',
-    letterSpacing: -2,
+    letterSpacing: -0.1,
   },
   swipeDeleteContainer: {
     flexDirection: 'row',
@@ -779,45 +642,46 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
     paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingTop: 20,
     flexDirection: 'row',
     gap: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
     elevation: 4,
   },
   clearButton: {
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderRadius: 16,
-    borderWidth: 2,
+    paddingHorizontal: 24,
+    paddingVertical: 16,
+    borderRadius: 20,
+    borderWidth: 1.5,
     borderColor: COLORS.border,
   },
   clearButtonDisabled: {
     borderColor: COLORS.disabled,
   },
   clearButtonText: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '600',
     color: COLORS.textPrimary,
+    letterSpacing: -0.2,
   },
   clearButtonTextDisabled: {
     color: COLORS.disabledText,
   },
   exportButton: {
     flex: 1,
-    paddingVertical: 14,
-    borderRadius: 16,
+    paddingVertical: 16,
+    borderRadius: 20,
     backgroundColor: COLORS.accent,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: COLORS.accent,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 4,
   },
   exportButtonDisabled: {
     backgroundColor: COLORS.disabled,
@@ -825,9 +689,10 @@ const styles = StyleSheet.create({
     elevation: 0,
   },
   exportButtonText: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '600',
     color: '#ffffff',
+    letterSpacing: -0.3,
   },
   exportButtonTextDisabled: {
     color: COLORS.disabledText,
