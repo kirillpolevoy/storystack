@@ -31,10 +31,27 @@ try {
 }
 
 try {
-  SafeAreaProvider = require('react-native-safe-area-context').SafeAreaProvider;
+  const safeAreaContext = require('react-native-safe-area-context');
+  SafeAreaProvider = safeAreaContext.SafeAreaProvider;
+  // Ensure the module is initialized
+  if (!SafeAreaProvider) {
+    throw new Error('SafeAreaProvider not found');
+  }
 } catch (e) {
-  console.warn('[RootLayout] SafeAreaProvider not available:', e);
-  SafeAreaProvider = ({ children }: { children: ReactNode }) => <>{children}</>;
+  console.error('[RootLayout] SafeAreaProvider not available:', e);
+  // Use a wrapper that provides default insets
+  SafeAreaProvider = ({ children }: { children: ReactNode }) => {
+    // Provide a context-like wrapper
+    const SafeAreaContext = require('react-native-safe-area-context').SafeAreaContext;
+    if (SafeAreaContext) {
+      return (
+        <SafeAreaContext.Provider value={{ top: 0, bottom: 0, left: 0, right: 0 }}>
+          {children}
+        </SafeAreaContext.Provider>
+      );
+    }
+    return <>{children}</>;
+  };
 }
 
 class ErrorBoundary extends Component<

@@ -11,13 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-// Lazy load useSafeAreaInsets to prevent crash if native module not ready
-let useSafeAreaInsets: () => { top: number; bottom: number; left: number; right: number } = () => ({ top: 0, bottom: 0, left: 0, right: 0 });
-try {
-  useSafeAreaInsets = require('react-native-safe-area-context').useSafeAreaInsets;
-} catch (e) {
-  console.warn('[LibraryScreen] useSafeAreaInsets not available, using fallback');
-}
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '@/lib/supabase';
 import { Asset, TagVocabulary, STORYSTACK_TAGS } from '@/types';
@@ -31,6 +25,9 @@ import { getAllAvailableTags } from '@/utils/getAllAvailableTags';
 
 export default function LibraryScreen() {
   const router = useRouter();
+  
+  // useSafeAreaInsets requires SafeAreaProvider in _layout.tsx
+  // If it crashes, the error boundary should catch it
   const insets = useSafeAreaInsets();
   
   if (!router) {
