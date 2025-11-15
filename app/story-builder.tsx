@@ -15,7 +15,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
+import { GestureHandlerRootView, Swipeable, PanGestureHandler, State } from 'react-native-gesture-handler';
 import { supabase } from '@/lib/supabase';
 import { Asset } from '@/types';
 import { exportStorySequence } from '@/utils/exportStory';
@@ -128,23 +128,15 @@ export default function StoryBuilderScreen() {
   }, [assetIds, loadAssets]);
 
   // Reordering functions
-  const moveAssetUp = useCallback((index: number) => {
-    if (index === 0) return;
+  const moveAsset = useCallback((fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
     setOrderedAssets((prev) => {
       const newOrder = [...prev];
-      [newOrder[index - 1], newOrder[index]] = [newOrder[index], newOrder[index - 1]];
+      const [removed] = newOrder.splice(fromIndex, 1);
+      newOrder.splice(toIndex, 0, removed);
       return newOrder;
     });
   }, []);
-
-  const moveAssetDown = useCallback((index: number) => {
-    if (index >= orderedAssets.length - 1) return;
-    setOrderedAssets((prev) => {
-      const newOrder = [...prev];
-      [newOrder[index], newOrder[index + 1]] = [newOrder[index + 1], newOrder[index]];
-      return newOrder;
-    });
-  }, [orderedAssets.length]);
 
   const handleDragStart = useCallback((index: number) => {
     setDraggedIndex(index);
@@ -215,31 +207,84 @@ export default function StoryBuilderScreen() {
   const PhotoCard = ({ asset, index }: { asset: Asset; index: number }) => {
     const assetTags = localTags[asset.id] || asset.tags || [];
     const scaleAnim = useRef(new Animated.Value(1)).current;
+    const translateY = useRef(new Animated.Value(0)).current;
     const swipeableRef = useRef<Swipeable>(null);
+    const dragY = useRef(0);
+    const isDragging = useRef(false);
+    const currentIndexRef = useRef(index);
 
-    const handleLongPress = useCallback(() => {
-      Animated.spring(scaleAnim, {
-        toValue: 1.05,
-        useNativeDriver: true,
-        tension: 300,
-        friction: 10,
-      }).start();
-      handleDragStart(index);
-    }, [index, scaleAnim]);
+    // Update ref when index changes
+    useEffect(() => {
+      currentIndexRef.current = index;
+    }, [index]);
 
-    const handlePressOut = useCallback(() => {
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        useNativeDriver: true,
-        tension: 300,
-        friction: 20,
-      }).start();
-      handleDragEnd();
-    }, [scaleAnim]);
+    const onGestureEvent = useCallback(
+      Animated.event(
+        [{ nativeEvent: { translationY: translateY } }],
+        {
+          useNativeDriver: true,
+          listener: (event: any) => {
+            dragY.current = event.nativeEvent.translationY;
+            if (isDragging.current && draggedIndex === currentIndexRef.current) {
+              // Calculate which index we should swap with
+              const cardHeight = 128; // Approximate card height
+              const newIndex = Math.round(currentIndexRef.current + dragY.current / cardHeight);
+              const clampedIndex = Math.max(0, Math.min(orderedAssets.length - 1, newIndex));
+              if (clampedIndex !== currentIndexRef.current && clampedIndex !== index) {
+                moveAsset(currentIndexRef.current, clampedIndex);
+                handleDragStart(clampedIndex);
+              }
+            }
+          },
+        }
+      ),
+      [draggedIndex, orderedAssets.length, moveAsset, handleDragStart]
+    );
+
+    const onHandlerStateChange = useCallback(
+      (event: any) => {
+        if (event.nativeEvent.state === State.BEGAN) {
+          isDragging.current = true;
+          handleDragStart(currentIndexRef.current);
+          Animated.spring(scaleAnim, {
+            toValue: 1.05,
+            useNativeDriver: true,
+            tension: 300,
+            friction: 10,
+          }).start();
+        } else if (
+          event.nativeEvent.state === State.END ||
+          event.nativeEvent.state === State.CANCELLED
+        ) {
+          isDragging.current = false;
+          Animated.parallel([
+            Animated.spring(scaleAnim, {
+              toValue: 1,
+              useNativeDriver: true,
+              tension: 300,
+              friction: 20,
+            }),
+            Animated.spring(translateY, {
+              toValue: 0,
+              useNativeDriver: true,
+              tension: 300,
+              friction: 20,
+            }),
+          ]).start();
+          handleDragEnd();
+          dragY.current = 0;
+        }
+      },
+      [handleDragStart, handleDragEnd]
+    );
 
     const animatedStyle = {
-      transform: [{ scale: scaleAnim }],
+      transform: [
+        { scale: scaleAnim },
+        { translateY: translateY },
+      ],
       opacity: draggedIndex === index ? 0.8 : 1,
+      zIndex: draggedIndex === index ? 1000 : 1,
     };
 
     const renderRightActions = () => (
@@ -306,14 +351,16 @@ export default function StoryBuilderScreen() {
 
             {/* Actions */}
             <View style={styles.photoCardActions}>
-              <TouchableOpacity
-                onLongPress={handleLongPress}
-                onPressOut={handlePressOut}
-                style={styles.dragHandle}
-                activeOpacity={0.6}
+              <PanGestureHandler
+                onGestureEvent={onGestureEvent}
+                onHandlerStateChange={onHandlerStateChange}
+                activeOffsetY={[-10, 10]}
+                failOffsetX={[-50, 50]}
               >
-                <Text style={styles.dragHandleIcon}>≡</Text>
-              </TouchableOpacity>
+                <Animated.View style={styles.dragHandle}>
+                  <Text style={styles.dragHandleIcon}>≡</Text>
+                </Animated.View>
+              </PanGestureHandler>
             </View>
           </View>
         </Animated.View>
