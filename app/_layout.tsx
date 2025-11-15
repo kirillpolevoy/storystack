@@ -1,8 +1,24 @@
 import { Slot } from 'expo-router';
 import { StatusBar, View, Text } from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { Component, ReactNode } from 'react';
+import { Component, ReactNode, useState, useEffect } from 'react';
+
+// Lazy load native modules to prevent crashes if they fail to initialize
+let GestureHandlerRootView: any;
+let SafeAreaProvider: any;
+
+try {
+  GestureHandlerRootView = require('react-native-gesture-handler').GestureHandlerRootView;
+} catch (e) {
+  console.warn('[RootLayout] GestureHandlerRootView not available:', e);
+  GestureHandlerRootView = View;
+}
+
+try {
+  SafeAreaProvider = require('react-native-safe-area-context').SafeAreaProvider;
+} catch (e) {
+  console.warn('[RootLayout] SafeAreaProvider not available:', e);
+  SafeAreaProvider = ({ children }: { children: ReactNode }) => <>{children}</>;
+}
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -43,6 +59,24 @@ class ErrorBoundary extends Component<
 }
 
 export default function RootLayout() {
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    // Delay initialization to ensure native modules are ready
+    const timer = setTimeout(() => {
+      setIsReady(true);
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (!isReady) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fafafa' }}>
+        <Text style={{ fontSize: 16, color: '#666' }}>Loading...</Text>
+      </View>
+    );
+  }
+
   try {
     return (
       <ErrorBoundary>
