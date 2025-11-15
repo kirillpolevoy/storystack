@@ -5,6 +5,12 @@
 expo-env.d.ts
 # @end expo-cli
 
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
 # Environment variables
 .env
 .env.local
@@ -18,3 +24,8 @@ expo-env.d.ts
 
 # EAS
 eas.json.backup
+
+# Build outputs
+.expo/
+dist/
+build/
