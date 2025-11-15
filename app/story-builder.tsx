@@ -695,17 +695,17 @@ const styles = StyleSheet.create({
   },
   swipeDeleteContainer: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     justifyContent: 'flex-end',
-    height: '100%',
+    marginBottom: 12,
   },
   swipeDeleteButton: {
     backgroundColor: '#FF3B30',
-    height: '100%',
-    minHeight: 44,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 24,
+    borderRadius: 16,
+    minWidth: 80,
   },
   swipeDeleteText: {
     color: '#ffffff',
