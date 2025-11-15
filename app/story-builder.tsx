@@ -245,15 +245,15 @@ export default function StoryBuilderScreen() {
                 <Text className="text-center text-[15px] text-gray-500">No photos in this story.</Text>
               </View>
             }
-          />
-
-          {/* Bottom Action Bar */}
-          <StoryActionBar
-            photoCount={orderedAssets.length}
-            onClear={clearStory}
-            onExport={handleExport}
-            canExport={canExport}
-            isExporting={isExporting}
+            ListFooterComponent={
+              <StoryActionBar
+                photoCount={orderedAssets.length}
+                onClear={clearStory}
+                onExport={handleExport}
+                canExport={canExport}
+                isExporting={isExporting}
+              />
+            }
           />
         </>
       )}

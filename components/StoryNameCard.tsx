@@ -17,9 +17,14 @@ export function StoryNameCard({ storyName, onStoryNameChange }: StoryNameCardPro
         elevation: 2,
       }}
     >
-      <Text className="mb-2 text-[13px] font-semibold text-gray-700" style={{ letterSpacing: -0.1 }}>
-        Story name
-      </Text>
+      <View className="mb-2 flex-row items-center justify-between">
+        <Text className="text-[13px] font-semibold text-gray-700" style={{ letterSpacing: -0.1 }}>
+          Story name
+        </Text>
+        <Text className="text-[12px] font-medium text-gray-400" style={{ letterSpacing: -0.1 }}>
+          {storyName.length}/50
+        </Text>
+      </View>
       <TextInput
         placeholder="e.g. Aria launch, Layered looks, Holiday drop"
         placeholderTextColor="#9ca3af"
