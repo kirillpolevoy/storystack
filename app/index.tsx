@@ -46,8 +46,14 @@ export default function LibraryScreen() {
   // Initialize default campaign
   useEffect(() => {
     const initCampaign = async () => {
-      const id = await getDefaultCampaignId();
-      setCampaignId(id);
+      try {
+        const id = await getDefaultCampaignId();
+        setCampaignId(id);
+      } catch (error) {
+        console.error('[LibraryScreen] Failed to initialize campaign:', error);
+        setCampaignId('fallback-library');
+        setIsLoading(false);
+      }
     };
     initCampaign();
   }, []);
@@ -94,8 +100,14 @@ export default function LibraryScreen() {
   // Load all available tags from tag library
   useEffect(() => {
     const loadAvailableTags = async () => {
-      const tags = await getAllAvailableTags();
-      setAllAvailableTags(tags);
+      try {
+        const tags = await getAllAvailableTags();
+        setAllAvailableTags(tags);
+      } catch (error) {
+        console.error('[LibraryScreen] Failed to load available tags:', error);
+        // Continue with empty tags array
+        setAllAvailableTags([]);
+      }
     };
     loadAvailableTags();
   }, []);
