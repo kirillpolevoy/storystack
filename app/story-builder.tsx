@@ -197,12 +197,16 @@ export default function StoryBuilderScreen() {
   }, [assetIds, isAddMode, newAssetIds]);
 
   useEffect(() => {
-    if (assetIds.length > 0) {
+    // Only load if we have new assets to add, or if it's a new story
+    if (isAddMode && newAssetIds.length === 0) {
+      // In add mode with no new assets, just keep existing assets
+      setIsLoading(false);
+    } else if (assetIds.length > 0) {
       loadAssets();
     } else {
       setIsLoading(false);
     }
-  }, [assetIds, loadAssets]);
+  }, [assetIds, isAddMode, newAssetIds.length, loadAssets]);
 
   const removeAsset = useCallback((assetId: string) => {
     setOrderedAssets((prev) => prev.filter((a) => a.id !== assetId));

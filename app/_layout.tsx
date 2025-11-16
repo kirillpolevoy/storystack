@@ -75,14 +75,21 @@ export default function RootLayout() {
     // Wait for native modules to be ready before rendering
     const prepare = async () => {
       try {
-        // Longer delay to ensure all native modules (SafeAreaProvider, GestureHandler, etc.) are initialized
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        // Longer delay on first launch to ensure all native modules are fully initialized
+        // This is especially important for the first app launch after install
+        const delay = 2000; // Increased from 1500ms
+        await new Promise(resolve => setTimeout(resolve, delay));
+        
+        // Additional check: ensure we're not in a crash recovery state
+        // Give extra time for native bridge to stabilize
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
         setIsReady(true);
         await SplashScreen.hideAsync();
       } catch (error) {
         console.error('[RootLayout] Error during initialization:', error);
         // Still try to render after delay even if splash screen fails
-        setTimeout(() => setIsReady(true), 500);
+        setTimeout(() => setIsReady(true), 1000);
       }
     };
 

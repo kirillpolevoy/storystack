@@ -67,19 +67,25 @@ export default function App() {
             setAppState(nextAppState);
             if (nextAppState === 'active') {
               subscription.remove();
-              setTimeout(() => setIsReady(true), 1000);
+              // Longer delay on first launch
+              setTimeout(() => setIsReady(true), 2000);
             }
           });
           return () => subscription.remove();
         }
         
-        // Additional delay to ensure native modules are initialized
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Longer delay on first launch to ensure all native modules are initialized
+        // This helps prevent ObjCTurboModule crashes on first app open
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Additional stabilization delay
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
         setIsReady(true);
       } catch (error) {
         console.error('[App] Error during preparation:', error);
-        // Still try to load after delay
-        setTimeout(() => setIsReady(true), 2000);
+        // Still try to load after longer delay
+        setTimeout(() => setIsReady(true), 3000);
       }
     };
 
