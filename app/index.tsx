@@ -31,15 +31,8 @@ export default function LibraryScreen() {
   }>();
   
   // useSafeAreaInsets requires SafeAreaProvider in _layout.tsx
-  // Add defensive check to prevent crashes on first launch
-  let insets;
-  try {
-    insets = useSafeAreaInsets();
-  } catch (error) {
-    console.warn('[LibraryScreen] SafeAreaProvider not ready, using defaults:', error);
-    // Fallback to safe defaults
-    insets = { top: 0, bottom: 0, left: 0, right: 0 };
-  }
+  // The SafeAreaProvider is set up in _layout.tsx with proper initialization delays
+  const insets = useSafeAreaInsets();
   
   if (!router) {
     return null;
