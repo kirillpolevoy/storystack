@@ -17,7 +17,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.storystackstudio.app",
-      "buildNumber": "9",
+      "buildNumber": "8",
       "icon": "./assets/icon.png",
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to import photos for tagging.",
