@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { ActivityIndicator, Animated, FlatList, Image, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Animated, Dimensions, FlatList, RefreshControl, Text, TouchableOpacity, View } from 'react-native';
+import { Image } from 'expo-image';
 import { Asset } from '@/types';
 
 type PhotoGridProps = {
@@ -22,6 +23,7 @@ function PhotoTile({
   onOpenTagModal,
   onLongPress,
   isAutoTagging,
+  isMultiSelectMode,
 }: {
   asset: Asset;
   isSelected: boolean;
@@ -29,9 +31,8 @@ function PhotoTile({
   onOpenTagModal: (asset: Asset) => void;
   onLongPress?: (asset: Asset) => void;
   isAutoTagging?: boolean;
+  isMultiSelectMode: boolean;
 }) {
-  const limitedTags = asset.tags.slice(0, 2);
-  const extraCount = asset.tags.length - limitedTags.length;
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const opacityAnim = useRef(new Animated.Value(1)).current;
 
@@ -52,6 +53,77 @@ function PhotoTile({
   }, [isSelected]);
 
   const handlePress = () => {
+    // Apple Photos behavior:
+    // - If NOT in multi-select mode: tap opens photo
+    // - If IN multi-select mode: tap toggles selection
+    if (isMultiSelectMode) {
+      // In multi-select mode: toggle selection
+      Animated.sequence([
+        Animated.parallel([
+          Animated.spring(scaleAnim, {
+            toValue: 0.92,
+            useNativeDriver: true,
+            tension: 300,
+            friction: 10,
+          }),
+          Animated.timing(opacityAnim, {
+            toValue: 0.85,
+            duration: 100,
+            useNativeDriver: true,
+          }),
+        ]),
+        Animated.parallel([
+          Animated.spring(scaleAnim, {
+            toValue: isSelected ? 0.95 : 1,
+            useNativeDriver: true,
+            tension: 300,
+            friction: 20,
+          }),
+          Animated.timing(opacityAnim, {
+            toValue: isSelected ? 0.9 : 1,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+        ]),
+      ]).start();
+      onToggleSelect(asset);
+    } else {
+      // Not in multi-select mode: open photo
+      Animated.sequence([
+        Animated.parallel([
+          Animated.spring(scaleAnim, {
+            toValue: 0.92,
+            useNativeDriver: true,
+            tension: 300,
+            friction: 10,
+          }),
+          Animated.timing(opacityAnim, {
+            toValue: 0.85,
+            duration: 100,
+            useNativeDriver: true,
+          }),
+        ]),
+        Animated.parallel([
+          Animated.spring(scaleAnim, {
+            toValue: 1,
+            useNativeDriver: true,
+            tension: 300,
+            friction: 20,
+          }),
+          Animated.timing(opacityAnim, {
+            toValue: 1,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+        ]),
+      ]).start();
+      onOpenTagModal(asset);
+    }
+  };
+
+  const handleLongPress = () => {
+    // Long press enables multi-select mode (selects this photo)
+    // In Apple Photos, long press always enables multi-select
     Animated.sequence([
       Animated.parallel([
         Animated.spring(scaleAnim, {
@@ -88,20 +160,14 @@ function PhotoTile({
       style={{
         flex: 1,
         aspectRatio: 1,
-        margin: 2,
+        margin: 1.5,
         transform: [{ scale: scaleAnim }],
         opacity: opacityAnim,
       }}
     >
       <TouchableOpacity
         onPress={handlePress}
-        onLongPress={() => {
-          if (onLongPress) {
-            onLongPress(asset);
-          } else {
-            onOpenTagModal(asset);
-          }
-        }}
+        onLongPress={handleLongPress}
         className="relative h-full w-full overflow-hidden rounded-2xl"
         activeOpacity={1}
       >
@@ -109,7 +175,10 @@ function PhotoTile({
           <Image 
             source={{ uri: asset.publicUrl }} 
             className="h-full w-full rounded-2xl" 
-            resizeMode="cover"
+            contentFit="cover"
+            transition={200}
+            cachePolicy="memory-disk"
+            placeholder={{ blurhash: 'LGF5]+Yk^6#M@-5c,1J5@[or[Q6.' }}
             style={{
               backgroundColor: '#f5f5f5',
             }}
@@ -120,17 +189,30 @@ function PhotoTile({
           </View>
         )}
 
-        {/* Selection overlay - subtle border */}
+        {/* Selection overlay - refined Apple-style */}
         {isSelected && (
-          <View 
-            className="absolute inset-0 rounded-2xl"
-            style={{ 
-              backgroundColor: 'rgba(179, 143, 91, 0.08)',
-              borderWidth: 2,
-              borderColor: '#b38f5b',
-              zIndex: 1,
-            }}
-          />
+          <>
+            <View 
+              className="absolute inset-0 rounded-2xl"
+              style={{ 
+                backgroundColor: 'rgba(179, 143, 91, 0.08)',
+                borderWidth: 2.5,
+                borderColor: '#b38f5b',
+                zIndex: 1,
+              }}
+            />
+            {/* Subtle inner glow for depth */}
+            <View 
+              className="absolute inset-0 rounded-2xl"
+              style={{ 
+                backgroundColor: 'rgba(179, 143, 91, 0.03)',
+                borderWidth: 1,
+                borderColor: 'rgba(179, 143, 91, 0.2)',
+                zIndex: 2,
+                margin: 2,
+              }}
+            />
+          </>
         )}
 
         {/* Auto-tagging indicator */}
@@ -167,58 +249,39 @@ function PhotoTile({
           </View>
         )}
 
-        {/* Checkmark badge - gold */}
+        {/* Selection indicator - refined Apple-style */}
         {isSelected && !isAutoTagging && (
           <View 
-            className="absolute right-2 top-2 h-7 w-7 items-center justify-center rounded-full"
+            className="absolute right-2.5 top-2.5 h-7 w-7 items-center justify-center rounded-full"
             style={{
               backgroundColor: '#b38f5b',
-              shadowColor: '#b38f5b',
+              shadowColor: '#000',
               shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.3,
+              shadowOpacity: 0.25,
               shadowRadius: 4,
               elevation: 3,
               zIndex: 4,
             }}
           >
-            <Text className="text-[14px] font-bold text-white">✓</Text>
-          </View>
-        )}
-
-        {/* Tag overlay at bottom - subtle translucent */}
-        {asset.tags.length > 0 && (
-          <View
-            className="absolute bottom-0 left-0 right-0 flex-row flex-wrap items-end rounded-b-2xl px-2 py-1.5"
-            style={{ 
-              backgroundColor: 'rgba(255, 255, 255, 0.75)',
-              zIndex: 2,
-            }}
-          >
-            <View className="flex-row flex-wrap items-center">
-              {limitedTags.map((tag, idx) => (
-                <View
-                  key={idx}
-                  className="mb-0.5 mr-1 rounded-full px-1.5 py-0.5"
-                  style={{ backgroundColor: 'rgba(255, 255, 255, 0.9)' }}
-                >
-                  <Text 
-                    className="text-[9px] font-medium text-gray-800" 
-                    numberOfLines={1}
-                    style={{ maxWidth: 50 }}
-                  >
-                    {tag}
-                  </Text>
-                </View>
-              ))}
-              {extraCount > 0 && (
-                <View 
-                  className="mb-0.5 rounded-full px-1.5 py-0.5" 
-                  style={{ backgroundColor: 'rgba(255, 255, 255, 0.9)' }}
-                >
-                  <Text className="text-[9px] font-medium text-gray-800">+{extraCount}</Text>
-                </View>
-              )}
-            </View>
+            {/* Inner white circle for depth */}
+            <View 
+              className="absolute inset-0.5 rounded-full"
+              style={{
+                backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                borderWidth: 0.5,
+                borderColor: 'rgba(255, 255, 255, 0.3)',
+              }}
+            />
+            <Text 
+              className="text-[14px] font-bold text-white" 
+              style={{ 
+                textShadowColor: 'rgba(0, 0, 0, 0.2)',
+                textShadowOffset: { width: 0, height: 0.5 },
+                textShadowRadius: 1,
+              }}
+            >
+              ✓
+            </Text>
           </View>
         )}
       </TouchableOpacity>
@@ -240,6 +303,7 @@ export function PhotoGrid({
     ({ item }: { item: Asset }) => {
       const isSelected = selectedAssets.some((asset) => asset.id === item.id);
       const isAutoTagging = autoTaggingAssets.has(item.id);
+      const isMultiSelectMode = selectedAssets.length > 0;
       return (
         <PhotoTile 
           asset={item} 
@@ -248,6 +312,7 @@ export function PhotoGrid({
           onOpenTagModal={onOpenTagModal}
           onLongPress={onLongPress}
           isAutoTagging={isAutoTagging}
+          isMultiSelectMode={isMultiSelectMode}
         />
       );
     },
@@ -260,12 +325,42 @@ export function PhotoGrid({
       renderItem={renderItem}
       keyExtractor={keyExtractor}
       numColumns={3}
-      contentContainerStyle={{ padding: 4, paddingBottom: 100 }}
-      columnWrapperStyle={{ paddingHorizontal: 2 }}
+      contentContainerStyle={{ padding: 3, paddingBottom: 100 }}
+      columnWrapperStyle={{ paddingHorizontal: 1.5 }}
       showsVerticalScrollIndicator={true}
       refreshing={refreshing}
       onRefresh={onRefresh}
+      refreshControl={
+        refreshing !== undefined && onRefresh ? (
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#b38f5b"
+            colors={['#b38f5b']}
+            progressViewOffset={0}
+            style={{ backgroundColor: 'transparent' }}
+          />
+        ) : undefined
+      }
       scrollIndicatorInsets={{ right: 1 }}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+      // Performance optimizations
+      initialNumToRender={12}
+      maxToRenderPerBatch={6}
+      updateCellsBatchingPeriod={50}
+      windowSize={10}
+      removeClippedSubviews={true}
+      getItemLayout={useCallback((data: ArrayLike<Asset> | null | undefined, index: number) => {
+        const screenWidth = Dimensions.get('window').width;
+        const itemSize = (screenWidth - 16) / 3; // Account for padding
+        const row = Math.floor(index / 3);
+        return {
+          length: itemSize,
+          offset: itemSize * row,
+          index,
+        };
+      }, [])}
       ListEmptyComponent={
         <View className="mt-24 items-center px-8">
           <View className="mb-4 h-16 w-16 items-center justify-center rounded-full bg-gray-100">

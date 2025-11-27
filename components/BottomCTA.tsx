@@ -10,46 +10,49 @@ export function BottomCTA({ selectedCount, onPress }: BottomCTAProps) {
   const insets = useSafeAreaInsets();
   const isEnabled = selectedCount > 0;
 
+  // Apple-style: Only show when actionable
+  if (!isEnabled) {
+    return null;
+  }
+
   return (
     <View
-      className="border-t border-gray-200 bg-white px-5 pt-4"
+      className="border-t border-gray-100 bg-white px-5 pt-3"
       style={{
-        paddingBottom: Math.max(insets.bottom, 20),
+        paddingBottom: Math.max(insets.bottom, 16),
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: -2 },
-        shadowOpacity: 0.08,
-        shadowRadius: 8,
-        elevation: 4,
+        shadowOffset: { width: 0, height: -1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+        elevation: 2,
       }}
     >
       <TouchableOpacity
         onPress={onPress}
-        disabled={!isEnabled}
-        activeOpacity={isEnabled ? 0.85 : 1}
-        className="w-full rounded-2xl py-4"
+        activeOpacity={0.85}
+        className="w-full rounded-xl py-3.5"
         style={{
-          backgroundColor: isEnabled ? '#b38f5b' : '#e5e7eb',
-          shadowColor: isEnabled ? '#b38f5b' : 'transparent',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: isEnabled ? 0.2 : 0,
-          shadowRadius: 8,
-          elevation: isEnabled ? 3 : 0,
+          backgroundColor: '#b38f5b',
+          shadowColor: '#b38f5b',
+          shadowOffset: { width: 0, height: 1 },
+          shadowOpacity: 0.15,
+          shadowRadius: 4,
+          elevation: 2,
         }}
       >
         <Text
-          className="text-center text-[17px] font-semibold"
+          className="text-center text-[16px] font-semibold text-white"
           style={{
-            color: isEnabled ? '#ffffff' : '#9ca3af',
             letterSpacing: -0.2,
           }}
         >
-          {isEnabled
-            ? `Build Story (${selectedCount} selected)`
-            : 'Select photos to build a story'}
+          Build Story
         </Text>
       </TouchableOpacity>
     </View>
   );
 }
+
+
 
 

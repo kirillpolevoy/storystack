@@ -1,28 +1,38 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Image, Keyboard, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Keyboard, Modal, ScrollView, Text, TextInput, TouchableOpacity, View, Animated, Easing, ActionSheetIOS, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Asset, STORYSTACK_TAGS, TagVocabulary } from '@/types';
-
-const MAX_TAGS = 5;
+import * as Haptics from 'expo-haptics';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import { Asset, TagVocabulary } from '@/types';
 
 type TagModalProps = {
   asset: Asset | null;
   visible: boolean;
   onClose: () => void;
   onUpdateTags: (newTags: TagVocabulary[]) => Promise<void>;
-  allAvailableTags?: TagVocabulary[]; // All tags from library for easy selection
-  multipleAssets?: Asset[]; // Multiple assets being edited (for bulk tagging)
+  allAvailableTags?: TagVocabulary[];
+  multipleAssets?: Asset[];
+  onDelete?: (asset: Asset) => void;
 };
 
-export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTags = [], multipleAssets = [] }: TagModalProps) {
+export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTags = [], multipleAssets = [], onDelete }: TagModalProps) {
   const [localTags, setLocalTags] = useState<TagVocabulary[]>([]);
   const [newTag, setNewTag] = useState('');
+  const [isInputFocused, setIsInputFocused] = useState(false);
+  const [isAnimatingOut, setIsAnimatingOut] = useState(false);
+  
+  // Smooth, delightful entrance animations
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const modalScale = useRef(new Animated.Value(0.96)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const photoOpacity = useRef(new Animated.Value(0)).current;
+  const photoScale = useRef(new Animated.Value(0.95)).current;
+  const contentOpacity = useRef(new Animated.Value(0)).current;
+  const contentTranslateY = useRef(new Animated.Value(12)).current;
 
-  // Use ref to track previous values and prevent infinite loops
-  const prevAssetIdRef = useRef<string | undefined>();
+  const prevAssetIdRef = useRef<string | undefined>(undefined);
   const prevMultipleAssetsIdsRef = useRef<string>('');
   
-  // Create stable string representation of asset IDs - use JSON.stringify for stable dependency
   const multipleAssetsIdsString = useMemo(() => {
     return multipleAssets.map(a => a.id).sort().join(',');
   }, [JSON.stringify(multipleAssets.map(a => a.id).sort())]);
@@ -31,26 +41,98 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
   const isMultiEdit = multipleAssets.length > 1;
 
   useEffect(() => {
-    // Only update if values actually changed
+    if (visible) {
+      setIsAnimatingOut(false);
+      // Reset animations with refined starting values
+      backdropOpacity.setValue(0);
+      modalScale.setValue(0.96);
+      photoOpacity.setValue(0);
+      photoScale.setValue(0.94);
+      contentOpacity.setValue(0);
+      contentTranslateY.setValue(16);
+      slideAnim.setValue(0);
+
+      // Ultra-smooth entrance - Apple's refined animation principles
+      // Perfect synchronization with refined spring physics
+      Animated.parallel([
+        // Backdrop fades in with refined timing
+        Animated.timing(backdropOpacity, {
+          toValue: 1,
+          duration: 280,
+          easing: Easing.bezier(0.25, 0.1, 0.25, 1), // Refined ease-out
+          useNativeDriver: true,
+        }),
+        // Modal slides up with refined spring physics
+        Animated.spring(slideAnim, {
+          toValue: 1,
+          tension: 110,
+          friction: 28,
+          useNativeDriver: true,
+        }),
+        // Modal scales with matching refined spring
+        Animated.spring(modalScale, {
+          toValue: 1,
+          tension: 110,
+          friction: 28,
+          useNativeDriver: true,
+        }),
+        // Photo fades in with elegant scale - refined timing
+        Animated.sequence([
+          Animated.delay(60),
+          Animated.parallel([
+            Animated.timing(photoOpacity, {
+              toValue: 1,
+              duration: 380,
+              easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+              useNativeDriver: true,
+            }),
+            Animated.spring(photoScale, {
+              toValue: 1,
+              tension: 130,
+              friction: 20,
+              useNativeDriver: true,
+            }),
+          ]),
+        ]),
+        // Content fades in with refined upward motion
+        Animated.sequence([
+          Animated.delay(120),
+          Animated.parallel([
+            Animated.timing(contentOpacity, {
+              toValue: 1,
+              duration: 320,
+              easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+              useNativeDriver: true,
+            }),
+            Animated.spring(contentTranslateY, {
+              toValue: 0,
+              tension: 110,
+              friction: 22,
+              useNativeDriver: true,
+            }),
+          ]),
+        ]),
+      ]).start();
+    }
+  }, [visible]);
+
+  useEffect(() => {
     const assetIdChanged = prevAssetIdRef.current !== assetId;
     const multipleAssetsChanged = prevMultipleAssetsIdsRef.current !== multipleAssetsIdsString;
     
     if (!visible) {
-      // Reset when modal closes
       if (prevAssetIdRef.current !== undefined || prevMultipleAssetsIdsRef.current !== '') {
         setLocalTags([]);
         setNewTag('');
+        setIsInputFocused(false);
         prevAssetIdRef.current = undefined;
         prevMultipleAssetsIdsRef.current = '';
       }
       return;
     }
 
-    // Only update tags if asset or multiple assets actually changed
     if (assetIdChanged || multipleAssetsChanged) {
       if (isMultiEdit && multipleAssets.length > 0) {
-        // For multi-edit, start with empty tags (user will add tags to apply to all)
-        // This way we're adding tags, not replacing them
         setLocalTags([]);
       } else if (asset) {
         setLocalTags(asset.tags ?? []);
@@ -58,35 +140,88 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
         setLocalTags([]);
       }
       setNewTag('');
+      setIsInputFocused(false);
       
-      // Update refs
       prevAssetIdRef.current = assetId;
       prevMultipleAssetsIdsRef.current = multipleAssetsIdsString;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, assetId, multipleAssetsIdsString]);
+
+  const handleClose = () => {
+    if (isAnimatingOut) return; // Prevent multiple calls
+    
+    setIsAnimatingOut(true);
+    Keyboard.dismiss();
+    
+    // Ultra-smooth exit - refined, cohesive motion
+    // Everything moves together with refined timing
+    Animated.parallel([
+      // Content fades out quickly for immediate feedback
+      Animated.timing(contentOpacity, {
+        toValue: 0,
+        duration: 100,
+        easing: Easing.bezier(0.4, 0, 1, 1),
+        useNativeDriver: true,
+      }),
+      // Photo fades out smoothly with refined scale
+      Animated.sequence([
+        Animated.delay(20),
+        Animated.parallel([
+          Animated.timing(photoOpacity, {
+            toValue: 0,
+            duration: 180,
+            easing: Easing.bezier(0.4, 0, 1, 1),
+            useNativeDriver: true,
+          }),
+          Animated.timing(photoScale, {
+            toValue: 0.94,
+            duration: 180,
+            easing: Easing.bezier(0.4, 0, 1, 1),
+            useNativeDriver: true,
+          }),
+        ]),
+      ]),
+      // Backdrop and modal move as one - refined synchronization
+      Animated.parallel([
+        Animated.timing(backdropOpacity, {
+          toValue: 0,
+          duration: 250,
+          easing: Easing.bezier(0.4, 0, 0.2, 1), // Refined ease-in-out
+          useNativeDriver: true,
+        }),
+        Animated.timing(slideAnim, {
+          toValue: 0,
+          duration: 250,
+          easing: Easing.bezier(0.4, 0, 0.2, 1), // Identical easing for unity
+          useNativeDriver: true,
+        }),
+        Animated.timing(modalScale, {
+          toValue: 0.96,
+          duration: 250,
+          easing: Easing.bezier(0.4, 0, 0.2, 1), // Perfect synchronization
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start(() => {
+      // Animation complete, close the modal
+      setIsAnimatingOut(false);
+      onClose();
+    });
+  };
 
   const tagsSet = useMemo(() => new Set(localTags), [localTags]);
 
-  // Combine all available tags: StoryStack tags + library tags, excluding already selected ones
   const allAvailableTagsCombined = useMemo(() => {
     const selectedSet = new Set(localTags);
-    const storystackTags = STORYSTACK_TAGS.filter((tag) => !selectedSet.has(tag));
     const libraryTags = allAvailableTags.filter((tag) => !selectedSet.has(tag));
-    
-    // Combine and deduplicate, then sort alphabetically
-    const combined = [...new Set([...storystackTags, ...libraryTags])];
-    return combined.sort((a, b) => a.localeCompare(b));
+    return libraryTags.sort((a, b) => a.localeCompare(b));
   }, [allAvailableTags, localTags]);
 
   const toggleTag = (tag: TagVocabulary) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setLocalTags((prev) => {
       if (prev.includes(tag)) {
         return prev.filter((t) => t !== tag);
-      }
-      if (prev.length >= MAX_TAGS) {
-        Alert.alert('Tag limit reached', `You can select up to ${MAX_TAGS} tags.`);
-        return prev;
       }
       return [...prev, tag];
     });
@@ -97,29 +232,64 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
     if (!trimmed) {
       return;
     }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setLocalTags((prev) => {
       if (prev.includes(trimmed)) {
-        return prev;
-      }
-      if (prev.length >= MAX_TAGS) {
-        Alert.alert('Tag limit reached', `You can select up to ${MAX_TAGS} tags.`);
         return prev;
       }
       return [...prev, trimmed];
     });
     setNewTag('');
     Keyboard.dismiss();
+    setIsInputFocused(false);
   };
 
   const handleSave = async () => {
-    await onUpdateTags(localTags.slice(0, MAX_TAGS));
-    onClose();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await onUpdateTags(localTags);
+    handleClose();
+  };
+
+  const handleDelete = () => {
+    if (!asset || !onDelete) return;
+    
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ['Cancel', 'Delete Photo'],
+          destructiveButtonIndex: 1,
+          cancelButtonIndex: 0,
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 1) {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+            onDelete(asset);
+            handleClose();
+          }
+        }
+      );
+    } else {
+      Alert.alert(
+        'Delete Photo',
+        'Are you sure you want to delete this photo? This action cannot be undone.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+              onDelete(asset);
+              handleClose();
+            },
+          },
+        ]
+      );
+    }
   };
 
   const hasChanges = useMemo(() => {
     if (isMultiEdit) {
-      // For multi-edit, consider it changed if tags are not empty
-      // (since we're applying tags to multiple photos that may have different tags)
       return localTags.length > 0;
     }
     if (!asset) return false;
@@ -130,80 +300,127 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
 
   const insets = useSafeAreaInsets();
 
+  const translateY = slideAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [50, 0], // Reduced distance for smoother, more natural motion
+  });
+
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="pageSheet">
-      <View className="flex-1 bg-[#f7f7f7]">
-        {/* Header - Premium style */}
-        <View
-          className="bg-white px-5"
+    <Modal visible={visible || isAnimatingOut} animationType="none" onRequestClose={handleClose} presentationStyle="pageSheet">
+      <View style={{ flex: 1, backgroundColor: 'transparent' }}>
+        {/* Seamless backdrop - perfectly synchronized with modal motion */}
+        <Animated.View
           style={{
-            paddingTop: Math.max(insets.top, 16),
-            paddingBottom: 16,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 1 },
-            shadowOpacity: 0.05,
-            shadowRadius: 4,
-            elevation: 2,
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.4)',
+            opacity: backdropOpacity,
+          }}
+        />
+        <Animated.View 
+          className="flex-1 bg-white"
+          style={{
+            flex: 1,
+            transform: [
+              { translateY },
+              { scale: modalScale },
+            ],
+          }}
+        >
+        {/* Minimal Header */}
+        <View
+          style={{
+            paddingTop: Math.max(insets.top, 12),
+            paddingBottom: 12,
+            paddingHorizontal: 20,
           }}
         >
           <View className="flex-row items-center justify-between">
-            <TouchableOpacity onPress={onClose} activeOpacity={0.6}>
-              <Text className="text-[17px] font-semibold text-gray-900" style={{ letterSpacing: -0.3 }}>
+            <TouchableOpacity 
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                handleClose();
+              }} 
+              activeOpacity={0.6}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <Text className="text-[17px] font-regular text-gray-900" style={{ letterSpacing: -0.4 }}>
                 Cancel
               </Text>
             </TouchableOpacity>
-            <View className="items-center flex-1">
-              <Text className="text-[20px] font-bold text-gray-900" style={{ letterSpacing: -0.5 }}>
-                Edit Tags
-              </Text>
-              {isMultiEdit && (
-                <Text className="mt-0.5 text-[13px] text-gray-500">
-                  {multipleAssets.length} {multipleAssets.length === 1 ? 'photo' : 'photos'}
-                </Text>
+            
+            <View className="flex-row items-center gap-6">
+              {!isMultiEdit && asset && onDelete && (
+                <TouchableOpacity
+                  onPress={handleDelete}
+                  activeOpacity={0.6}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                >
+                  <MaterialCommunityIcons name="trash-can-outline" size={20} color="#8E8E93" />
+                </TouchableOpacity>
               )}
-            </View>
-            <TouchableOpacity
-              onPress={handleSave}
-              disabled={!hasChanges}
-              activeOpacity={0.6}
-            >
-              <Text
-                className={`text-[17px] font-semibold ${
-                  hasChanges ? 'text-[#b38f5b]' : 'text-gray-300'
-                }`}
-                style={{ letterSpacing: -0.3 }}
+              <TouchableOpacity
+                onPress={handleSave}
+                disabled={!hasChanges}
+                activeOpacity={0.6}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
               >
-                Done
-              </Text>
-            </TouchableOpacity>
+                <Text
+                  className="text-[17px] font-semibold"
+                  style={{
+                    color: hasChanges ? '#b38f5b' : '#C7C7CC',
+                    letterSpacing: -0.4,
+                  }}
+                >
+                  Done
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
 
         <ScrollView 
           className="flex-1" 
-          contentContainerStyle={{ paddingBottom: 40 }}
+          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 40) }}
           showsVerticalScrollIndicator={false}
+          bounces={true}
+          keyboardShouldPersistTaps="handled"
         >
-          {/* Photo Preview - Premium card */}
-          {isMultiEdit && multipleAssets.length > 0 ? (
-            <View
-              className="mx-5 mt-5 rounded-2xl bg-white px-4 py-4"
+          {/* Hero Photo - Elegant scale and fade */}
+          {!isMultiEdit && asset?.publicUrl ? (
+            <Animated.View
               style={{
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.05,
-                shadowRadius: 8,
-                elevation: 2,
+                opacity: photoOpacity,
+                transform: [{ scale: photoScale }],
+                width: '100%',
+                aspectRatio: 1,
+                backgroundColor: '#000',
               }}
             >
-              <Text className="mb-3 text-center text-[13px] font-medium text-gray-500">
-                {multipleAssets.length} {multipleAssets.length === 1 ? 'photo' : 'photos'} selected
-              </Text>
-              <View className="flex-row flex-wrap justify-center gap-2">
-                {multipleAssets.slice(0, 9).map((assetItem, index) => (
+              <Image
+                source={{ uri: asset.publicUrl }}
+                style={{ width: '100%', height: '100%' }}
+                resizeMode="contain"
+              />
+            </Animated.View>
+          ) : isMultiEdit && multipleAssets.length > 0 ? (
+            <Animated.View
+              style={{
+                opacity: contentOpacity,
+                transform: [{ translateY: contentTranslateY }],
+                paddingHorizontal: 20,
+                paddingTop: 8,
+                paddingBottom: 32,
+              }}
+            >
+              <View className="flex-row flex-wrap gap-2">
+                {multipleAssets.slice(0, 9).map((assetItem) => (
                   <View
                     key={assetItem.id}
-                    className="overflow-hidden rounded-xl bg-gray-100"
+                    className="overflow-hidden rounded-2xl bg-gray-100"
                     style={{
                       width: '31%',
                       aspectRatio: 1,
@@ -215,236 +432,116 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                         className="h-full w-full"
                         resizeMode="cover"
                       />
-                    ) : (
-                      <View className="h-full w-full items-center justify-center bg-gray-200">
-                        <Text className="text-[10px] text-gray-400">Loading...</Text>
-                      </View>
-                    )}
+                    ) : null}
                   </View>
                 ))}
                 {multipleAssets.length > 9 && (
                   <View
-                    className="items-center justify-center rounded-xl bg-gray-100"
+                    className="items-center justify-center rounded-2xl bg-gray-100"
                     style={{
                       width: '31%',
                       aspectRatio: 1,
                     }}
                   >
-                    <Text className="text-[24px] font-bold text-gray-400">+{multipleAssets.length - 9}</Text>
+                    <Text className="text-[16px] font-medium text-gray-400">+{multipleAssets.length - 9}</Text>
                   </View>
                 )}
               </View>
-              <Text className="mt-3 text-center text-[12px] text-gray-500">
-                Tags will be added to all {multipleAssets.length} {multipleAssets.length === 1 ? 'photo' : 'photos'}
-              </Text>
-            </View>
-          ) : asset?.publicUrl ? (
-            <View
-              className="mx-5 mt-5 rounded-2xl bg-white p-4"
-              style={{
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.05,
-                shadowRadius: 8,
-                elevation: 2,
-              }}
-            >
-              <View
-                className="overflow-hidden rounded-xl bg-gray-100"
-                style={{
-                  aspectRatio: 1,
-                }}
-              >
-                <Image
-                  source={{ uri: asset.publicUrl }}
-                  className="h-full w-full"
-                  resizeMode="contain"
-                />
-              </View>
-            </View>
+            </Animated.View>
           ) : null}
 
-          {/* Selected Tags - Premium card */}
-          {localTags.length > 0 && (
-            <View
-              className="mx-5 mt-5 rounded-2xl bg-white px-4 py-4"
-              style={{
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.05,
-                shadowRadius: 8,
-                elevation: 2,
-              }}
-            >
-              <View className="mb-3 flex-row items-center justify-between">
-                <Text className="text-[13px] font-semibold text-gray-700" style={{ letterSpacing: -0.1 }}>
-                  Selected ({localTags.length}/{MAX_TAGS})
-                </Text>
-              </View>
-              <View className="flex-row flex-wrap">
-                {localTags.map((tag) => (
-                  <TouchableOpacity
-                    key={tag}
-                    onPress={() => toggleTag(tag)}
-                    activeOpacity={0.85}
-                    className="mr-2 mb-2 rounded-full px-4 py-2"
-                    style={{
-                      backgroundColor: '#b38f5b',
-                      shadowColor: '#b38f5b',
-                      shadowOffset: { width: 0, height: 1 },
-                      shadowOpacity: 0.2,
-                      shadowRadius: 3,
-                      elevation: 2,
-                    }}
-                  >
-                    <Text className="text-[15px] font-medium text-white" style={{ letterSpacing: -0.1 }}>
-                      {tag}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {/* Add Custom Tag - Premium card */}
-          <View
-            className="mx-5 mt-5 rounded-2xl bg-white px-4 py-4"
+          {/* Content - Smooth fade and slide */}
+          <Animated.View
             style={{
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.05,
-              shadowRadius: 8,
-              elevation: 2,
+              opacity: contentOpacity,
+              transform: [{ translateY: contentTranslateY }],
+              paddingHorizontal: 20,
+              paddingTop: 24,
             }}
           >
-            <Text className="mb-3 text-[13px] font-semibold text-gray-700" style={{ letterSpacing: -0.1 }}>
-              Add Custom Tag
-            </Text>
-            <View className="flex-row gap-2">
+            {/* Selected Tags */}
+            {localTags.length > 0 && (
+              <View className="mb-6">
+                <View className="flex-row flex-wrap gap-2">
+                  {localTags.map((tag) => (
+                    <TouchableOpacity
+                      key={tag}
+                      onPress={() => toggleTag(tag)}
+                      activeOpacity={0.7}
+                      className="rounded-full px-4 py-2"
+                      style={{
+                        backgroundColor: '#b38f5b',
+                      }}
+                    >
+                      <View className="flex-row items-center gap-1.5">
+                        <Text className="text-[15px] font-medium text-white" style={{ letterSpacing: -0.3 }}>
+                          {tag}
+                        </Text>
+                        <Text className="text-[13px] font-medium text-white opacity-75">
+                          ×
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {/* Add Tag Input */}
+            <View className="mb-8">
               <TextInput
-                className="flex-1 rounded-2xl border bg-gray-50 px-4 py-3 text-[16px] text-gray-900"
-                placeholder="Tag name"
-                placeholderTextColor="#9ca3af"
+                className="w-full rounded-xl bg-gray-50 px-4 py-3.5 text-[16px] text-gray-900"
+                placeholder="Add tag"
+                placeholderTextColor="#9CA3AF"
                 value={newTag}
                 onChangeText={setNewTag}
                 onSubmitEditing={handleAddTag}
+                onFocus={() => setIsInputFocused(true)}
+                onBlur={() => setIsInputFocused(false)}
                 returnKeyType="done"
                 maxLength={30}
                 style={{
-                  borderColor: '#e5e7eb',
-                  letterSpacing: -0.2,
+                  letterSpacing: -0.4,
+                  borderWidth: isInputFocused ? 1 : 0,
+                  borderColor: '#b38f5b',
                 }}
               />
-              <TouchableOpacity
-                onPress={handleAddTag}
-                disabled={!newTag.trim() || localTags.length >= MAX_TAGS}
-                activeOpacity={0.85}
-                className="rounded-2xl px-5 py-3"
-                style={{
-                  backgroundColor: (!newTag.trim() || localTags.length >= MAX_TAGS) ? '#e5e7eb' : '#b38f5b',
-                  shadowColor: (!newTag.trim() || localTags.length >= MAX_TAGS) ? 'transparent' : '#b38f5b',
-                  shadowOffset: { width: 0, height: 2 },
-                  shadowOpacity: (!newTag.trim() || localTags.length >= MAX_TAGS) ? 0 : 0.2,
-                  shadowRadius: 8,
-                  elevation: (!newTag.trim() || localTags.length >= MAX_TAGS) ? 0 : 3,
-                }}
-              >
-                <Text
-                  className="text-[16px] font-semibold"
-                  style={{
-                    color: (!newTag.trim() || localTags.length >= MAX_TAGS) ? '#9ca3af' : '#ffffff',
-                    letterSpacing: -0.2,
-                  }}
-                >
-                  Add
-                </Text>
-              </TouchableOpacity>
             </View>
-            {localTags.length >= MAX_TAGS && (
-              <Text className="mt-2 text-[12px] text-red-600">
-                Maximum {MAX_TAGS} tags reached
-              </Text>
-            )}
-          </View>
 
-          {/* All Available Tags - Premium card */}
-          {allAvailableTagsCombined.length > 0 && (
-            <View
-              className="mx-5 mt-5 rounded-2xl bg-white px-4 py-4"
-              style={{
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.05,
-                shadowRadius: 8,
-                elevation: 2,
-              }}
-            >
-              <Text className="mb-4 text-[13px] font-semibold text-gray-700" style={{ letterSpacing: -0.1 }}>
-                Available Tags
-              </Text>
-              <View className="flex-row flex-wrap">
-                {allAvailableTagsCombined.map((tag) => {
-                  const isActive = tagsSet.has(tag);
-                  return (
-                    <TouchableOpacity
-                      key={tag}
-                      onPress={() => {
-                        if (localTags.length < MAX_TAGS || isActive) {
-                          toggleTag(tag);
-                        } else {
-                          Alert.alert('Tag limit reached', `You can select up to ${MAX_TAGS} tags.`);
-                        }
-                      }}
-                      activeOpacity={0.85}
-                      className="mr-2 mb-2 rounded-full px-4 py-2"
-                      style={{
-                        backgroundColor: isActive ? '#b38f5b' : '#f3f4f6',
-                        shadowColor: isActive ? '#b38f5b' : 'transparent',
-                        shadowOffset: { width: 0, height: 1 },
-                        shadowOpacity: isActive ? 0.15 : 0,
-                        shadowRadius: 3,
-                        elevation: isActive ? 2 : 0,
-                      }}
-                    >
-                      <Text
-                        className="text-[15px] font-medium"
+            {/* Available Tags */}
+            {allAvailableTagsCombined.length > 0 && (
+              <View>
+                <View className="flex-row flex-wrap gap-2">
+                  {allAvailableTagsCombined.map((tag) => {
+                    const isActive = tagsSet.has(tag);
+                    return (
+                      <TouchableOpacity
+                        key={tag}
+                        onPress={() => toggleTag(tag)}
+                        activeOpacity={0.7}
+                        className="rounded-full px-4 py-2"
                         style={{
-                          color: isActive ? '#ffffff' : '#374151',
-                          letterSpacing: -0.1,
+                          backgroundColor: isActive ? '#b38f5b' : '#F3F4F6',
                         }}
                       >
-                        {tag}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+                        <Text
+                          className="text-[15px] font-medium"
+                          style={{
+                            color: isActive ? '#FFFFFF' : '#374151',
+                            letterSpacing: -0.3,
+                          }}
+                        >
+                          {tag}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
               </View>
-            </View>
-          )}
-
-          {/* Empty State - Premium */}
-          {localTags.length === 0 && (
-            <View
-              className="mx-5 mt-5 rounded-2xl bg-white px-6 py-12"
-              style={{
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.05,
-                shadowRadius: 8,
-                elevation: 2,
-              }}
-            >
-              <View className="items-center">
-                <Text className="mb-2 text-center text-[17px] font-medium text-gray-900" style={{ letterSpacing: -0.3 }}>
-                  No tags selected
-                </Text>
-                <Text className="text-center text-[15px] text-gray-500">
-                  Add tags to organize your photos
-                </Text>
-              </View>
-            </View>
-          )}
+            )}
+          </Animated.View>
         </ScrollView>
+        </Animated.View>
       </View>
     </Modal>
   );

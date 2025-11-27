@@ -9,7 +9,7 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#f7f7f7"
+      "backgroundColor": "#fafafa"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -17,14 +17,15 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.storystackstudio.app",
-      "buildNumber": "6",
+      "buildNumber": "9",
+      "icon": "./assets/icon.png",
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to import photos for tagging.",
         "NSPhotoLibraryAddUsageDescription": "This app needs access to save photos to your library."
       }
     },
     "android": {
-      "versionCode": 6,
+      "versionCode": 8,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"

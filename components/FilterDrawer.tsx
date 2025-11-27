@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Modal, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, Easing, Modal, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TagVocabulary } from '@/types';
 
@@ -24,6 +24,43 @@ export function FilterDrawer({
 }: FilterDrawerProps) {
   const insets = useSafeAreaInsets();
   const [tempSelectedTags, setTempSelectedTags] = useState<TagVocabulary[]>(selectedTags);
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+
+  // Smooth drawer animation
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.timing(backdropOpacity, {
+          toValue: 1,
+          duration: 250,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.spring(slideAnim, {
+          toValue: 1,
+          tension: 65,
+          friction: 11,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(backdropOpacity, {
+          toValue: 0,
+          duration: 200,
+          easing: Easing.in(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(slideAnim, {
+          toValue: 0,
+          duration: 250,
+          easing: Easing.in(Easing.back(1.2)),
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [visible]);
 
   // Update temp selection when drawer opens or selectedTags prop changes
   useEffect(() => {
@@ -72,27 +109,39 @@ export function FilterDrawer({
     return [...tagLabels].sort((a, b) => a.localeCompare(b));
   }, [allTags]);
 
+  const translateY = slideAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [600, 0],
+  });
+
   return (
     <Modal
       visible={visible}
       transparent
-      animationType="slide"
+      animationType="none"
       onRequestClose={onClose}
     >
-      <TouchableOpacity
-        activeOpacity={1}
-        onPress={onClose}
-        className="flex-1 bg-black/50"
+      <Animated.View
+        style={{
+          flex: 1,
+          opacity: backdropOpacity,
+        }}
       >
-        <View className="flex-1 justify-end">
-          <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
-            <View
-              className="rounded-t-3xl bg-white"
-              style={{
-                maxHeight: '80%',
-                paddingBottom: Math.max(insets.bottom, 20),
-              }}
-            >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={onClose}
+          className="flex-1 bg-black/50"
+        >
+          <View className="flex-1 justify-end">
+            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+              <Animated.View
+                className="rounded-t-3xl bg-white"
+                style={{
+                  maxHeight: '80%',
+                  paddingBottom: Math.max(insets.bottom, 20),
+                  transform: [{ translateY }],
+                }}
+              >
               {/* Header */}
               <View className="border-b border-gray-100 px-5 py-4">
                 <View className="flex-row items-center justify-between">
@@ -216,10 +265,11 @@ export function FilterDrawer({
                   </TouchableOpacity>
                 </View>
               </View>
-            </View>
-          </TouchableOpacity>
-        </View>
-      </TouchableOpacity>
+              </Animated.View>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Animated.View>
     </Modal>
   );
 }

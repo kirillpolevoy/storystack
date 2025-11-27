@@ -1,13 +1,15 @@
 import { Text, TouchableOpacity, View } from 'react-native';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
 
 type StoryHeaderProps = {
-  onBackPress: () => void;
+  onMenuPress?: () => void;
   onAddMorePress?: () => void;
   showAddMore?: boolean;
 };
 
-export function StoryHeader({ onBackPress, onAddMorePress, showAddMore = false }: StoryHeaderProps) {
+export function StoryHeader({ onMenuPress, onAddMorePress, showAddMore = false }: StoryHeaderProps) {
   const insets = useSafeAreaInsets();
 
   return (
@@ -24,31 +26,40 @@ export function StoryHeader({ onBackPress, onAddMorePress, showAddMore = false }
       }}
     >
       <View className="flex-row items-center justify-between">
-        <View className="flex-row items-center flex-1">
-          <TouchableOpacity
-            onPress={onBackPress}
-            activeOpacity={0.6}
-            className="mr-4"
-          >
-            <Text className="text-[17px] font-semibold text-gray-900" style={{ letterSpacing: -0.3 }}>
-              ← Back
-            </Text>
-          </TouchableOpacity>
-          <Text className="text-[20px] font-bold text-gray-900" style={{ letterSpacing: -0.5 }}>
-            New Story
-          </Text>
+        <Text className="text-[20px] font-bold text-gray-900" style={{ letterSpacing: -0.5 }}>
+          New Story
+        </Text>
+        <View className="flex-row items-center gap-2">
+          {showAddMore && onAddMorePress && (
+            <TouchableOpacity
+              onPress={onAddMorePress}
+              activeOpacity={0.6}
+            >
+              <Text className="text-[15px] font-semibold text-gray-600" style={{ letterSpacing: -0.2 }}>
+                Add More
+              </Text>
+            </TouchableOpacity>
+          )}
+          {onMenuPress && (
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                onMenuPress();
+              }}
+              activeOpacity={0.6}
+              className="h-9 w-9 items-center justify-center rounded-full"
+              style={{
+                backgroundColor: 'rgba(179, 143, 91, 0.1)',
+              }}
+            >
+              <MaterialCommunityIcons
+                name="menu"
+                size={20}
+                color="#b38f5b"
+              />
+            </TouchableOpacity>
+          )}
         </View>
-        {showAddMore && onAddMorePress && (
-          <TouchableOpacity
-            onPress={onAddMorePress}
-            activeOpacity={0.6}
-            className="ml-4"
-          >
-            <Text className="text-[15px] font-semibold text-gray-600" style={{ letterSpacing: -0.2 }}>
-              Add More
-            </Text>
-          </TouchableOpacity>
-        )}
       </View>
     </View>
   );

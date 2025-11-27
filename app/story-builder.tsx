@@ -3,6 +3,8 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   Image,
   Modal,
   ScrollView,
@@ -13,12 +15,17 @@ import {
   View,
   Dimensions,
 } from 'react-native';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
 import { supabase } from '@/lib/supabase';
 import { Asset } from '@/types';
 import { exportStorySequence } from '@/utils/exportStory';
+import { createStory, addAssetsToStory, getStories } from '@/utils/stories';
+import { useAuth } from '@/contexts/AuthContext';
 import { StoryHeader } from '@/components/StoryHeader';
+import { MenuDrawer } from '@/components/MenuDrawer';
+import * as Haptics from 'expo-haptics';
 
 // Color palette
 const COLORS = {
@@ -42,6 +49,7 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 export default function StoryBuilderScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { session } = useAuth();
   
   if (!router) {
     return null;
@@ -101,6 +109,11 @@ export default function StoryBuilderScreen() {
   const [orderedAssets, setOrderedAssets] = useState<Asset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [storyName, setStoryName] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [showStoryPicker, setShowStoryPicker] = useState(false);
+  const [existingStories, setExistingStories] = useState<any[]>([]);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   // Initialize story name from params if provided
   useEffect(() => {
@@ -108,8 +121,57 @@ export default function StoryBuilderScreen() {
       setStoryName(params.storyName);
     }
   }, [params.storyName]);
-  const [isExporting, setIsExporting] = useState(false);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
+  const previewModalScale = useRef(new Animated.Value(0.95)).current;
+  const previewModalOpacity = useRef(new Animated.Value(0)).current;
+  const previewBackdropOpacity = useRef(new Animated.Value(0)).current;
+
+  // Animate preview modal
+  useEffect(() => {
+    if (previewAsset !== null) {
+      Animated.parallel([
+        Animated.timing(previewBackdropOpacity, {
+          toValue: 1,
+          duration: 250,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.spring(previewModalScale, {
+          toValue: 1,
+          tension: 65,
+          friction: 11,
+          useNativeDriver: true,
+        }),
+        Animated.timing(previewModalOpacity, {
+          toValue: 1,
+          duration: 250,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(previewBackdropOpacity, {
+          toValue: 0,
+          duration: 200,
+          easing: Easing.in(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(previewModalScale, {
+          toValue: 0.95,
+          duration: 200,
+          easing: Easing.in(Easing.back(1.2)),
+          useNativeDriver: true,
+        }),
+        Animated.timing(previewModalOpacity, {
+          toValue: 0,
+          duration: 200,
+          easing: Easing.in(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [previewAsset]);
   const [localTags, setLocalTags] = useState<Record<string, string[]>>({});
 
   // Load assets from Supabase
@@ -227,6 +289,71 @@ export default function StoryBuilderScreen() {
     ]);
   }, []);
 
+  // Load existing stories for picker
+  useEffect(() => {
+    const loadStories = async () => {
+      if (!session?.user?.id) return;
+      const stories = await getStories(session.user.id);
+      setExistingStories(stories);
+    };
+    loadStories();
+  }, [session]);
+
+  const handleSaveStory = useCallback(async (targetStoryId?: string) => {
+    if (!session?.user?.id) {
+      Alert.alert('Error', 'You must be signed in to save stories.');
+      return;
+    }
+
+    if (!storyName.trim()) {
+      Alert.alert('Story name required', 'Please enter a name for your story.');
+      return;
+    }
+
+    if (orderedAssets.length === 0) {
+      Alert.alert('No photos', 'Please add photos to your story.');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const assetIds = orderedAssets.map((a) => a.id);
+
+      if (targetStoryId) {
+        // Add to existing story
+        const success = await addAssetsToStory(targetStoryId, session.user.id, assetIds);
+        if (success) {
+          Alert.alert('Success', 'Photos added to story!', [
+            {
+              text: 'OK',
+              onPress: () => {
+                router.back();
+              },
+            },
+          ]);
+        } else {
+          Alert.alert('Error', 'Failed to add photos to story.');
+        }
+      } else {
+        // Create new story
+        const story = await createStory(session.user.id, storyName.trim(), undefined, assetIds);
+        if (story) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          // Navigate to stories screen
+          router.replace('/stories' as any);
+        } else {
+          Alert.alert('Error', 'Failed to create story.');
+        }
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[StoryBuilder] save failed', errorMsg, error);
+      Alert.alert('Save failed', `Something went wrong: ${errorMsg}\n\nPlease try again.`);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [storyName, orderedAssets, session, router]);
+
   const handleExport = useCallback(async () => {
     if (!storyName.trim()) {
       Alert.alert('Story name required', 'Please enter a name for your story.');
@@ -241,11 +368,6 @@ export default function StoryBuilderScreen() {
     setIsExporting(true);
     try {
       await exportStorySequence(orderedAssets, storyName.trim());
-      setTimeout(() => {
-        setStoryName('');
-        setOrderedAssets([]);
-        setLocalTags({});
-      }, 2000);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       console.error('[StoryBuilder] export failed', errorMsg, error);
@@ -263,7 +385,7 @@ export default function StoryBuilderScreen() {
     });
   }, []);
 
-  const canExport = orderedAssets.length > 0;
+  const canSave = orderedAssets.length > 0 && storyName.trim().length > 0;
 
   // Photo Card Component
   const PhotoCard = ({ asset, index }: { asset: Asset; index: number }) => {
@@ -341,7 +463,7 @@ export default function StoryBuilderScreen() {
       <View style={styles.container}>
         {/* Header */}
         <StoryHeader 
-          onBackPress={() => router.back()} 
+          onMenuPress={() => setIsMenuOpen(true)}
           onAddMorePress={() => {
             // Navigate to library with current story's asset IDs
             const currentAssetIds = orderedAssets.map((a) => a.id).join(',');
@@ -368,13 +490,21 @@ export default function StoryBuilderScreen() {
             </View>
             <Text style={styles.emptyStateTitle}>No photos in this story yet</Text>
             <Text style={styles.emptyStateSubtitle}>
-              Please go back to the library and select photos to build your story.
+              Select photos from your library to build your story.
             </Text>
             <TouchableOpacity
-              onPress={() => router.back()}
+              onPress={() => {
+                router.push({
+                  pathname: '/',
+                  params: {
+                    existingAssetIds: '',
+                    storyName: storyName || '',
+                  },
+                } as any);
+              }}
               style={styles.backButton}
             >
-              <Text style={styles.backButtonText}>Back to Library</Text>
+              <Text style={styles.backButtonText}>Select Photos</Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -449,57 +579,191 @@ export default function StoryBuilderScreen() {
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={handleExport}
-                disabled={isExporting}
+                onPress={() => {
+                  if (isAddMode && existingAssetIds.length > 0) {
+                    // Adding to existing story - show picker
+                    setShowStoryPicker(true);
+                  } else {
+                    // Creating new story
+                    handleSaveStory();
+                  }
+                }}
+                disabled={isSaving || !canSave}
                 style={[
                   styles.exportButton,
-                  isExporting && styles.exportButtonDisabled,
+                  (isSaving || !canSave) && styles.exportButtonDisabled,
                 ]}
-                activeOpacity={!isExporting ? 0.85 : 1}
+                activeOpacity={!isSaving && canSave ? 0.85 : 1}
               >
-                <Text
-                  style={[
-                    styles.exportButtonText,
-                    isExporting && styles.exportButtonTextDisabled,
-                  ]}
-                >
-                  {isExporting ? 'Exporting…' : 'Export Story'}
-                </Text>
+                {isSaving ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text
+                    style={[
+                      styles.exportButtonText,
+                      (isSaving || !canSave) && styles.exportButtonTextDisabled,
+                    ]}
+                  >
+                    {isAddMode ? 'Add to Story' : 'Save Story'}
+                  </Text>
+                )}
               </TouchableOpacity>
             </View>
           </>
         )}
 
+        {/* Story Picker Modal */}
+        <Modal
+          visible={showStoryPicker}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowStoryPicker(false)}
+        >
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: 'rgba(0, 0, 0, 0.5)',
+              justifyContent: 'center',
+              alignItems: 'center',
+              padding: 20,
+            }}
+          >
+            <View
+              style={{
+                width: '100%',
+                maxWidth: 400,
+                backgroundColor: '#ffffff',
+                borderRadius: 16,
+                padding: 24,
+                maxHeight: '80%',
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 22,
+                  fontWeight: '700',
+                  color: '#111827',
+                  marginBottom: 20,
+                }}
+              >
+                Add to Story
+              </Text>
+
+              <ScrollView style={{ maxHeight: 400 }}>
+                <TouchableOpacity
+                  onPress={() => {
+                    setShowStoryPicker(false);
+                    handleSaveStory(); // Create new story
+                  }}
+                  activeOpacity={0.7}
+                  style={{
+                    padding: 16,
+                    borderRadius: 12,
+                    backgroundColor: '#f9fafb',
+                    marginBottom: 12,
+                    borderWidth: 2,
+                    borderColor: '#b38f5b',
+                    borderStyle: 'dashed',
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <MaterialCommunityIcons name="plus-circle" size={24} color="#b38f5b" style={{ marginRight: 12 }} />
+                    <Text style={{ fontSize: 17, fontWeight: '600', color: '#111827' }}>
+                      Create New Story
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+
+                {existingStories.map((story) => (
+                  <TouchableOpacity
+                    key={story.id}
+                    onPress={() => {
+                      setShowStoryPicker(false);
+                      handleSaveStory(story.id);
+                    }}
+                    activeOpacity={0.7}
+                    style={{
+                      padding: 16,
+                      borderRadius: 12,
+                      backgroundColor: '#f9fafb',
+                      marginBottom: 12,
+                    }}
+                  >
+                    <Text style={{ fontSize: 17, fontWeight: '600', color: '#111827', marginBottom: 4 }}>
+                      {story.name}
+                    </Text>
+                    <Text style={{ fontSize: 14, color: '#6b7280' }}>
+                      {story.asset_count} {story.asset_count === 1 ? 'photo' : 'photos'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              <TouchableOpacity
+                onPress={() => setShowStoryPicker(false)}
+                activeOpacity={0.7}
+                style={{
+                  marginTop: 16,
+                  paddingVertical: 14,
+                  borderRadius: 12,
+                  backgroundColor: '#f3f4f6',
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ fontSize: 16, fontWeight: '600', color: '#6b7280' }}>
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
         {/* Photo Preview Modal */}
         <Modal
           visible={previewAsset !== null}
           transparent={true}
-          animationType="fade"
+          animationType="none"
           onRequestClose={() => setPreviewAsset(null)}
         >
-          <View style={styles.previewModal}>
+          <Animated.View 
+            style={[
+              styles.previewModal,
+              { opacity: previewBackdropOpacity },
+            ]}
+          >
             <TouchableOpacity
               style={styles.previewCloseButton}
               onPress={() => setPreviewAsset(null)}
+              activeOpacity={0.7}
             >
               <Text style={styles.previewCloseButtonText}>×</Text>
             </TouchableOpacity>
             {previewAsset?.publicUrl && (
-              <ScrollView
-                maximumZoomScale={3}
-                minimumZoomScale={1}
-                contentContainerStyle={styles.previewImageContainer}
+              <Animated.View
+                style={{
+                  flex: 1,
+                  opacity: previewModalOpacity,
+                  transform: [{ scale: previewModalScale }],
+                }}
               >
-                <Image
-                  source={{ uri: previewAsset.publicUrl }}
-                  style={styles.previewImage}
-                  resizeMode="contain"
-                />
-              </ScrollView>
+                <ScrollView
+                  maximumZoomScale={3}
+                  minimumZoomScale={1}
+                  contentContainerStyle={styles.previewImageContainer}
+                >
+                  <Image
+                    source={{ uri: previewAsset.publicUrl }}
+                    style={styles.previewImage}
+                    resizeMode="contain"
+                  />
+                </ScrollView>
+              </Animated.View>
             )}
-          </View>
+          </Animated.View>
         </Modal>
 
+        {/* Menu Drawer */}
+        <MenuDrawer visible={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
       </View>
     </GestureHandlerRootView>
   );

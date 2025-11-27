@@ -28,13 +28,14 @@ const DEFAULT_TAG_VOCABULARY = [
 ];
 
 // Get tag vocabulary from Supabase config - ONLY use enabled tags, never fallback to defaults
-async function getTagVocabulary(supabaseClient: any): Promise<string[]> {
+// Now user-specific: gets tags for the user who owns the asset
+async function getTagVocabulary(supabaseClient: any, userId: string): Promise<string[]> {
   try {
-    console.log('[auto_tag_asset] Fetching tag_config from database...');
+    console.log('[auto_tag_asset] Fetching tag_config from database for user:', userId);
     const { data: config, error } = await supabaseClient
       .from('tag_config')
       .select('auto_tags')
-      .eq('id', 'default')
+      .eq('user_id', userId)
       .single();
     
     if (error) {
@@ -67,7 +68,122 @@ async function getTagVocabulary(supabaseClient: any): Promise<string[]> {
   }
 }
 
-async function getSuggestedTags({ imageUrl }: AutoTagRequest, apiKey?: string, tagVocabulary: string[] = []) {
+// Check if image format is supported by OpenAI and convert if needed
+async function ensureSupportedImageFormat(imageUrl: string): Promise<string> {
+  try {
+    console.log('[auto_tag_asset] Checking image format for URL:', imageUrl);
+    
+    // First, check the actual Content-Type header from the image
+    let actualContentType: string | null = null;
+    try {
+      const headResponse = await fetch(imageUrl, { method: 'HEAD' });
+      actualContentType = headResponse.headers.get('content-type');
+      console.log('[auto_tag_asset] Image Content-Type header:', actualContentType);
+    } catch (headError) {
+      console.warn('[auto_tag_asset] Could not fetch HEAD, will check extension:', headError);
+    }
+    
+    // Extract file extension from URL
+    const urlPath = new URL(imageUrl).pathname;
+    const extension = urlPath.split('.').pop()?.toLowerCase() || '';
+    console.log('[auto_tag_asset] File extension from URL:', extension);
+    
+    // OpenAI supports: png, jpeg, gif, webp
+    const supportedFormats = ['png', 'jpeg', 'jpg', 'gif', 'webp'];
+    const supportedMimeTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+    
+    // For Supabase Storage URLs, ALWAYS use transform to ensure JPEG format
+    // This handles cases where Content-Type might be wrong or file is HEIC
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    if (supabaseUrl && imageUrl.includes(supabaseUrl)) {
+      // Always apply transform to force JPEG format for OpenAI compatibility
+      console.log('[auto_tag_asset] Applying Supabase Storage transform to ensure JPEG format');
+      try {
+        const url = new URL(imageUrl);
+        // Remove existing query params and add transform params to force JPEG
+        url.search = '';
+        url.searchParams.set('width', '2048');
+        url.searchParams.set('format', 'jpeg');
+        url.searchParams.set('quality', '90');
+        const transformUrl = url.toString();
+        console.log('[auto_tag_asset] ✅ Using Supabase Storage transform to JPEG:', transformUrl);
+        
+        // Verify the transform works by checking Content-Type
+        try {
+          const verifyResponse = await fetch(transformUrl, { method: 'HEAD' });
+          const verifyContentType = verifyResponse.headers.get('content-type');
+          console.log('[auto_tag_asset] Transform URL Content-Type:', verifyContentType);
+          if (verifyContentType && (verifyContentType.includes('jpeg') || verifyContentType.includes('jpg'))) {
+            console.log('[auto_tag_asset] ✅ Transform URL verified - returning JPEG URL');
+            return transformUrl;
+          } else {
+            console.warn('[auto_tag_asset] ⚠️  Transform URL did not return JPEG, Content-Type:', verifyContentType);
+            // Transform didn't work - convert to base64 as fallback
+            console.log('[auto_tag_asset] Converting image to base64 data URL as fallback');
+            const imageResponse = await fetch(imageUrl);
+            if (!imageResponse.ok) {
+              throw new Error(`Failed to fetch image: ${imageResponse.status}`);
+            }
+            const imageBuffer = await imageResponse.arrayBuffer();
+            const imageBytes = new Uint8Array(imageBuffer);
+            
+            // Convert to base64
+            const base64 = btoa(String.fromCharCode(...imageBytes));
+            const dataUrl = `data:image/jpeg;base64,${base64}`;
+            console.log('[auto_tag_asset] ✅ Converted to base64 data URL (length:', dataUrl.length, 'chars)');
+            return dataUrl;
+          }
+        } catch (verifyError) {
+          console.warn('[auto_tag_asset] Could not verify transform, converting to base64:', verifyError);
+          // Convert to base64 as fallback
+          try {
+            const imageResponse = await fetch(imageUrl);
+            if (!imageResponse.ok) {
+              throw new Error(`Failed to fetch image: ${imageResponse.status}`);
+            }
+            const imageBuffer = await imageResponse.arrayBuffer();
+            const imageBytes = new Uint8Array(imageBuffer);
+            const base64 = btoa(String.fromCharCode(...imageBytes));
+            const dataUrl = `data:image/jpeg;base64,${base64}`;
+            console.log('[auto_tag_asset] ✅ Converted to base64 data URL (fallback)');
+            return dataUrl;
+          } catch (base64Error) {
+            console.error('[auto_tag_asset] Failed to convert to base64, using transform URL anyway:', base64Error);
+            return transformUrl;
+          }
+        }
+      } catch (urlError) {
+        console.error('[auto_tag_asset] Error constructing transform URL:', urlError);
+        // Fall through to error
+      }
+    }
+    
+    // If transform not available, throw error with helpful message
+    throw new Error(`Unsupported image format: ${extension} (Content-Type: ${actualContentType}). OpenAI only supports PNG, JPEG, GIF, and WEBP.`);
+    
+  } catch (error) {
+    console.error('[auto_tag_asset] Error checking/converting image format:', error);
+    // Always try to use transform URL as fallback
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    if (supabaseUrl && imageUrl.includes(supabaseUrl)) {
+      try {
+        const url = new URL(imageUrl);
+        url.search = '';
+        url.searchParams.set('width', '2048');
+        url.searchParams.set('format', 'jpeg');
+        url.searchParams.set('quality', '90');
+        const transformUrl = url.toString();
+        console.log('[auto_tag_asset] Using transform URL as fallback:', transformUrl);
+        return transformUrl;
+      } catch {
+        // If that fails, return original and let OpenAI error
+      }
+    }
+    return imageUrl;
+  }
+}
+
+async function getSuggestedTags({ imageUrl }: AutoTagRequest, apiKey?: string, tagVocabulary: string[] = []): Promise<string[]> {
   if (!apiKey) {
     console.warn('[auto_tag_asset] Missing OPENAI_API_KEY. Cannot generate tags.');
     throw new Error('OpenAI API key not configured');
@@ -80,6 +196,9 @@ async function getSuggestedTags({ imageUrl }: AutoTagRequest, apiKey?: string, t
   }
   
   console.log('[auto_tag_asset] Tag vocabulary for GPT-4:', tagVocabulary);
+  
+  // Ensure image format is supported
+  const supportedImageUrl = await ensureSupportedImageFormat(imageUrl);
 
   const payload = {
     model: 'gpt-4o-mini',
@@ -121,7 +240,11 @@ Return tags that accurately reflect what is in the image.`,
           {
             type: 'image_url',
             image_url: {
-              url: imageUrl,
+              // If it's a data URL, use it directly; otherwise use url property
+              ...(supportedImageUrl.startsWith('data:') 
+                ? { url: supportedImageUrl }
+                : { url: supportedImageUrl }
+              ),
             },
           },
         ],
@@ -225,15 +348,27 @@ Return tags that accurately reflect what is in the image.`,
   const tags = Array.isArray(parsed.tags) ? parsed.tags : [];
   
   if (tags.length === 0) {
-    console.error('[auto_tag_asset] No tags returned from OpenAI');
-    throw new Error('No tags returned');
+    console.error('[auto_tag_asset] ❌ No tags returned from OpenAI');
+    console.error('[auto_tag_asset] Parsed object:', JSON.stringify(parsed, null, 2));
+    throw new Error('No tags returned from OpenAI');
   }
   
-  if (tags.length === 1) {
-    console.warn('[auto_tag_asset] Only received 1 tag:', tags, '- This violates the minItems: 2 constraint');
+  // Validate tags are in the vocabulary (strict mode should prevent this, but check anyway)
+  const invalidTags = tags.filter(tag => !tagVocabulary.includes(tag));
+  if (invalidTags.length > 0) {
+    console.error('[auto_tag_asset] ❌ Invalid tags returned (not in vocabulary):', invalidTags);
+    console.error('[auto_tag_asset] Valid vocabulary:', tagVocabulary);
+    console.error('[auto_tag_asset] Received tags:', tags);
+    // Filter out invalid tags instead of failing completely
+    const validTags = tags.filter(tag => tagVocabulary.includes(tag));
+    console.log('[auto_tag_asset] Filtered to valid tags:', validTags);
+    if (validTags.length === 0) {
+      throw new Error('No valid tags returned (all tags were invalid)');
+    }
+    return validTags.slice(0, 5);
   }
   
-  console.log('[auto_tag_asset] Final tags:', tags);
+  console.log('[auto_tag_asset] ✅ Final tags (all valid):', tags);
   return tags.slice(0, 5); // Ensure max 5 tags
 }
 
@@ -267,8 +402,26 @@ Deno.serve(async (req) => {
     const supabaseClient = createClient(supabaseUrl, serviceKey);
     const openAiKey = Deno.env.get('OPENAI_API_KEY');
     
-    // Get tag vocabulary from config - ONLY enabled tags
-    const tagVocabulary = await getTagVocabulary(supabaseClient);
+    // Get the asset to find the user_id
+    const { data: asset, error: assetError } = await supabaseClient
+      .from('assets')
+      .select('user_id')
+      .eq('id', body.assetId)
+      .single();
+    
+    if (assetError || !asset?.user_id) {
+      console.error('[auto_tag_asset] Failed to get asset or user_id:', assetError);
+      return new Response(JSON.stringify({ error: 'Asset not found or missing user_id' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    
+    const userId = asset.user_id;
+    console.log('[auto_tag_asset] Asset belongs to user:', userId);
+    
+    // Get tag vocabulary from config - ONLY enabled tags for this user
+    const tagVocabulary = await getTagVocabulary(supabaseClient, userId);
     console.log('[auto_tag_asset] Using tag vocabulary (enabled tags only):', tagVocabulary);
     console.log('[auto_tag_asset] Number of enabled tags:', tagVocabulary.length);
     
@@ -310,11 +463,23 @@ Deno.serve(async (req) => {
     }
 
     // Update with tags (empty array if tagging failed - user can tag manually)
-    const { error } = await supabaseClient.from('assets').update({ tags }).eq('id', body.assetId);
+    console.log('[auto_tag_asset] Updating asset with tags:', tags);
+    console.log('[auto_tag_asset] Asset ID:', body.assetId);
+    const { data: updatedAsset, error } = await supabaseClient
+      .from('assets')
+      .update({ tags })
+      .eq('id', body.assetId)
+      .select('id, tags')
+      .single();
+    
     if (error) {
-      console.error('[auto_tag_asset] Supabase update failed', error);
-      throw new Error('Unable to update asset tags');
+      console.error('[auto_tag_asset] ❌ Supabase update failed', error);
+      console.error('[auto_tag_asset] Error details:', JSON.stringify(error, null, 2));
+      throw new Error(`Unable to update asset tags: ${error.message}`);
     }
+    
+    console.log('[auto_tag_asset] ✅ Asset updated successfully');
+    console.log('[auto_tag_asset] Updated asset tags:', updatedAsset?.tags);
 
     return new Response(JSON.stringify({ assetId: body.assetId, tags }), {
       status: 200,

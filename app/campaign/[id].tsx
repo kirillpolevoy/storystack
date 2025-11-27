@@ -9,13 +9,17 @@ import {
   View,
   Alert,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import * as ImagePicker from 'expo-image-picker';
 import dayjs from 'dayjs';
 import { supabase } from '@/lib/supabase';
 import { Asset, Campaign, TagVocabulary, BASE_TAGS, BRAND_TAGS } from '@/types';
 import { TagFilterBar } from '@/components/TagFilterBar';
 import { TagModal } from '@/components/TagModal';
+import { MenuDrawer } from '@/components/MenuDrawer';
 import { getAllAvailableTags } from '@/utils/getAllAvailableTags';
+import * as Haptics from 'expo-haptics';
 
 const fallbackCampaign: Campaign = {
   id: 'fallback',
@@ -28,6 +32,9 @@ const fallbackAssets: Asset[] = [];
 
 export default function CampaignDetailScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  
   if (!router) {
     return null;
   }
@@ -150,11 +157,21 @@ export default function CampaignDetailScreen() {
         return;
       }
 
+      // Get current user ID
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        Alert.alert('Error', 'You must be signed in to import photos.');
+        setIsImporting(false);
+        return;
+      }
+      const userId = user.id;
+
       for (const pickerAsset of result.assets) {
         const extension = pickerAsset.uri.split('.').pop() ?? 'jpg';
         const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const fileName = `${uniqueSuffix}.${extension}`;
-        const filePath = `campaigns/${campaignId}/${fileName}`;
+        // Update storage path to include user_id
+        const filePath = `users/${userId}/campaigns/${campaignId}/${fileName}`;
 
         const arrayBuffer = await fetch(pickerAsset.uri).then((res) => res.arrayBuffer());
 
@@ -169,6 +186,7 @@ export default function CampaignDetailScreen() {
         const { data: inserted, error: insertError } = await supabase
           .from('assets')
           .insert({
+            user_id: userId,
             campaign_id: campaignId,
             storage_path: filePath,
             source: 'local',
@@ -280,44 +298,80 @@ export default function CampaignDetailScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#fafafa' }}>
-      <View style={{ paddingTop: 56, paddingHorizontal: 20, paddingBottom: 16, backgroundColor: '#fafafa' }}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={{ marginBottom: 16, width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' }}
-        >
-          <Text style={{ fontSize: 18 }}>←</Text>
-        </TouchableOpacity>
-        <Text style={{ fontSize: 24, fontWeight: '600', color: '#111827' }}>{headerTitle}</Text>
-        <Text style={{ marginTop: 4, fontSize: 14, color: '#6B7280' }}>
-          Created {campaign?.created_at ? dayjs(campaign.created_at).format('MMM D, YYYY') : 'recently'}
-        </Text>
+    <View className="flex-1 bg-background">
+      {/* Header */}
+      <View
+        style={{
+          paddingTop: Math.max(insets.top, 16),
+          paddingBottom: 16,
+          paddingHorizontal: 20,
+          backgroundColor: '#ffffff',
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 1 },
+          shadowOpacity: 0.05,
+          shadowRadius: 4,
+          elevation: 2,
+        }}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 20, fontWeight: '700', color: '#111827', letterSpacing: -0.5 }}>
+              {headerTitle}
+            </Text>
+            <Text style={{ marginTop: 4, fontSize: 13, color: '#6b7280', letterSpacing: -0.1 }}>
+              Created {campaign?.created_at ? dayjs(campaign.created_at).format('MMM D, YYYY') : 'recently'}
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setIsMenuOpen(true);
+            }}
+            activeOpacity={0.6}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: 'rgba(179, 143, 91, 0.1)',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginLeft: 16,
+            }}
+          >
+            <MaterialCommunityIcons name="menu" size={20} color="#b38f5b" />
+          </TouchableOpacity>
+        </View>
         {supabase ? (
           <TouchableOpacity
             onPress={handleImport}
             disabled={isImporting}
             style={{
-              marginTop: 16,
-              borderRadius: 999,
-              backgroundColor: isImporting ? '#d1d5db' : '#FF9500',
+              marginTop: 12,
+              borderRadius: 12,
+              backgroundColor: isImporting ? '#e5e7eb' : '#b38f5b',
               paddingVertical: 12,
               paddingHorizontal: 20,
               alignSelf: 'flex-start',
-              shadowColor: '#000',
-              shadowOpacity: 0.1,
-              shadowRadius: 10,
+              shadowColor: isImporting ? 'transparent' : '#b38f5b',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: isImporting ? 0 : 0.15,
+              shadowRadius: 8,
+              elevation: isImporting ? 0 : 3,
             }}
           >
-            <Text style={{ color: '#fff', fontSize: 16, fontWeight: '600' }}>
-              {isImporting ? 'Importing…' : 'Import from Camera Roll'}
+            <Text style={{ color: '#fff', fontSize: 15, fontWeight: '600', letterSpacing: -0.2 }}>
+              {isImporting ? 'Importing…' : 'Import Photos'}
             </Text>
           </TouchableOpacity>
         ) : (
-          <Text style={{ marginTop: 16, fontSize: 13, color: '#FF9500' }}>
+          <Text style={{ marginTop: 12, fontSize: 13, color: '#b38f5b' }}>
             Supabase not configured. Connect Supabase to import photos.
           </Text>
         )}
       </View>
+      
+      {/* Menu Drawer */}
+      <MenuDrawer visible={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
 
       {isLoading ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>

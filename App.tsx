@@ -1,5 +1,6 @@
 import { Component, ReactNode, useState, useEffect } from 'react';
 import { View, Text, AppState, AppStateStatus } from 'react-native';
+import { DelightfulLoadingScreen } from '@/components/DelightfulLoadingScreen';
 
 // Delay loading ExpoRoot until native modules are definitely ready
 let ExpoRoot: any = null;
@@ -67,25 +68,22 @@ export default function App() {
             setAppState(nextAppState);
             if (nextAppState === 'active') {
               subscription.remove();
-              // Longer delay on first launch
-              setTimeout(() => setIsReady(true), 2000);
+              // Minimal delay - app state should be active immediately on startup
+              setTimeout(() => setIsReady(true), 100);
             }
           });
           return () => subscription.remove();
         }
         
-        // Longer delay on first launch to ensure all native modules are initialized
-        // This helps prevent ObjCTurboModule crashes on first app open
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Additional stabilization delay
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Minimal delay to ensure native modules are initialized
+        // Reduced from 2000ms to 200ms - native modules should be ready quickly
+        await new Promise(resolve => setTimeout(resolve, 200));
         
         setIsReady(true);
       } catch (error) {
         console.error('[App] Error during preparation:', error);
-        // Still try to load after longer delay
-        setTimeout(() => setIsReady(true), 3000);
+        // Reduced fallback delay - try to recover quickly
+        setTimeout(() => setIsReady(true), 500);
       }
     };
 
@@ -93,11 +91,7 @@ export default function App() {
   }, [appState]);
 
   if (!isReady) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fafafa' }}>
-        <Text style={{ fontSize: 16, color: '#666' }}>Initializing...</Text>
-      </View>
-    );
+    return <DelightfulLoadingScreen />;
   }
 
   try {

@@ -1,4 +1,5 @@
 import { ActivityIndicator, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { forwardRef, useImperativeHandle, useRef } from 'react';
 
 type NewTagCardProps = {
   newTagName: string;
@@ -8,7 +9,18 @@ type NewTagCardProps = {
   error?: string;
 };
 
-export function NewTagCard({ newTagName, onTagNameChange, onAdd, isSaving, error }: NewTagCardProps) {
+export const NewTagCard = forwardRef<TextInput, NewTagCardProps>(function NewTagCard(
+  { newTagName, onTagNameChange, onAdd, isSaving, error },
+  ref
+) {
+  const inputRef = useRef<TextInput>(null);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      inputRef.current?.focus();
+    },
+  } as TextInput));
+
   const canAdd = newTagName.trim().length > 0 && !isSaving;
 
   return (
@@ -28,6 +40,7 @@ export function NewTagCard({ newTagName, onTagNameChange, onAdd, isSaving, error
       
       <View className="mb-2">
         <TextInput
+          ref={inputRef}
           placeholder="New tag name"
           placeholderTextColor="#9ca3af"
           value={newTagName}
@@ -74,5 +87,5 @@ export function NewTagCard({ newTagName, onTagNameChange, onAdd, isSaving, error
       </TouchableOpacity>
     </View>
   );
-}
+});
 

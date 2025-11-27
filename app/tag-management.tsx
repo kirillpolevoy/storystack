@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { useRouter } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
+  InteractionManager,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -15,12 +18,16 @@ import {
   View,
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import * as Haptics from 'expo-haptics';
 import { supabase } from '@/lib/supabase';
-import { STORYSTACK_TAGS, TagVocabulary } from '@/types';
+import { TagVocabulary } from '@/types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { TagHeader } from '@/components/TagHeader';
-import { NewTagCard } from '@/components/NewTagCard';
 import { TagListCard } from '@/components/TagListCard';
+import { FloatingActionButton } from '@/components/FloatingActionButton';
+import { MenuDrawer } from '@/components/MenuDrawer';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const TAG_STORAGE_KEY = '@storystack:tags';
 const AUTO_TAG_STORAGE_KEY = '@storystack:auto_tags';
@@ -47,24 +54,54 @@ export default function TagManagementScreen() {
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editTagName, setEditTagName] = useState('');
   const [editTagOriginalName, setEditTagOriginalName] = useState('');
+  const [newTagModalVisible, setNewTagModalVisible] = useState(false);
+  const [isNewTagModalAnimatingOut, setIsNewTagModalAnimatingOut] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isInfoExpanded, setIsInfoExpanded] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const newTagInputRef = useRef<TextInput>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const insets = useSafeAreaInsets();
+  
+  // Empty state animations
+  const emptyIconScale = useRef(new Animated.Value(0)).current;
+  const emptyIconOpacity = useRef(new Animated.Value(0)).current;
+  const emptyTextOpacity = useRef(new Animated.Value(0)).current;
+  const emptyButtonScale = useRef(new Animated.Value(0.9)).current;
+  const emptyButtonOpacity = useRef(new Animated.Value(0)).current;
 
   // Load tags from storage
   const loadTags = useCallback(async () => {
     try {
       setIsLoading(true);
       
+      // Get current user ID - REQUIRED for data isolation
+      let userId: string | null = null;
+      if (supabase) {
+        const { data: { user } } = await supabase.auth.getUser();
+        userId = user?.id || null;
+      }
+
+      // CRITICAL: Don't load tags if no user ID - prevents cross-user data leakage
+      if (!userId) {
+        console.warn('[TagManagement] No user ID - cannot load tags safely');
+        setTags([]);
+        setIsLoading(false);
+        return;
+      }
+
       // Load deleted tags list (tags that user has explicitly deleted)
       let deletedTags: string[] = [];
-      if (supabase) {
+      if (supabase && userId) {
         try {
           const { data: config, error } = await supabase
             .from('tag_config')
             .select('deleted_tags')
-            .eq('id', 'default')
+            .eq('user_id', userId)
             .single();
           
           // If column doesn't exist, error.code will be PGRST204
-          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'deleted_tags' column")) {
+          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'deleted_tags' column") && !error.message?.includes("Could not find the 'user_id' column")) {
             console.warn('[TagManagement] Error loading deleted_tags from Supabase:', error);
           }
           
@@ -75,10 +112,12 @@ export default function TagManagementScreen() {
           console.warn('[TagManagement] Failed to load deleted_tags from Supabase, using AsyncStorage:', error);
         }
       }
-      // Fallback to AsyncStorage (always check as backup)
-      if (deletedTags.length === 0) {
+      // Fallback to AsyncStorage - ONLY if Supabase failed AND we have user ID
+      // Use user-specific key to prevent cross-user data leakage
+      if (deletedTags.length === 0 && userId) {
         try {
-          const deletedTagsJson = await AsyncStorage.getItem(DELETED_TAGS_STORAGE_KEY);
+          const userSpecificKey = `${DELETED_TAGS_STORAGE_KEY}:${userId}`;
+          const deletedTagsJson = await AsyncStorage.getItem(userSpecificKey);
           deletedTags = deletedTagsJson ? JSON.parse(deletedTagsJson) : [];
         } catch (error) {
           console.warn('[TagManagement] Failed to load deleted_tags from AsyncStorage:', error);
@@ -89,15 +128,15 @@ export default function TagManagementScreen() {
       
       // Load custom tags (tags that user has created but may not be used yet)
       let customTags: string[] = [];
-      if (supabase) {
+      if (supabase && userId) {
         try {
           const { data: config, error } = await supabase
             .from('tag_config')
             .select('custom_tags')
-            .eq('id', 'default')
+            .eq('user_id', userId)
             .single();
           
-          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column")) {
+          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column") && !error.message?.includes("Could not find the 'user_id' column")) {
             console.warn('[TagManagement] Error loading custom_tags from Supabase:', error);
           }
           
@@ -108,10 +147,12 @@ export default function TagManagementScreen() {
           console.warn('[TagManagement] Failed to load custom_tags from Supabase, using AsyncStorage:', error);
         }
       }
-      // Fallback to AsyncStorage
-      if (customTags.length === 0) {
+      // Fallback to AsyncStorage - ONLY if Supabase failed AND we have user ID
+      // Use user-specific key to prevent cross-user data leakage
+      if (customTags.length === 0 && userId) {
         try {
-          const customTagsJson = await AsyncStorage.getItem(CUSTOM_TAGS_STORAGE_KEY);
+          const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
+          const customTagsJson = await AsyncStorage.getItem(userSpecificKey);
           customTags = customTagsJson ? JSON.parse(customTagsJson) : [];
         } catch (error) {
           console.warn('[TagManagement] Failed to load custom_tags from AsyncStorage:', error);
@@ -120,9 +161,12 @@ export default function TagManagementScreen() {
       }
       const customTagsSet = new Set<string>(customTags);
       
-      // Get all unique tags from assets in the database and count usage
-      if (supabase) {
-        const { data: assets } = await supabase.from('assets').select('tags');
+      // Get all unique tags from assets in the database and count usage (user-specific)
+      if (supabase && userId) {
+        const { data: assets } = await supabase
+          .from('assets')
+          .select('tags')
+          .eq('user_id', userId);
         const allTagsSet = new Set<string>();
         const tagUsageCounts = new Map<string, number>();
         
@@ -145,28 +189,40 @@ export default function TagManagementScreen() {
           }
         });
         
-        // Add default StoryStack tags, but exclude deleted ones
-        STORYSTACK_TAGS.forEach((tag) => {
-          if (!deletedTagsSet.has(tag)) {
-            allTagsSet.add(tag);
-          }
-        });
+        // No default tags - users only see tags they create or use
         
-        // Load saved auto-tag configuration from Supabase
+        // Load saved auto-tag configuration from Supabase (user-specific)
         let autoTags: string[] = [];
-        if (supabase) {
-          const { data: config } = await supabase
-            .from('tag_config')
-            .select('auto_tags')
-            .single();
-          if (config?.auto_tags) {
-            autoTags = Array.isArray(config.auto_tags) ? config.auto_tags : [];
+        if (supabase && userId) {
+          try {
+            const { data: config, error } = await supabase
+              .from('tag_config')
+              .select('auto_tags')
+              .eq('user_id', userId)
+              .single();
+            
+            if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'auto_tags' column") && !error.message?.includes("Could not find the 'user_id' column")) {
+              console.warn('[TagManagement] Error loading auto_tags from Supabase:', error);
+            }
+            
+            if (config?.auto_tags && Array.isArray(config.auto_tags)) {
+              autoTags = config.auto_tags;
+            }
+          } catch (error) {
+            console.warn('[TagManagement] Failed to load auto_tags from Supabase, using AsyncStorage:', error);
           }
         }
-        // Fallback to AsyncStorage if Supabase config doesn't exist
-        if (autoTags.length === 0) {
-          const autoTagsJson = await AsyncStorage.getItem(AUTO_TAG_STORAGE_KEY);
-          autoTags = autoTagsJson ? JSON.parse(autoTagsJson) : [];
+        // Fallback to AsyncStorage - ONLY if Supabase failed AND we have user ID
+        // Use user-specific key to prevent cross-user data leakage
+        if (autoTags.length === 0 && userId) {
+          try {
+            const userSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${userId}`;
+            const autoTagsJson = await AsyncStorage.getItem(userSpecificKey);
+            autoTags = autoTagsJson ? JSON.parse(autoTagsJson) : [];
+          } catch (error) {
+            console.warn('[TagManagement] Failed to load auto_tags from AsyncStorage:', error);
+            autoTags = [];
+          }
         }
         const autoTagsSet = new Set<string>(autoTags);
         
@@ -181,13 +237,8 @@ export default function TagManagementScreen() {
         
         setTags(tagConfigs);
       } else {
-        // Fallback: use default tags
-        const tagConfigs: TagConfig[] = STORYSTACK_TAGS.map((tag) => ({
-          name: tag,
-          isAutoTag: true, // Default all StoryStack tags to auto-tag
-          usageCount: 0,
-        }));
-        setTags(tagConfigs);
+        // Fallback: no tags (user must create their own)
+        setTags([]);
       }
     } catch (error) {
       console.error('[TagManagement] Load failed', error);
@@ -200,6 +251,62 @@ export default function TagManagementScreen() {
   useEffect(() => {
     loadTags();
   }, [loadTags]);
+
+  // Filter tags based on search query
+  const filteredTags = useMemo(() => {
+    if (!searchQuery.trim()) return tags;
+    const query = searchQuery.toLowerCase();
+    return tags.filter((tag) => tag.name.toLowerCase().includes(query));
+  }, [tags, searchQuery]);
+
+  // Animate empty state entrance
+  useEffect(() => {
+    if (!isLoading && tags.length === 0) {
+      Animated.sequence([
+        Animated.parallel([
+          Animated.spring(emptyIconScale, {
+            toValue: 1,
+            tension: 50,
+            friction: 7,
+            useNativeDriver: true,
+          }),
+          Animated.timing(emptyIconOpacity, {
+            toValue: 1,
+            duration: 400,
+            easing: Easing.out(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]),
+        Animated.timing(emptyTextOpacity, {
+          toValue: 1,
+          duration: 300,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.parallel([
+          Animated.spring(emptyButtonScale, {
+            toValue: 1,
+            tension: 50,
+            friction: 7,
+            useNativeDriver: true,
+          }),
+          Animated.timing(emptyButtonOpacity, {
+            toValue: 1,
+            duration: 300,
+            easing: Easing.out(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]),
+      ]).start();
+    } else {
+      // Reset animations
+      emptyIconScale.setValue(0);
+      emptyIconOpacity.setValue(0);
+      emptyTextOpacity.setValue(0);
+      emptyButtonScale.setValue(0.9);
+      emptyButtonOpacity.setValue(0);
+    }
+  }, [isLoading, tags.length]);
 
   const handleAddTag = async () => {
     const trimmed = newTagName.trim();
@@ -236,9 +343,9 @@ export default function TagManagementScreen() {
       // Save custom tag to persist it (so it appears even if not used on assets yet)
       await saveCustomTag(trimmed);
       
-      // Clear input and dismiss keyboard after successful save
+      // Clear input and close modal after successful save
       setNewTagName('');
-      Keyboard.dismiss();
+      closeNewTagModal();
       
       console.log(`[TagManagement] Tag "${trimmed}" added successfully`);
     } catch (error) {
@@ -253,10 +360,20 @@ export default function TagManagementScreen() {
   };
 
   const handleDeleteTag = async (tagName: string) => {
-    // Check if tag is in use
-    let photosUsingTag: number = 0;
+    // Get current user ID
+    let userId: string | null = null;
     if (supabase) {
-      const { data: assets, error: fetchError } = await supabase.from('assets').select('tags');
+      const { data: { user } } = await supabase.auth.getUser();
+      userId = user?.id || null;
+    }
+
+    // Check if tag is in use (user-specific)
+    let photosUsingTag: number = 0;
+    if (supabase && userId) {
+      const { data: assets, error: fetchError } = await supabase
+        .from('assets')
+        .select('tags')
+        .eq('user_id', userId);
       
       if (fetchError) {
         console.error('[TagManagement] Failed to fetch assets:', fetchError);
@@ -286,9 +403,12 @@ export default function TagManagementScreen() {
               try {
                 setIsSaving(true);
                 
-                // Remove tag from all assets
-                if (supabase) {
-                  const { data: assets, error: fetchError } = await supabase.from('assets').select('id, tags');
+                // Remove tag from all assets (user-specific)
+                if (supabase && userId) {
+                  const { data: assets, error: fetchError } = await supabase
+                    .from('assets')
+                    .select('id, tags')
+                    .eq('user_id', userId);
                   
                   if (fetchError) {
                     console.error('[TagManagement] Failed to fetch assets:', fetchError);
@@ -343,21 +463,22 @@ export default function TagManagementScreen() {
                 // Remove from custom tags if it was a custom tag
                 await removeCustomTag(tagName);
                 
-                // Add to deleted tags list (so it won't reappear from STORYSTACK_TAGS)
-                // Load current deleted tags
+                // Add to deleted tags list
+                // Load current deleted tags (user-specific)
                 let currentDeletedTags: string[] = [];
-                if (supabase) {
+                if (supabase && userId) {
                   const { data: config } = await supabase
                     .from('tag_config')
                     .select('deleted_tags')
-                    .eq('id', 'default')
+                    .eq('user_id', userId)
                     .single();
                   if (config?.deleted_tags && Array.isArray(config.deleted_tags)) {
                     currentDeletedTags = config.deleted_tags;
                   }
                 }
-                if (currentDeletedTags.length === 0) {
-                  const deletedTagsJson = await AsyncStorage.getItem(DELETED_TAGS_STORAGE_KEY);
+                if (currentDeletedTags.length === 0 && userId) {
+                  const userSpecificKey = `${DELETED_TAGS_STORAGE_KEY}:${userId}`;
+                  const deletedTagsJson = await AsyncStorage.getItem(userSpecificKey);
                   currentDeletedTags = deletedTagsJson ? JSON.parse(deletedTagsJson) : [];
                 }
                 // Add the deleted tag to the list
@@ -400,14 +521,14 @@ export default function TagManagementScreen() {
               // Remove from custom tags if it was a custom tag
               await removeCustomTag(tagName);
               
-              // Add to deleted tags list (so it won't reappear from STORYSTACK_TAGS)
-              // Load current deleted tags
+              // Add to deleted tags list
+              // Load current deleted tags (user-specific)
               let currentDeletedTags: string[] = [];
-              if (supabase) {
+              if (supabase && userId) {
                 const { data: config } = await supabase
                   .from('tag_config')
                   .select('deleted_tags')
-                  .eq('id', 'default')
+                  .eq('user_id', userId)
                   .single();
                 if (config?.deleted_tags && Array.isArray(config.deleted_tags)) {
                   currentDeletedTags = config.deleted_tags;
@@ -437,7 +558,38 @@ export default function TagManagementScreen() {
     }
   };
 
+  // Simple scale animation on mount
+  // Focus input when modal opens
+  useEffect(() => {
+    if (newTagModalVisible && !isNewTagModalAnimatingOut) {
+      // Small delay to ensure modal is fully rendered
+      const timer = setTimeout(() => {
+        newTagInputRef.current?.focus();
+      }, 350);
+      return () => clearTimeout(timer);
+    }
+  }, [newTagModalVisible, isNewTagModalAnimatingOut]);
+
+  const openNewTagModal = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setNewTagName('');
+    setNewTagError(undefined);
+    setNewTagModalVisible(true);
+  };
+
+  const closeNewTagModal = () => {
+    if (isNewTagModalAnimatingOut) return;
+    
+    setIsNewTagModalAnimatingOut(true);
+    Keyboard.dismiss();
+    setNewTagModalVisible(false);
+    setIsNewTagModalAnimatingOut(false);
+    setNewTagName('');
+    setNewTagError(undefined);
+  };
+
   const openEditModal = (tagName: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setEditTagOriginalName(tagName);
     setEditTagName(tagName);
     setEditModalVisible(true);
@@ -470,9 +622,19 @@ export default function TagManagementScreen() {
     try {
       setIsSaving(true);
       
-      // Update tag in database (all assets using this tag)
+      // Get current user ID
+      let userId: string | null = null;
       if (supabase) {
-        const { data: assets, error: fetchError } = await supabase.from('assets').select('id, tags');
+        const { data: { user } } = await supabase.auth.getUser();
+        userId = user?.id || null;
+      }
+      
+      // Update tag in database (all assets using this tag)
+      if (supabase && userId) {
+        const { data: assets, error: fetchError } = await supabase
+          .from('assets')
+          .select('id, tags')
+          .eq('user_id', userId);
         
         if (fetchError) {
           console.error('[TagManagement] Failed to fetch assets:', fetchError);
@@ -517,10 +679,9 @@ export default function TagManagementScreen() {
         return;
       }
       
-      // Check if the old tag was a custom tag (not in STORYSTACK_TAGS)
-      const storystackSet = new Set(STORYSTACK_TAGS);
-      const wasCustomTag = !storystackSet.has(oldName);
-      const wasStorystackTag = storystackSet.has(oldName);
+      // All tags are user-created (no default tags)
+      const wasCustomTag = true;
+      const wasStorystackTag = false;
       
       // Update local state
       const updatedTags = tags.map((t) => (t.name === oldName ? { ...t, name: trimmed } : t));
@@ -529,17 +690,16 @@ export default function TagManagementScreen() {
       // Save auto-tag configuration (this updates the tag_config table with the new tag name)
       await saveAutoTagConfig(updatedTags);
       
-      // If renaming a STORYSTACK_TAGS tag, add old name to deleted_tags so it doesn't reappear
-      // IMPORTANT: Only add the OLD name, never the new name
-      if (wasStorystackTag) {
-        // Load current deleted tags
+      // No default tags to handle, so skip deleted_tags logic for renaming
+      if (false) {
+        // Load current deleted tags (user-specific)
         let currentDeletedTags: string[] = [];
-        if (supabase) {
+        if (supabase && userId) {
           try {
             const { data: config } = await supabase
               .from('tag_config')
               .select('deleted_tags')
-              .eq('id', 'default')
+              .eq('user_id', userId)
               .single();
             if (config?.deleted_tags && Array.isArray(config.deleted_tags)) {
               currentDeletedTags = config.deleted_tags;
@@ -567,15 +727,15 @@ export default function TagManagementScreen() {
         }
       }
       
-      // Update custom tags list atomically
+      // Update custom tags list atomically (user-specific)
       // Load current custom tags
       let currentCustomTags: string[] = [];
-      if (supabase) {
+      if (supabase && userId) {
         try {
           const { data: config, error } = await supabase
             .from('tag_config')
             .select('custom_tags')
-            .eq('id', 'default')
+            .eq('user_id', userId)
             .single();
           
           if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column")) {
@@ -617,15 +777,18 @@ export default function TagManagementScreen() {
       console.log(`[TagManagement] Saving custom_tags:`, updatedCustomTags);
       console.log(`[TagManagement] Expected new tag "${trimmed}" in list:`, updatedCustomTags.includes(trimmed));
       
-      // Always save to AsyncStorage first (immediate, reliable)
-      await AsyncStorage.setItem(CUSTOM_TAGS_STORAGE_KEY, JSON.stringify(updatedCustomTags));
-      console.log(`[TagManagement] Custom tags saved to AsyncStorage:`, updatedCustomTags);
+      // Save to user-specific AsyncStorage first (immediate, reliable)
+      if (userId) {
+        const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
+        await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
+        console.log(`[TagManagement] Custom tags saved to AsyncStorage:`, updatedCustomTags);
+      }
       
       // Then try to save to Supabase
-      if (supabase) {
+      if (supabase && userId) {
         const { error, data } = await supabase
           .from('tag_config')
-          .upsert({ id: 'default', custom_tags: updatedCustomTags }, { onConflict: 'id' });
+          .upsert({ user_id: userId, custom_tags: updatedCustomTags }, { onConflict: 'user_id' });
         
         if (error) {
           if (error.code === 'PGRST204' || error.message?.includes("Could not find the 'custom_tags' column")) {
@@ -672,6 +835,9 @@ export default function TagManagementScreen() {
     const currentState = currentTag.isAutoTag;
     const newState = !currentState;
     
+    // Haptic feedback for toggle
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    
     // Set toggling state immediately to prevent double-taps
     setTogglingTag(tagName);
     
@@ -711,6 +877,18 @@ export default function TagManagementScreen() {
 
   const saveAutoTagConfig = async (tagConfigs: TagConfig[]) => {
     try {
+      // Get current user ID
+      let userId: string | null = null;
+      if (supabase) {
+        const { data: { user } } = await supabase.auth.getUser();
+        userId = user?.id || null;
+      }
+
+      if (!userId) {
+        console.warn('[TagManagement] No user ID - cannot save tags safely');
+        throw new Error('User ID required to save tags');
+      }
+
       // Filter to ONLY tags where isAutoTag is true
       const autoTags = tagConfigs.filter((t) => t.isAutoTag).map((t) => t.name);
       
@@ -724,13 +902,14 @@ export default function TagManagementScreen() {
       if (supabase) {
         const { data, error } = await supabase
           .from('tag_config')
-          .upsert({ id: 'default', auto_tags: autoTags }, { onConflict: 'id' });
+          .upsert({ user_id: userId, auto_tags: autoTags }, { onConflict: 'user_id' });
         
         if (error) {
           console.error('[TagManagement] ❌ Supabase save failed', error);
           console.error('[TagManagement] Error details:', JSON.stringify(error, null, 2));
-          // Fallback to AsyncStorage
-          await AsyncStorage.setItem(AUTO_TAG_STORAGE_KEY, JSON.stringify(autoTags));
+          // Fallback to user-specific AsyncStorage
+          const userSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${userId}`;
+          await AsyncStorage.setItem(userSpecificKey, JSON.stringify(autoTags));
           console.log('[TagManagement] Saved to AsyncStorage as fallback');
         } else {
           console.log('[TagManagement] ✅ Auto-tag config saved successfully to Supabase');
@@ -739,7 +918,7 @@ export default function TagManagementScreen() {
           const { data: verifyData, error: verifyError } = await supabase
             .from('tag_config')
             .select('auto_tags')
-            .eq('id', 'default')
+            .eq('user_id', userId)
             .single();
           
           if (verifyError) {
@@ -752,12 +931,14 @@ export default function TagManagementScreen() {
             }
           }
           
-          // Also save to AsyncStorage as backup
-          await AsyncStorage.setItem(AUTO_TAG_STORAGE_KEY, JSON.stringify(autoTags));
+          // Also save to user-specific AsyncStorage as backup
+          const userSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${userId}`;
+          await AsyncStorage.setItem(userSpecificKey, JSON.stringify(autoTags));
         }
       } else {
-        // Fallback to AsyncStorage
-        await AsyncStorage.setItem(AUTO_TAG_STORAGE_KEY, JSON.stringify(autoTags));
+        // No Supabase - use user-specific AsyncStorage
+        const userSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${userId}`;
+        await AsyncStorage.setItem(userSpecificKey, JSON.stringify(autoTags));
         console.log('[TagManagement] Saved to AsyncStorage (no Supabase)');
       }
     } catch (error) {
@@ -768,17 +949,24 @@ export default function TagManagementScreen() {
 
   const saveCustomTag = async (tagName: string) => {
     try {
-      // Load current custom tags
-      let currentCustomTags: string[] = [];
+      // Get current user ID
+      let userId: string | null = null;
       if (supabase) {
+        const { data: { user } } = await supabase.auth.getUser();
+        userId = user?.id || null;
+      }
+
+      // Load current custom tags (user-specific)
+      let currentCustomTags: string[] = [];
+      if (supabase && userId) {
         try {
           const { data: config, error } = await supabase
             .from('tag_config')
             .select('custom_tags')
-            .eq('id', 'default')
+            .eq('user_id', userId)
             .single();
           
-          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column")) {
+          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column") && !error.message?.includes("Could not find the 'user_id' column")) {
             console.warn('[TagManagement] Error loading custom_tags from Supabase:', error);
           }
           
@@ -790,10 +978,11 @@ export default function TagManagementScreen() {
         }
       }
       
-      // Fallback to AsyncStorage
-      if (currentCustomTags.length === 0) {
+      // Fallback to user-specific AsyncStorage
+      if (currentCustomTags.length === 0 && userId) {
         try {
-          const customTagsJson = await AsyncStorage.getItem(CUSTOM_TAGS_STORAGE_KEY);
+          const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
+          const customTagsJson = await AsyncStorage.getItem(userSpecificKey);
           currentCustomTags = customTagsJson ? JSON.parse(customTagsJson) : [];
         } catch (error) {
           currentCustomTags = [];
@@ -805,10 +994,10 @@ export default function TagManagementScreen() {
         const updatedCustomTags = [...currentCustomTags, tagName];
         
         // Save to Supabase if available
-        if (supabase) {
+        if (supabase && userId) {
           const { error } = await supabase
             .from('tag_config')
-            .upsert({ id: 'default', custom_tags: updatedCustomTags }, { onConflict: 'id' });
+            .upsert({ user_id: userId, custom_tags: updatedCustomTags }, { onConflict: 'user_id' });
           
           if (error) {
             if (error.code === 'PGRST204' || error.message?.includes("Could not find the 'custom_tags' column")) {
@@ -816,13 +1005,16 @@ export default function TagManagementScreen() {
             } else {
               console.error('[TagManagement] Supabase save custom_tags failed', error);
             }
-            await AsyncStorage.setItem(CUSTOM_TAGS_STORAGE_KEY, JSON.stringify(updatedCustomTags));
+            const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
+            await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
           } else {
-            // Also save to AsyncStorage as backup
-            await AsyncStorage.setItem(CUSTOM_TAGS_STORAGE_KEY, JSON.stringify(updatedCustomTags));
+            // Also save to user-specific AsyncStorage as backup
+            const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
+            await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
           }
-        } else {
-          await AsyncStorage.setItem(CUSTOM_TAGS_STORAGE_KEY, JSON.stringify(updatedCustomTags));
+        } else if (userId) {
+          const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
+          await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
         }
         
         console.log(`[TagManagement] Custom tag "${tagName}" saved`);
@@ -835,17 +1027,24 @@ export default function TagManagementScreen() {
 
   const removeCustomTag = async (tagName: string) => {
     try {
-      // Load current custom tags
-      let currentCustomTags: string[] = [];
+      // Get current user ID
+      let userId: string | null = null;
       if (supabase) {
+        const { data: { user } } = await supabase.auth.getUser();
+        userId = user?.id || null;
+      }
+
+      // Load current custom tags (user-specific)
+      let currentCustomTags: string[] = [];
+      if (supabase && userId) {
         try {
           const { data: config, error } = await supabase
             .from('tag_config')
             .select('custom_tags')
-            .eq('id', 'default')
+            .eq('user_id', userId)
             .single();
           
-          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column")) {
+          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column") && !error.message?.includes("Could not find the 'user_id' column")) {
             console.warn('[TagManagement] Error loading custom_tags from Supabase:', error);
           }
           
@@ -857,10 +1056,11 @@ export default function TagManagementScreen() {
         }
       }
       
-      // Fallback to AsyncStorage
-      if (currentCustomTags.length === 0) {
+      // Fallback to user-specific AsyncStorage
+      if (currentCustomTags.length === 0 && userId) {
         try {
-          const customTagsJson = await AsyncStorage.getItem(CUSTOM_TAGS_STORAGE_KEY);
+          const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
+          const customTagsJson = await AsyncStorage.getItem(userSpecificKey);
           currentCustomTags = customTagsJson ? JSON.parse(customTagsJson) : [];
         } catch (error) {
           currentCustomTags = [];
@@ -871,10 +1071,10 @@ export default function TagManagementScreen() {
       const updatedCustomTags = currentCustomTags.filter((t) => t !== tagName);
       
       // Save to Supabase if available
-      if (supabase) {
+      if (supabase && userId) {
         const { error } = await supabase
           .from('tag_config')
-          .upsert({ id: 'default', custom_tags: updatedCustomTags }, { onConflict: 'id' });
+          .upsert({ user_id: userId, custom_tags: updatedCustomTags }, { onConflict: 'user_id' });
         
         if (error) {
           if (error.code === 'PGRST204' || error.message?.includes("Could not find the 'custom_tags' column")) {
@@ -882,12 +1082,15 @@ export default function TagManagementScreen() {
           } else {
             console.error('[TagManagement] Supabase save custom_tags failed', error);
           }
-          await AsyncStorage.setItem(CUSTOM_TAGS_STORAGE_KEY, JSON.stringify(updatedCustomTags));
+          const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
+          await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
         } else {
-          await AsyncStorage.setItem(CUSTOM_TAGS_STORAGE_KEY, JSON.stringify(updatedCustomTags));
+          const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
+          await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
         }
-      } else {
-        await AsyncStorage.setItem(CUSTOM_TAGS_STORAGE_KEY, JSON.stringify(updatedCustomTags));
+      } else if (userId) {
+        const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
+        await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
       }
       
       console.log(`[TagManagement] Custom tag "${tagName}" removed`);
@@ -900,11 +1103,18 @@ export default function TagManagementScreen() {
     try {
       console.log('[TagManagement] Saving deleted tags:', deletedTags);
       
-      // Save to Supabase if available
+      // Get current user ID
+      let userId: string | null = null;
       if (supabase) {
+        const { data: { user } } = await supabase.auth.getUser();
+        userId = user?.id || null;
+      }
+      
+      // Save to Supabase if available
+      if (supabase && userId) {
         const { error } = await supabase
           .from('tag_config')
-          .upsert({ id: 'default', deleted_tags: deletedTags }, { onConflict: 'id' });
+          .upsert({ user_id: userId, deleted_tags: deletedTags }, { onConflict: 'user_id' });
         
         if (error) {
           // Check if error is due to missing column (PGRST204)
@@ -1048,33 +1258,98 @@ export default function TagManagementScreen() {
   return (
     <View className="flex-1 bg-background">
       {/* Header */}
-      <TagHeader onBackPress={() => router.back()} />
+      <TagHeader onMenuPress={() => setIsMenuOpen(true)} />
+      
+      {/* Menu Drawer */}
+      <MenuDrawer visible={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
 
       {isLoading ? (
         <View className="flex-1 items-center justify-center">
           <ActivityIndicator size="large" color="#b38f5b" />
           <Text className="mt-4 text-[15px] font-medium text-gray-500">Loading tags…</Text>
         </View>
+      ) : tags.length === 0 ? (
+        // Enhanced Empty State
+        <View className="flex-1 items-center justify-center px-8">
+          <Animated.View
+            style={{
+              opacity: emptyIconOpacity,
+              transform: [{ scale: emptyIconScale }],
+            }}
+            className="mb-6"
+          >
+            <View className="h-24 w-24 items-center justify-center rounded-full bg-[#b38f5b]/10">
+              <MaterialCommunityIcons name="tag-outline" size={48} color="#b38f5b" />
+            </View>
+          </Animated.View>
+          
+          <Animated.View style={{ opacity: emptyTextOpacity }} className="items-center">
+            <Text className="mb-2 text-center text-[22px] font-semibold text-gray-900">
+              No Tags Yet
+            </Text>
+            <Text className="mb-8 text-center text-[15px] leading-[22px] text-gray-500">
+              Create tags to organize and automatically categorize your photos.
+            </Text>
+          </Animated.View>
+
+          <Animated.View
+            style={{
+              opacity: emptyButtonOpacity,
+              transform: [{ scale: emptyButtonScale }],
+            }}
+          >
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                openNewTagModal();
+              }}
+              className="rounded-full bg-[#b38f5b] px-8 py-4"
+              activeOpacity={0.8}
+            >
+              <Text className="text-center text-[17px] font-semibold text-white">
+                Create Your First Tag
+              </Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
       ) : (
         <ScrollView
+          ref={scrollViewRef}
           className="flex-1"
-          contentContainerStyle={{ paddingBottom: 20 }}
+          contentContainerStyle={{ 
+            paddingTop: 16,
+            paddingBottom: Math.max(insets.bottom + 100, 120) 
+          }}
           showsVerticalScrollIndicator={true}
         >
-          {/* New Tag Card */}
-          <NewTagCard
-            newTagName={newTagName}
-            onTagNameChange={(text) => {
-              setNewTagName(text);
-              setNewTagError(undefined);
-            }}
-            onAdd={handleAddTag}
-            isSaving={isSaving}
-            error={newTagError}
-          />
+          {/* Search Bar */}
+          <View className="mx-5 mb-4">
+            <View className="flex-row items-center rounded-xl bg-gray-100 px-4 py-3">
+              <MaterialCommunityIcons name="magnify" size={20} color="#8E8E93" />
+              <TextInput
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Search tags..."
+                placeholderTextColor="#8E8E93"
+                className="ml-2 flex-1 text-[17px] text-gray-900"
+                clearButtonMode="while-editing"
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => {
+                    setSearchQuery('');
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }}
+                  className="ml-2"
+                >
+                  <MaterialCommunityIcons name="close-circle" size={20} color="#8E8E93" />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
 
           {/* AI Summary Indicator - Premium styling */}
-          {tags.length > 0 && (
+          {filteredTags.length > 0 && (
             <View className="mx-5 mb-3">
               {aiEnabledCount > 0 ? (
                 <View className="flex-row items-center self-start rounded-full bg-[#b38f5b]/10 px-3 py-1.5">
@@ -1094,126 +1369,338 @@ export default function TagManagementScreen() {
           )}
 
           {/* Tag List Card */}
-          <TagListCard
-            tags={tags}
-            onToggleTag={handleToggleAutoTag}
-            onTagPress={(tagName) => openEditModal(tagName)}
-            onTagDelete={handleDeleteTag}
-            togglingTag={togglingTag}
-          />
+          {filteredTags.length > 0 ? (
+            <TagListCard
+              tags={filteredTags}
+              onToggleTag={handleToggleAutoTag}
+              onTagPress={(tagName) => openEditModal(tagName)}
+              onTagDelete={handleDeleteTag}
+              togglingTag={togglingTag}
+            />
+          ) : (
+            <View className="mx-5 rounded-2xl bg-white px-6 py-12">
+              <Text className="text-center text-[15px] text-gray-500">
+                No tags match "{searchQuery}"
+              </Text>
+            </View>
+          )}
 
-          {/* Helper Text - More contextual placement */}
-          {tags.length > 0 && (
-            <View className="mx-5 mt-3 rounded-xl bg-gray-50 px-4 py-3">
-              <View className="flex-row items-start">
-                <Text className="mr-2 text-base">ℹ️</Text>
-                <Text className="flex-1 text-[12px] leading-[18px] text-gray-600">
+          {/* Collapsible Helper Text */}
+          {filteredTags.length > 0 && (
+            <TouchableOpacity
+              onPress={() => {
+                setIsInfoExpanded(!isInfoExpanded);
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              }}
+              activeOpacity={0.7}
+              className="mx-5 mt-3 rounded-xl bg-gray-50 px-4 py-3"
+            >
+              <View className="flex-row items-center justify-between">
+                <View className="flex-row items-center flex-1">
+                  <Text className="mr-2 text-base">ℹ️</Text>
+                  <Text className="flex-1 text-[12px] font-medium text-gray-700">
+                    About AI Tagging
+                  </Text>
+                </View>
+                <MaterialCommunityIcons
+                  name={isInfoExpanded ? 'chevron-up' : 'chevron-down'}
+                  size={20}
+                  color="#8E8E93"
+                />
+              </View>
+              {isInfoExpanded && (
+                <Text className="mt-2 text-[12px] leading-[18px] text-gray-600" style={{ paddingLeft: 24 }}>
                   When enabled, StoryStack will automatically apply this tag to photos when it recognizes matching content.
                 </Text>
-              </View>
-            </View>
+              )}
+            </TouchableOpacity>
           )}
         </ScrollView>
       )}
 
-      {/* Edit Tag Modal */}
+      {/* Floating Action Button - Add Tag */}
+      <FloatingActionButton
+        icon="tag-plus"
+        onPress={openNewTagModal}
+        visible={!isLoading}
+      />
+
+      {/* New Tag Modal - Simple, reliable keyboard-aware implementation */}
       <Modal
-        visible={editModalVisible}
-        transparent={true}
+        visible={newTagModalVisible || isNewTagModalAnimatingOut}
+        transparent
         animationType="fade"
-        onRequestClose={closeEditModal}
-        statusBarTranslucent={true}
+        onRequestClose={closeNewTagModal}
       >
-        <View className="flex-1">
-          {/* Backdrop */}
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0, 0, 0, 0.4)',
+          }}
+        >
           <TouchableOpacity
             activeOpacity={1}
-            onPress={closeEditModal}
-            className="absolute inset-0 bg-black/50"
+            onPress={closeNewTagModal}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+            }}
           />
-          
-          {/* Modal Content */}
           <KeyboardAvoidingView
+            style={{ flex: 1, justifyContent: 'center' }}
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            className="flex-1 items-center justify-center px-4"
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 40 : 0}
           >
+            <View style={{ paddingHorizontal: 16 }}>
             <TouchableOpacity
               activeOpacity={1}
               onPress={(e) => e.stopPropagation()}
-              className="w-full max-w-sm overflow-hidden rounded-[20px] bg-white"
+              className="w-full overflow-hidden rounded-3xl bg-white"
               style={{
+                width: '100%',
+                maxWidth: 384,
+                alignSelf: 'center',
                 shadowColor: '#000',
-                shadowOffset: { width: 0, height: 10 },
-                shadowOpacity: 0.25,
-                shadowRadius: 20,
-                elevation: 10,
+                shadowOffset: { width: 0, height: 8 },
+                shadowOpacity: 0.15,
+                shadowRadius: 24,
+                elevation: 12,
+                minHeight: 240, // Prevent compression
               }}
             >
-            {/* Header */}
-            <View className="border-b border-gray-200 px-6 py-4">
-              <Text className="text-center text-[20px] font-semibold text-gray-900">
-                Rename Tag
+            {/* Header - Refined spacing and typography */}
+            <View className="px-6 pt-6 pb-5">
+              <Text className="text-center text-[22px] font-semibold text-gray-900 tracking-tight">
+                New Tag
               </Text>
             </View>
 
-            {/* Content */}
-            <View className="px-6 py-5">
-              <Text className="mb-3 text-[15px] text-gray-600">
+            {/* Content - Enhanced spacing and input design with fixed padding */}
+            <View className="px-6 pb-6" style={{ minHeight: 100 }}>
+              <Text className="mb-2.5 text-[13px] font-medium text-gray-500 uppercase tracking-wide">
                 Tag Name
               </Text>
               <TextInput
-                value={editTagName}
-                onChangeText={setEditTagName}
+                ref={newTagInputRef}
+                value={newTagName}
+                onChangeText={(text) => {
+                  setNewTagName(text);
+                  setNewTagError(undefined);
+                }}
                 placeholder="Enter tag name"
                 placeholderTextColor="#8E8E93"
                 maxLength={30}
-                autoFocus
-                className="rounded-[10px] border border-gray-200 bg-gray-50 px-4 py-3.5 text-[17px] text-gray-900"
-                onSubmitEditing={() => {
-                  if (editTagName.trim()) {
-                    handleRenameTag(editTagOriginalName, editTagName);
-                  }
+                className="rounded-xl border border-gray-300 bg-white px-4 py-4 text-[17px] font-normal text-gray-900"
+                style={{
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 1 },
+                  shadowOpacity: 0.05,
+                  shadowRadius: 2,
+                  elevation: 1,
+                  minHeight: 52, // Fixed input height
                 }}
+                onSubmitEditing={handleAddTag}
               />
+              {newTagError && (
+                <View className="mt-2.5 flex-row items-center" style={{ minHeight: 20 }}>
+                  <Text className="text-[13px] font-medium text-red-500">
+                    {newTagError}
+                  </Text>
+                </View>
+              )}
             </View>
 
-            {/* Actions */}
-            <View className="flex-row border-t border-gray-200">
+            {/* Actions - Fixed height button row that never compresses */}
+            <View 
+              className="flex-row border-t border-gray-100"
+              style={{ 
+                minHeight: 56, // Fixed button row height
+                paddingVertical: 0, // Let individual buttons control padding
+              }}
+            >
               <TouchableOpacity
-                onPress={closeEditModal}
-                className="flex-1 border-r border-gray-200 py-4"
-                activeOpacity={0.7}
+                onPress={closeNewTagModal}
+                className="flex-1 border-r border-gray-100"
+                style={{ 
+                  minHeight: 56,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  paddingVertical: 18,
+                }}
+                activeOpacity={0.6}
               >
-                <Text className="text-center text-[17px] font-semibold text-gray-500">
+                <Text className="text-center text-[17px] font-semibold text-gray-600">
                   Cancel
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={() => {
-                  if (editTagName.trim()) {
-                    handleRenameTag(editTagOriginalName, editTagName);
-                  }
+                onPress={handleAddTag}
+                disabled={!newTagName.trim() || isSaving}
+                className="flex-1"
+                style={{ 
+                  minHeight: 56,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  paddingVertical: 18,
+                  opacity: (!newTagName.trim() || isSaving) ? 0.4 : 1,
                 }}
-                disabled={!editTagName.trim() || isSaving || editTagName.trim() === editTagOriginalName}
-                className={`flex-1 py-4 ${
-                  !editTagName.trim() || isSaving || editTagName.trim() === editTagOriginalName
-                    ? 'opacity-50'
-                    : ''
-                }`}
                 activeOpacity={0.7}
               >
                 <Text
                   className={`text-center text-[17px] font-semibold ${
-                    !editTagName.trim() || isSaving || editTagName.trim() === editTagOriginalName
+                    !newTagName.trim() || isSaving
                       ? 'text-gray-400'
                       : 'text-[#b38f5b]'
                   }`}
                 >
-                  {isSaving ? 'Saving...' : 'Save'}
+                  {isSaving ? 'Adding...' : 'Add Tag'}
                 </Text>
               </TouchableOpacity>
             </View>
-            </TouchableOpacity>
+          </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      {/* Edit Tag Modal - Same implementation as New Tag Modal */}
+      <Modal
+        visible={editModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeEditModal}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0, 0, 0, 0.4)',
+          }}
+        >
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={closeEditModal}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+            }}
+          />
+          <KeyboardAvoidingView
+            style={{ flex: 1, justifyContent: 'center' }}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 40 : 0}
+          >
+            <View style={{ paddingHorizontal: 16 }}>
+              <TouchableOpacity
+                activeOpacity={1}
+                onPress={(e) => e.stopPropagation()}
+                className="w-full overflow-hidden rounded-3xl bg-white"
+                style={{
+                  width: '100%',
+                  maxWidth: 384,
+                  alignSelf: 'center',
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 8 },
+                  shadowOpacity: 0.15,
+                  shadowRadius: 24,
+                  elevation: 12,
+                  minHeight: 240, // Prevent compression
+                }}
+              >
+                {/* Header - Refined spacing and typography */}
+                <View className="px-6 pt-6 pb-5">
+                  <Text className="text-center text-[22px] font-semibold text-gray-900 tracking-tight">
+                    Rename Tag
+                  </Text>
+                </View>
+
+                {/* Content - Enhanced spacing and input design with fixed padding */}
+                <View className="px-6 pb-6" style={{ minHeight: 100 }}>
+                  <Text className="mb-2.5 text-[13px] font-medium text-gray-500 uppercase tracking-wide">
+                    Tag Name
+                  </Text>
+                  <TextInput
+                    value={editTagName}
+                    onChangeText={setEditTagName}
+                    placeholder="Enter tag name"
+                    placeholderTextColor="#8E8E93"
+                    maxLength={30}
+                    autoFocus
+                    className="rounded-xl border border-gray-300 bg-white px-4 py-4 text-[17px] font-normal text-gray-900"
+                    style={{
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 1 },
+                      shadowOpacity: 0.05,
+                      shadowRadius: 2,
+                      elevation: 1,
+                      minHeight: 52, // Fixed input height
+                    }}
+                    onSubmitEditing={() => {
+                      if (editTagName.trim()) {
+                        handleRenameTag(editTagOriginalName, editTagName);
+                      }
+                    }}
+                  />
+                </View>
+
+                {/* Actions - Fixed height button row that never compresses */}
+                <View 
+                  className="flex-row border-t border-gray-100"
+                  style={{ 
+                    minHeight: 56, // Fixed button row height
+                    paddingVertical: 0, // Let individual buttons control padding
+                  }}
+                >
+                  <TouchableOpacity
+                    onPress={closeEditModal}
+                    className="flex-1 border-r border-gray-100"
+                    style={{ 
+                      minHeight: 56,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      paddingVertical: 18,
+                    }}
+                    activeOpacity={0.6}
+                  >
+                    <Text className="text-center text-[17px] font-semibold text-gray-600">
+                      Cancel
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => {
+                      if (editTagName.trim()) {
+                        handleRenameTag(editTagOriginalName, editTagName);
+                      }
+                    }}
+                    disabled={!editTagName.trim() || isSaving || editTagName.trim() === editTagOriginalName}
+                    className="flex-1"
+                    style={{ 
+                      minHeight: 56,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      paddingVertical: 18,
+                      opacity: (!editTagName.trim() || isSaving || editTagName.trim() === editTagOriginalName) ? 0.4 : 1,
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      className={`text-center text-[17px] font-semibold ${
+                        !editTagName.trim() || isSaving || editTagName.trim() === editTagOriginalName
+                          ? 'text-gray-400'
+                          : 'text-[#b38f5b]'
+                      }`}
+                    >
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+            </View>
           </KeyboardAvoidingView>
         </View>
       </Modal>

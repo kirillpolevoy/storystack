@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
   Image,
+  RefreshControl,
   ScrollView,
   Text,
   TextInput,
@@ -13,15 +14,21 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import * as Haptics from 'expo-haptics';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { supabase } from '@/lib/supabase';
-import { Asset, TagVocabulary, STORYSTACK_TAGS } from '@/types';
+import { Asset, TagVocabulary } from '@/types';
 import { TagModal } from '@/components/TagModal';
 import { PhotoGrid } from '@/components/PhotoGrid';
 import { LibraryHeader } from '@/components/LibraryHeader';
 import { BottomCTA } from '@/components/BottomCTA';
-import { TagFilterBar } from '@/components/TagFilterBar';
+import { TagSearchBar } from '@/components/TagSearchBar';
 import { getDefaultCampaignId } from '@/utils/getDefaultCampaign';
 import { getAllAvailableTags } from '@/utils/getAllAvailableTags';
+import { useAuth } from '@/contexts/AuthContext';
+import { MenuDrawer } from '@/components/MenuDrawer';
+import { FloatingActionButton } from '@/components/FloatingActionButton';
 
 export default function LibraryScreen() {
   const router = useRouter();
@@ -29,6 +36,7 @@ export default function LibraryScreen() {
     existingAssetIds?: string;
     storyName?: string;
   }>();
+  const { session, loading: authLoading } = useAuth();
   
   // useSafeAreaInsets requires SafeAreaProvider in _layout.tsx
   // The SafeAreaProvider is set up in _layout.tsx with proper initialization delays
@@ -42,6 +50,7 @@ export default function LibraryScreen() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedTags, setSelectedTags] = useState<TagVocabulary[]>([]);
   const [selectedAssets, setSelectedAssets] = useState<Asset[]>([]);
   const [activeAsset, setActiveAsset] = useState<Asset | null>(null);
@@ -50,46 +59,117 @@ export default function LibraryScreen() {
   const [autoTaggingAssets, setAutoTaggingAssets] = useState<Set<string>>(new Set());
   const [autoTaggingComplete, setAutoTaggingComplete] = useState<{ count: number; totalTags: number } | null>(null);
   const [allAvailableTags, setAllAvailableTags] = useState<TagVocabulary[]>([]);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
-  // Initialize default campaign
+  // Initialize default campaign and tags in parallel - wait for auth to be ready
   useEffect(() => {
-    const initCampaign = async () => {
+    // Don't proceed if auth is still loading
+    if (authLoading) {
+      return;
+    }
+
+    // If no session, user should be redirected by _layout.tsx, but handle gracefully
+    if (!session || !session.user) {
+      console.warn('[LibraryScreen] No session available, cannot initialize');
+      setIsLoading(false);
+      return;
+    }
+
+    const userId = session.user.id;
+
+    // Parallelize initialization: load campaign and tags simultaneously
+    const initializeData = async () => {
       try {
-        const id = await getDefaultCampaignId();
-        setCampaignId(id);
+        // Load campaign and tags in parallel for faster initialization
+        const [campaignIdResult, tagsResult] = await Promise.all([
+          getDefaultCampaignId(userId),
+          getAllAvailableTags(userId),
+        ]);
+
+        if (campaignIdResult) {
+          setCampaignId(campaignIdResult);
+        } else {
+          console.error('[LibraryScreen] Failed to initialize campaign: No campaign ID returned');
+          setIsLoading(false);
+        }
+
+        // Set tags immediately (don't wait for campaign)
+        setAllAvailableTags(tagsResult);
       } catch (error) {
-        console.error('[LibraryScreen] Failed to initialize campaign:', error);
-        setCampaignId('fallback-library');
+        console.error('[LibraryScreen] Failed to initialize data:', error);
         setIsLoading(false);
       }
     };
-    initCampaign();
-  }, []);
+    initializeData();
+  }, [authLoading, session]);
 
-  const loadAssets = useCallback(async () => {
+  // Ensure loading state is set correctly when campaignId changes
+  useEffect(() => {
+    if (!campaignId && !authLoading && session) {
+      // Campaign not initialized yet, but auth is ready - keep loading
+      setIsLoading(true);
+    }
+  }, [campaignId, authLoading, session]);
+
+  const loadAssets = useCallback(async (isPullRefresh = false) => {
     if (!campaignId) {
       setIsLoading(false);
+      setIsRefreshing(false);
       return;
     }
 
     if (!supabase) {
       setAssets([]);
       setIsLoading(false);
+      setIsRefreshing(false);
       return;
     }
 
-    setIsLoading(true);
+    // Validate campaignId is a valid UUID (not fallback string)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(campaignId)) {
+      console.warn('[Library] Invalid campaign ID format, skipping load:', campaignId);
+      setAssets([]);
+      setIsLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
+
+    if (isPullRefresh) {
+      setIsRefreshing(true);
+      // Light haptic feedback for pull-to-refresh
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } else {
+      setIsLoading(true);
+    }
+    
+    // Use user ID from session (already available from AuthContext)
+    if (!session || !session.user) {
+      console.warn('[Library] No authenticated user, skipping asset load');
+      setAssets([]);
+      setIsLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
+
+    const userId = session.user.id;
+
+    // Load assets from the campaign, but also filter by user_id for security
+    // This ensures RLS policies work correctly and we only see user's own assets
+    // Only select needed columns for better performance
     const { data: assetData, error: assetError } = await supabase
       .from('assets')
-      .select('*')
+      .select('id, campaign_id, storage_path, source, tags, created_at')
       .eq('campaign_id', campaignId)
-      .order('created_at', { ascending: false });
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1000); // Limit to prevent loading too many at once
 
     if (assetError) {
       console.error('[Library] asset fetch failed', assetError);
     } else if (assetData) {
       const mapped = (assetData as Asset[]).map((asset) => {
-        const { data } = supabase.storage.from('assets').getPublicUrl(asset.storage_path);
+        const { data } = supabase?.storage.from('assets').getPublicUrl(asset.storage_path) || { data: { publicUrl: '' } };
         const tags = Array.isArray(asset.tags) ? (asset.tags as string[]) : [];
         return { ...asset, publicUrl: data.publicUrl, tags } as Asset;
       });
@@ -97,7 +177,14 @@ export default function LibraryScreen() {
     }
 
     setIsLoading(false);
-  }, [campaignId]);
+    setIsRefreshing(false);
+  }, [campaignId, session]);
+
+  const handleRefresh = useCallback(async () => {
+    await loadAssets(true);
+    // Success haptic feedback
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  }, [loadAssets]);
 
   useEffect(() => {
     if (campaignId) {
@@ -130,35 +217,49 @@ export default function LibraryScreen() {
   }, [isAddingToStory, assets, existingAssetIds]);
 
   // Load all available tags from tag library
+  const loadAvailableTags = useCallback(async () => {
+    if (!session?.user?.id) {
+      setAllAvailableTags([]);
+      return;
+    }
+
+    try {
+      const tags = await getAllAvailableTags(session.user.id);
+      setAllAvailableTags(tags);
+    } catch (error) {
+      console.error('[LibraryScreen] Failed to load available tags:', error);
+      // Continue with empty tags array
+      setAllAvailableTags([]);
+    }
+  }, [session]);
+
+  // Load tags on mount
   useEffect(() => {
-    const loadAvailableTags = async () => {
-      try {
-        const tags = await getAllAvailableTags();
-        setAllAvailableTags(tags);
-      } catch (error) {
-        console.error('[LibraryScreen] Failed to load available tags:', error);
-        // Continue with empty tags array
-        setAllAvailableTags([]);
-      }
-    };
     loadAvailableTags();
-  }, []);
+  }, [loadAvailableTags]);
+
+  // Reload tags when screen comes into focus (e.g., returning from tag management)
+  useFocusEffect(
+    useCallback(() => {
+      loadAvailableTags();
+    }, [loadAvailableTags])
+  );
 
   // Reload available tags when tag modal opens (to reflect any changes from tag management)
   useEffect(() => {
-    if (isTagModalOpen) {
-      const loadAvailableTags = async () => {
+    if (isTagModalOpen && session?.user?.id) {
+      const reloadTags = async () => {
         try {
-          const tags = await getAllAvailableTags();
+          const tags = await getAllAvailableTags(session.user.id);
           setAllAvailableTags(tags);
         } catch (error) {
           console.error('[LibraryScreen] Failed to reload available tags:', error);
           // Continue with existing tags
         }
       };
-      loadAvailableTags();
+      reloadTags();
     }
-  }, [isTagModalOpen]);
+  }, [isTagModalOpen, session]);
 
   const handleImport = useCallback(async () => {
     if (!campaignId) {
@@ -184,6 +285,14 @@ export default function LibraryScreen() {
         return;
       }
 
+      // Use user ID from session (already available from AuthContext)
+      if (!session?.user?.id) {
+        Alert.alert('Error', 'You must be signed in to import photos.');
+        setIsImporting(false);
+        return;
+      }
+      const userId = session.user.id;
+
       const errors: string[] = [];
       let successCount = 0;
       let failCount = 0;
@@ -193,10 +302,58 @@ export default function LibraryScreen() {
         try {
           console.log(`[Library] Uploading photo ${i + 1}/${result.assets.length}...`);
           
-          // Fetch image data
+          // Check file extension and mime type
+          // Extract extension from URI - check if it exists before defaulting
+          const uriParts = pickerAsset.uri.split('.');
+          const hasExtension = uriParts.length > 1 && uriParts[uriParts.length - 1].length > 0;
+          const rawExtension = hasExtension ? uriParts[uriParts.length - 1].toLowerCase() : null;
+          let extension = rawExtension ?? 'jpg'; // Default to 'jpg' only after checking
+          let mimeType = pickerAsset.mimeType ?? 'image/jpeg';
+          let imageUri = pickerAsset.uri;
+          
+          // Log file info for debugging
+          console.log(`[Library] Photo ${i + 1} - Extension: ${extension}${!hasExtension ? ' (detected missing)' : ''}, MimeType: ${mimeType}, URI: ${pickerAsset.uri.substring(0, 50)}...`);
+          
+          // Convert HEIC/HEIF (Live Photos) and other unsupported formats to JPEG
+          // Check extension, mime type, and also check if it's a Live Photo (often has no extension)
+          const unsupportedFormats = ['heic', 'heif', 'hevc'];
+          const supportedFormats = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+          const isUnsupportedFormat = 
+            unsupportedFormats.includes(extension) || 
+            mimeType?.toLowerCase().includes('heic') || 
+            mimeType?.toLowerCase().includes('heif') ||
+            // Live Photos often have no extension or wrong mime type - convert if unsure
+            !hasExtension || // Check if extension was actually missing from URI
+            (!supportedFormats.includes(extension) && mimeType && !mimeType.includes('jpeg') && !mimeType.includes('jpg') && !mimeType.includes('png') && !mimeType.includes('gif') && !mimeType.includes('webp'));
+          
+          // Convert unsupported formats to JPEG
+          if (isUnsupportedFormat) {
+            console.log(`[Library] Converting ${extension || 'unknown'} (${mimeType}) to JPEG for photo ${i + 1}...`);
+            try {
+              // Use ImageManipulator to convert to JPEG
+              const manipulatedImage = await ImageManipulator.manipulateAsync(
+                pickerAsset.uri,
+                [], // No transformations, just convert format
+                { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
+              );
+              imageUri = manipulatedImage.uri;
+              extension = 'jpg';
+              mimeType = 'image/jpeg';
+              console.log(`[Library] ✅ Converted to JPEG: ${imageUri.substring(0, 50)}...`);
+            } catch (convertError) {
+              console.error(`[Library] Failed to convert ${extension} to JPEG:`, convertError);
+              errors.push(`Photo ${i + 1}: Failed to convert ${extension} to JPEG. Please use JPEG, PNG, GIF, or WEBP format.`);
+              failCount++;
+              continue;
+            }
+          } else {
+            console.log(`[Library] Photo ${i + 1} is already JPEG/PNG/GIF/WEBP - no conversion needed`);
+          }
+          
+          // Fetch image data from (possibly converted) URI
           let arrayBuffer: ArrayBuffer;
           try {
-            const fetchResponse = await fetch(pickerAsset.uri);
+            const fetchResponse = await fetch(imageUri);
             if (!fetchResponse.ok) {
               throw new Error(`Failed to read image: ${fetchResponse.status} ${fetchResponse.statusText}`);
             }
@@ -208,15 +365,15 @@ export default function LibraryScreen() {
             failCount++;
             continue;
           }
-
-          const extension = pickerAsset.uri.split('.').pop() ?? 'jpg';
+          
           const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const fileName = `${uniqueSuffix}.${extension}`;
-          const filePath = `campaigns/${campaignId}/${fileName}`;
+          // Update storage path to include user_id
+          const filePath = `users/${userId}/campaigns/${campaignId}/${fileName}`;
 
           // Upload to storage
           const { error: uploadError } = await supabase.storage.from('assets').upload(filePath, arrayBuffer, {
-            contentType: pickerAsset.mimeType ?? 'image/jpeg',
+            contentType: mimeType,
             upsert: false,
           });
           
@@ -228,10 +385,11 @@ export default function LibraryScreen() {
             continue;
           }
 
-          // Insert into database
+          // Insert into database with user_id
           const { data: inserted, error: insertError } = await supabase
             .from('assets')
             .insert({
+              user_id: userId,
               campaign_id: campaignId,
               storage_path: filePath,
               source: 'local',
@@ -378,7 +536,7 @@ export default function LibraryScreen() {
     } finally {
       setIsImporting(false);
     }
-  }, [campaignId, loadAssets]);
+  }, [campaignId, loadAssets, session]);
 
   // Collect all unique tags from all assets in the library
   const allLibraryTags = useMemo(() => {
@@ -393,15 +551,23 @@ export default function LibraryScreen() {
     return Array.from(allTags).sort();
   }, [assets]);
 
-  // Custom tags (tags not in STORYSTACK_TAGS)
-  const customFilterTags = useMemo(() => {
-    const defaults = new Set<string>(STORYSTACK_TAGS);
-    return allLibraryTags.filter((tag) => !defaults.has(tag));
-  }, [allLibraryTags]);
+  // Calculate tag counts (how many photos have each tag)
+  const tagCounts = useMemo(() => {
+    const counts = new Map<TagVocabulary, number>();
+    assets.forEach((asset) => {
+      (asset.tags ?? []).forEach((tag) => {
+        if (tag) {
+          counts.set(tag, (counts.get(tag) || 0) + 1);
+        }
+      });
+    });
+    return counts;
+  }, [assets]);
 
+  // Filter assets using OR logic: show photos that have ANY of the selected tags
   const filteredAssets = useMemo(() => {
     if (!selectedTags.length) return assets;
-    return assets.filter((asset) => selectedTags.every((tag) => asset.tags.includes(tag)));
+    return assets.filter((asset) => selectedTags.some((tag) => asset.tags.includes(tag)));
   }, [assets, selectedTags]);
 
   const toggleTagFilter = (tag: TagVocabulary) => {
@@ -433,9 +599,11 @@ export default function LibraryScreen() {
     }
   };
 
+  // Long press is now handled in PhotoGrid for multi-select
+  // This handler is no longer needed, but kept for backwards compatibility
   const handleLongPress = (asset: Asset) => {
-    // Long press directly opens tag edit modal
-    openTagModal(asset);
+    // This is now handled by PhotoGrid's onLongPress -> onToggleSelect
+    toggleAssetSelection(asset);
   };
 
   const closeTagModal = () => {
@@ -483,9 +651,7 @@ export default function LibraryScreen() {
         const updates = currentAssets.map((currentAsset) => {
           const existingTags = (currentAsset.tags ?? []) as TagVocabulary[];
           // Merge: combine existing tags with new tags, remove duplicates
-          const mergedTags = Array.from(new Set([...existingTags, ...newTags]));
-          // Limit to MAX_TAGS (5)
-          const finalTags = mergedTags.slice(0, 5);
+          const finalTags = Array.from(new Set([...existingTags, ...newTags]));
           
           return supabase
             .from('assets')
@@ -623,11 +789,12 @@ export default function LibraryScreen() {
     );
   };
 
-  const handleBuildStory = () => {
+  const handleAddToStory = () => {
     if (selectedAssets.length === 0) {
-      Alert.alert('No photos selected', 'Please select at least one photo to build a story.');
+      Alert.alert('No photos selected', 'Please select at least one photo to add to a story.');
       return;
     }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     // Pass asset IDs as comma-separated string (more reliable than JSON in URL params)
     const newAssetIds = selectedAssets.map((a) => a.id).join(',');
     router.push({
@@ -643,75 +810,26 @@ export default function LibraryScreen() {
 
   return (
     <View className="flex-1 bg-background">
-      {/* Header */}
-      <View className="bg-background">
-        <LibraryHeader 
+      {/* Header - Apple-style compact with integrated selection state */}
+      <View className="bg-background border-b border-gray-100">
+        <LibraryHeader
+          onMenuPress={() => setIsMenuOpen(true)}
           onTagManagementPress={() => router.push('/tag-management')}
+          onProfilePress={() => router.push('/profile')}
+          selectedCount={selectedAssets.length}
+          onCancelSelection={() => setSelectedAssets([])}
         />
-        
-        {/* Import Button - Premium gold styling */}
-        <View className="px-5 pb-4">
-          {supabase ? (
-            <TouchableOpacity
-              onPress={handleImport}
-              disabled={isImporting}
-              activeOpacity={0.85}
-              className="w-full rounded-2xl py-4"
-              style={{
-                backgroundColor: isImporting ? '#e5e7eb' : '#b38f5b',
-                shadowColor: isImporting ? 'transparent' : '#b38f5b',
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: isImporting ? 0 : 0.2,
-                shadowRadius: 8,
-                elevation: isImporting ? 0 : 3,
-              }}
-            >
-              <Text className="text-center text-[17px] font-semibold text-white" style={{ letterSpacing: -0.2 }}>
-                {isImporting ? 'Importing…' : 'Import Photos'}
-              </Text>
-            </TouchableOpacity>
-          ) : (
-            <View className="w-full rounded-2xl bg-gray-50 px-5 py-3.5">
-              <Text className="text-center text-[14px] leading-[18px] text-gray-500">
-                Supabase not configured
-              </Text>
-            </View>
-          )}
-        </View>
       </View>
 
-      {/* Selection Bar - Refined integrated bar */}
-      {selectedAssets.length > 0 && (
-        <View 
-          className="border-b border-gray-100 bg-white px-5 py-3.5"
-          style={{
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 0.5 },
-            shadowOpacity: 0.03,
-            shadowRadius: 1,
-            elevation: 1,
-          }}
-        >
-          <View className="flex-row items-center justify-between">
-            <Text className="text-[17px] font-semibold text-gray-900" style={{ letterSpacing: -0.3 }}>
-              {selectedAssets.length} {selectedAssets.length === 1 ? 'Photo' : 'Photos'}
-            </Text>
-            <TouchableOpacity
-              onPress={() => setSelectedAssets([])}
-              activeOpacity={0.5}
-            >
-              <Text className="text-[17px] font-semibold text-accent" style={{ letterSpacing: -0.3 }}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-
-      {/* Filter Bar - Premium styling */}
-      {allLibraryTags.length > 0 && (
-        <View className="bg-white px-5 py-3">
-          <TagFilterBar selectedTags={selectedTags} onToggleTag={toggleTagFilter} availableTags={allLibraryTags} />
-        </View>
-      )}
+      {/* Search Bar - Content-first, immediately accessible */}
+      <View className="bg-white px-5 py-3 border-b border-gray-100" style={{ zIndex: 1 }}>
+        <TagSearchBar 
+          selectedTags={selectedTags || []} 
+          onToggleTag={toggleTagFilter} 
+          availableTags={allAvailableTags || []}
+          tagCounts={tagCounts}
+        />
+      </View>
 
       {/* Photo Grid */}
       {isLoading ? (
@@ -719,7 +837,7 @@ export default function LibraryScreen() {
           <ActivityIndicator size="large" color="#b38f5b" />
           <Text className="mt-4 text-[15px] font-medium text-gray-500">Loading…</Text>
         </View>
-      ) : filteredAssets.length === 0 ? (
+      ) : !campaignId ? (
         <View className="flex-1 items-center justify-center px-6">
           <View 
             className="mb-4 h-20 w-20 items-center justify-center rounded-full bg-white"
@@ -734,11 +852,64 @@ export default function LibraryScreen() {
             <Text className="text-4xl">📷</Text>
           </View>
           <Text className="mb-1.5 text-center text-[20px] font-semibold text-gray-900">
-            No Photos
+            Initializing…
           </Text>
           <Text className="text-center text-[15px] leading-[20px] text-gray-500">
-            Import photos to get started
+            Setting up your library
           </Text>
+        </View>
+      ) : filteredAssets.length === 0 ? (
+        <View className="flex-1 items-center justify-center px-6">
+          <View 
+            className="mb-6 h-24 w-24 items-center justify-center rounded-full bg-white"
+            style={{
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.08,
+              shadowRadius: 12,
+              elevation: 4,
+            }}
+          >
+            <MaterialCommunityIcons name="image-multiple-outline" size={48} color="#b38f5b" />
+          </View>
+          <Text className="mb-2 text-center text-[24px] font-semibold text-gray-900" style={{ letterSpacing: -0.5 }}>
+            No Photos Yet
+          </Text>
+          <Text className="mb-8 text-center text-[16px] leading-[22px] text-gray-500">
+            Start building your library by importing photos
+          </Text>
+          <TouchableOpacity
+            onPress={handleImport}
+            disabled={isImporting}
+            activeOpacity={0.85}
+            className="w-full max-w-[320px] rounded-2xl py-4"
+            style={{
+              backgroundColor: '#b38f5b',
+              shadowColor: '#b38f5b',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.3,
+              shadowRadius: 12,
+              elevation: 8,
+            }}
+          >
+            <View className="flex-row items-center justify-center">
+              {isImporting ? (
+                <>
+                  <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 8 }} />
+                  <Text className="text-center text-[17px] font-semibold text-white" style={{ letterSpacing: -0.3 }}>
+                    Importing...
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <MaterialCommunityIcons name="image-plus" size={22} color="#ffffff" style={{ marginRight: 8 }} />
+                  <Text className="text-center text-[17px] font-semibold text-white" style={{ letterSpacing: -0.3 }}>
+                    Import Photos
+                  </Text>
+                </>
+              )}
+            </View>
+          </TouchableOpacity>
         </View>
       ) : (
         <View className="flex-1">
@@ -748,90 +919,86 @@ export default function LibraryScreen() {
             onToggleSelect={toggleAssetSelection}
             onOpenTagModal={openTagModal}
             onLongPress={handleLongPress}
-            refreshing={false}
-            onRefresh={loadAssets}
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
             autoTaggingAssets={autoTaggingAssets}
           />
         </View>
       )}
 
-      {/* Bottom CTA - When photos are selected, show additional actions */}
-      {selectedAssets.length > 0 ? (
+      {/* Bottom Actions - Apple-style contextual bar */}
+      {selectedAssets.length > 0 && (
         <View 
-          className="border-t border-gray-200 bg-white px-5 pt-4"
+          className="border-t border-gray-100 bg-white"
           style={{
-            paddingBottom: Math.max(insets.bottom, 20),
+            paddingBottom: Math.max(insets.bottom, 8),
             shadowColor: '#000',
-            shadowOffset: { width: 0, height: -2 },
-            shadowOpacity: 0.08,
-            shadowRadius: 8,
-            elevation: 4,
+            shadowOffset: { width: 0, height: -1 },
+            shadowOpacity: 0.05,
+            shadowRadius: 4,
+            elevation: 2,
           }}
         >
-          {/* Primary Action */}
-          <TouchableOpacity
-            onPress={handleBuildStory}
-            activeOpacity={0.85}
-            className="mb-3 w-full rounded-2xl py-4"
-            style={{
-              backgroundColor: '#b38f5b',
-              shadowColor: '#b38f5b',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.2,
-              shadowRadius: 8,
-              elevation: 3,
-            }}
-          >
-            <Text className="text-center text-[17px] font-semibold text-white" style={{ letterSpacing: -0.2 }}>
-              {isAddingToStory 
-                ? `Add to Story (${selectedAssets.length} selected)` 
-                : `Build Story (${selectedAssets.length} selected)`}
-            </Text>
-          </TouchableOpacity>
+          {/* Primary Action - Compact */}
+          <View className="px-5 pt-3">
+            <TouchableOpacity
+              onPress={handleAddToStory}
+              activeOpacity={0.85}
+              className="w-full rounded-xl py-3"
+              style={{
+                backgroundColor: '#b38f5b',
+                shadowColor: '#b38f5b',
+                shadowOffset: { width: 0, height: 1 },
+                shadowOpacity: 0.15,
+                shadowRadius: 4,
+                elevation: 2,
+              }}
+            >
+              <Text className="text-center text-[16px] font-semibold text-white" style={{ letterSpacing: -0.2 }}>
+                Add to Story
+              </Text>
+            </TouchableOpacity>
+          </View>
 
-          {/* Secondary Actions - Horizontal */}
-          <View className="flex-row gap-3">
+          {/* Secondary Actions - Refined compact row */}
+          <View className="flex-row px-5 pt-2.5 pb-2 border-t border-gray-50">
             <TouchableOpacity
               onPress={openTagModalForMultiple}
               activeOpacity={0.6}
-              className="flex-1 rounded-xl bg-white py-3.5"
-              style={{
-                borderWidth: 1,
-                borderColor: '#e5e7eb',
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 1 },
-                shadowOpacity: 0.05,
-                shadowRadius: 2,
-                elevation: 1,
-              }}
+              className="flex-1 items-center py-2.5"
             >
-              <Text className="text-center text-[15px] font-semibold text-gray-900" style={{ letterSpacing: -0.2 }}>
-                Edit Tags
+              <View 
+                className="h-9 w-9 items-center justify-center rounded-full mb-1"
+                style={{
+                  backgroundColor: 'rgba(179, 143, 91, 0.08)',
+                }}
+              >
+                <MaterialCommunityIcons name="tag-outline" size={18} color="#b38f5b" />
+              </View>
+              <Text className="text-[12px] font-medium text-gray-600" style={{ letterSpacing: -0.1 }}>
+                Tags
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               onPress={handleDeleteMultipleAssets}
               activeOpacity={0.6}
-              className="flex-1 rounded-xl bg-white py-3.5"
-              style={{
-                borderWidth: 1,
-                borderColor: 'rgba(239, 68, 68, 0.3)',
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 1 },
-                shadowOpacity: 0.05,
-                shadowRadius: 2,
-                elevation: 1,
-              }}
+              className="flex-1 items-center py-2.5"
             >
-              <Text className="text-center text-[15px] font-semibold text-red-600" style={{ letterSpacing: -0.2 }}>
+              <View 
+                className="h-9 w-9 items-center justify-center rounded-full mb-1"
+                style={{
+                  backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                }}
+              >
+                <MaterialCommunityIcons name="delete-outline" size={18} color="#ef4444" />
+              </View>
+              <Text className="text-[12px] font-medium text-red-600" style={{ letterSpacing: -0.1 }}>
                 Delete
               </Text>
             </TouchableOpacity>
           </View>
         </View>
-      ) : (
-        <BottomCTA selectedCount={selectedAssets.length} onPress={handleBuildStory} />
       )}
 
       <TagModal 
@@ -841,6 +1008,7 @@ export default function LibraryScreen() {
         onUpdateTags={updateTags}
         allAvailableTags={allAvailableTags}
         multipleAssets={activeAssetsForTagging}
+        onDelete={handleDeleteAsset}
       />
 
 
@@ -883,6 +1051,21 @@ export default function LibraryScreen() {
             </View>
           </View>
         </View>
+      )}
+
+      {/* Menu Drawer */}
+      <MenuDrawer
+        visible={isMenuOpen}
+        onClose={() => setIsMenuOpen(false)}
+      />
+
+      {/* Floating Action Button - Import Photos */}
+      {supabase && (
+        <FloatingActionButton
+          icon="image-plus"
+          onPress={handleImport}
+          visible={!isImporting && selectedAssets.length === 0}
+        />
       )}
     </View>
   );

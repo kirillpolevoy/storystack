@@ -1,5 +1,6 @@
 import 'react-native-url-polyfill/auto';
 import { createClient } from '@supabase/supabase-js';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type SupabaseClient = ReturnType<typeof createClient>;
 
@@ -16,7 +17,10 @@ try {
   } else {
     supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
-        persistSession: false,
+        persistSession: true,
+        storage: AsyncStorage,
+        autoRefreshToken: true,
+        detectSessionInUrl: false,
       },
     });
     console.log('[Supabase] Client initialized successfully');
