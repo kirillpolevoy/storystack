@@ -68,118 +68,88 @@ async function getTagVocabulary(supabaseClient: any, userId: string): Promise<st
   }
 }
 
+// Helper function to convert image to base64
+async function convertToBase64(imageUrl: string): Promise<string> {
+  const imageResponse = await fetch(imageUrl);
+  if (!imageResponse.ok) {
+    throw new Error(`Failed to fetch image: ${imageResponse.status}`);
+  }
+  const imageBuffer = await imageResponse.arrayBuffer();
+  const imageBytes = new Uint8Array(imageBuffer);
+  
+  // Convert to base64
+  const base64 = btoa(String.fromCharCode(...imageBytes));
+  const dataUrl = `data:image/jpeg;base64,${base64}`;
+  const base64SizeMB = dataUrl.length / (1024 * 1024);
+  console.log('[auto_tag_asset] ✅ Converted to base64 data URL (size:', base64SizeMB.toFixed(2), 'MB)');
+  
+  if (base64SizeMB > 20) {
+    console.error('[auto_tag_asset] ❌ Base64 image exceeds 20MB limit:', base64SizeMB.toFixed(2), 'MB');
+    throw new Error(`Image too large even after maximum compression: ${base64SizeMB.toFixed(2)}MB`);
+  }
+  
+  return dataUrl;
+}
+
 // Check if image format is supported by OpenAI and convert if needed
+// Since images are now compressed at upload time (<5MB), we can use them directly
+// or convert to base64 if URL access fails
 async function ensureSupportedImageFormat(imageUrl: string): Promise<string> {
   try {
     console.log('[auto_tag_asset] Checking image format for URL:', imageUrl);
-    
-    // First, check the actual Content-Type header from the image
-    let actualContentType: string | null = null;
-    try {
-      const headResponse = await fetch(imageUrl, { method: 'HEAD' });
-      actualContentType = headResponse.headers.get('content-type');
-      console.log('[auto_tag_asset] Image Content-Type header:', actualContentType);
-    } catch (headError) {
-      console.warn('[auto_tag_asset] Could not fetch HEAD, will check extension:', headError);
-    }
     
     // Extract file extension from URL
     const urlPath = new URL(imageUrl).pathname;
     const extension = urlPath.split('.').pop()?.toLowerCase() || '';
     console.log('[auto_tag_asset] File extension from URL:', extension);
     
-    // OpenAI supports: png, jpeg, gif, webp
-    const supportedFormats = ['png', 'jpeg', 'jpg', 'gif', 'webp'];
-    const supportedMimeTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
-    
-    // For Supabase Storage URLs, ALWAYS use transform to ensure JPEG format
-    // This handles cases where Content-Type might be wrong or file is HEIC
+    // For Supabase Storage URLs, images are already compressed at upload (<5MB)
+    // Try using the original URL first, convert to base64 if it fails or times out
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     if (supabaseUrl && imageUrl.includes(supabaseUrl)) {
-      // Always apply transform to force JPEG format for OpenAI compatibility
-      console.log('[auto_tag_asset] Applying Supabase Storage transform to ensure JPEG format');
+      // Remove any existing transform params - use original compressed image
+      const baseUrl = new URL(imageUrl);
+      baseUrl.search = ''; // Remove query params to use original compressed image
+      const originalUrl = baseUrl.toString();
+      
+      console.log('[auto_tag_asset] Using original compressed image (no transforms needed)');
+      
+      // Check if it's JPEG format
       try {
-        const url = new URL(imageUrl);
-        // Remove existing query params and add transform params to force JPEG
-        url.search = '';
-        url.searchParams.set('width', '2048');
-        url.searchParams.set('format', 'jpeg');
-        url.searchParams.set('quality', '90');
-        const transformUrl = url.toString();
-        console.log('[auto_tag_asset] ✅ Using Supabase Storage transform to JPEG:', transformUrl);
+        const headResponse = await fetch(originalUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+        const contentType = headResponse.headers.get('content-type');
+        const contentLength = headResponse.headers.get('content-length');
+        const fileSizeMB = contentLength ? parseInt(contentLength) / (1024 * 1024) : null;
         
-        // Verify the transform works by checking Content-Type
-        try {
-          const verifyResponse = await fetch(transformUrl, { method: 'HEAD' });
-          const verifyContentType = verifyResponse.headers.get('content-type');
-          console.log('[auto_tag_asset] Transform URL Content-Type:', verifyContentType);
-          if (verifyContentType && (verifyContentType.includes('jpeg') || verifyContentType.includes('jpg'))) {
-            console.log('[auto_tag_asset] ✅ Transform URL verified - returning JPEG URL');
-            return transformUrl;
+        console.log(`[auto_tag_asset] Original image - Content-Type: ${contentType}, Size: ${fileSizeMB ? fileSizeMB.toFixed(2) + ' MB' : 'unknown'}`);
+        
+        // If it's JPEG and under 5MB, use it directly
+        if (contentType && (contentType.includes('jpeg') || contentType.includes('jpg'))) {
+          if (fileSizeMB === null || fileSizeMB <= 5) {
+            console.log('[auto_tag_asset] ✅ Using original compressed image URL');
+            return originalUrl;
           } else {
-            console.warn('[auto_tag_asset] ⚠️  Transform URL did not return JPEG, Content-Type:', verifyContentType);
-            // Transform didn't work - convert to base64 as fallback
-            console.log('[auto_tag_asset] Converting image to base64 data URL as fallback');
-            const imageResponse = await fetch(imageUrl);
-            if (!imageResponse.ok) {
-              throw new Error(`Failed to fetch image: ${imageResponse.status}`);
-            }
-            const imageBuffer = await imageResponse.arrayBuffer();
-            const imageBytes = new Uint8Array(imageBuffer);
-            
-            // Convert to base64
-            const base64 = btoa(String.fromCharCode(...imageBytes));
-            const dataUrl = `data:image/jpeg;base64,${base64}`;
-            console.log('[auto_tag_asset] ✅ Converted to base64 data URL (length:', dataUrl.length, 'chars)');
-            return dataUrl;
+            console.warn(`[auto_tag_asset] ⚠️  Image is ${fileSizeMB.toFixed(2)} MB, converting to base64 to avoid timeout`);
+            return await convertToBase64(originalUrl);
           }
-        } catch (verifyError) {
-          console.warn('[auto_tag_asset] Could not verify transform, converting to base64:', verifyError);
-          // Convert to base64 as fallback
-          try {
-            const imageResponse = await fetch(imageUrl);
-            if (!imageResponse.ok) {
-              throw new Error(`Failed to fetch image: ${imageResponse.status}`);
-            }
-            const imageBuffer = await imageResponse.arrayBuffer();
-            const imageBytes = new Uint8Array(imageBuffer);
-            const base64 = btoa(String.fromCharCode(...imageBytes));
-            const dataUrl = `data:image/jpeg;base64,${base64}`;
-            console.log('[auto_tag_asset] ✅ Converted to base64 data URL (fallback)');
-            return dataUrl;
-          } catch (base64Error) {
-            console.error('[auto_tag_asset] Failed to convert to base64, using transform URL anyway:', base64Error);
-            return transformUrl;
-          }
+        } else {
+          // Not JPEG, convert to base64
+          console.warn('[auto_tag_asset] Content-Type is not JPEG, converting to base64');
+          return await convertToBase64(originalUrl);
         }
-      } catch (urlError) {
-        console.error('[auto_tag_asset] Error constructing transform URL:', urlError);
-        // Fall through to error
+      } catch (headError) {
+        // HEAD request failed or timed out - convert to base64 to avoid OpenAI timeout
+        console.warn('[auto_tag_asset] HEAD request failed/timed out, converting to base64 to avoid OpenAI timeout:', headError);
+        return await convertToBase64(originalUrl);
       }
     }
     
     // If transform not available, throw error with helpful message
-    throw new Error(`Unsupported image format: ${extension} (Content-Type: ${actualContentType}). OpenAI only supports PNG, JPEG, GIF, and WEBP.`);
+    throw new Error(`Unsupported image format: ${extension}. OpenAI only supports PNG, JPEG, GIF, and WEBP.`);
     
   } catch (error) {
     console.error('[auto_tag_asset] Error checking/converting image format:', error);
-    // Always try to use transform URL as fallback
-    const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    if (supabaseUrl && imageUrl.includes(supabaseUrl)) {
-      try {
-        const url = new URL(imageUrl);
-        url.search = '';
-        url.searchParams.set('width', '2048');
-        url.searchParams.set('format', 'jpeg');
-        url.searchParams.set('quality', '90');
-        const transformUrl = url.toString();
-        console.log('[auto_tag_asset] Using transform URL as fallback:', transformUrl);
-        return transformUrl;
-      } catch {
-        // If that fails, return original and let OpenAI error
-      }
-    }
-    return imageUrl;
+    throw error;
   }
 }
 
@@ -493,4 +463,3 @@ Deno.serve(async (req) => {
     });
   }
 });
-

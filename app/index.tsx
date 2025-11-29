@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import {
   ActivityIndicator,
@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
+import type { ImagePickerAsset } from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { supabase } from '@/lib/supabase';
@@ -28,7 +29,12 @@ import { getDefaultCampaignId } from '@/utils/getDefaultCampaign';
 import { getAllAvailableTags } from '@/utils/getAllAvailableTags';
 import { useAuth } from '@/contexts/AuthContext';
 import { MenuDrawer } from '@/components/MenuDrawer';
-import { FloatingActionButton } from '@/components/FloatingActionButton';
+import { BottomTabBar } from '@/components/BottomTabBar';
+import { queueAutoTag } from '@/utils/autoTagQueue';
+import { compressImageForUpload } from '@/utils/compressImage';
+import { ImportLoadingOverlay } from '@/components/ImportLoadingOverlay';
+import { computeImageHash, checkForDuplicates } from '@/utils/duplicateDetection';
+import { DuplicateDetectionDialog } from '@/components/DuplicateDetectionDialog';
 
 export default function LibraryScreen() {
   const router = useRouter();
@@ -50,16 +56,107 @@ export default function LibraryScreen() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState({ total: 0, imported: 0, currentPhoto: 0 });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedTags, setSelectedTags] = useState<TagVocabulary[]>([]);
   const [selectedAssets, setSelectedAssets] = useState<Asset[]>([]);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [activeAsset, setActiveAsset] = useState<Asset | null>(null);
   const [activeAssetsForTagging, setActiveAssetsForTagging] = useState<Asset[]>([]);
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
   const [autoTaggingAssets, setAutoTaggingAssets] = useState<Set<string>>(new Set());
-  const [autoTaggingComplete, setAutoTaggingComplete] = useState<{ count: number; totalTags: number } | null>(null);
   const [allAvailableTags, setAllAvailableTags] = useState<TagVocabulary[]>([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [hasStartedAutoTagging, setHasStartedAutoTagging] = useState(false);
+  const hasSeenAutoTaggingActive = useRef(false); // Track if we've seen autoTaggingAssets.size > 0
+  const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
+  const [pendingImportData, setPendingImportData] = useState<{
+    assets: ImagePicker.ImagePickerAsset[];
+    hashes: string[];
+    compressedImages: Array<{ uri: string; width: number; height: number; size: number }>;
+    duplicateIndices: number[];
+  } | null>(null);
+
+  // Hide overlay when all auto-tagging is complete
+  // This effect handles BOTH success and error cases consistently
+  useEffect(() => {
+    console.log('[Library] Overlay visibility check:', {
+      isImporting,
+      autoTaggingCount: autoTaggingAssets.size,
+      imported: importProgress.imported,
+      total: importProgress.total,
+      hasStartedAutoTagging,
+    });
+    
+    // Don't hide if we're not importing
+    if (!isImporting) {
+      // Reset flags when not importing
+      if (hasStartedAutoTagging) {
+        setHasStartedAutoTagging(false);
+      }
+      hasSeenAutoTaggingActive.current = false;
+      return;
+    }
+    
+    // Don't hide if there are assets being auto-tagged
+    if (autoTaggingAssets.size > 0) {
+      console.log('[Library] Still auto-tagging, keeping overlay visible');
+      hasSeenAutoTaggingActive.current = true; // Mark that we've seen auto-tagging active
+      return;
+    }
+    
+    // Check if all photos have been processed (imported count matches total)
+    // This handles both success and error cases:
+    // - Success: imported === total (all photos imported)
+    // - Error: imported === total (all photos processed, even if some failed)
+    if (
+      importProgress.imported === importProgress.total &&
+      importProgress.total > 0
+    ) {
+      // If auto-tagging has started and we've seen it active, and now it's complete, hide overlay
+      if (hasStartedAutoTagging && hasSeenAutoTaggingActive.current && autoTaggingAssets.size === 0) {
+        console.log('[Library] All import and auto-tagging complete, hiding overlay in 1.5s');
+        const timer = setTimeout(() => {
+          setIsImporting(false);
+          setImportProgress({ total: 0, imported: 0, currentPhoto: 0 });
+          setHasStartedAutoTagging(false);
+          hasSeenAutoTaggingActive.current = false;
+        }, 1500); // Show success state for 1.5 seconds
+        return () => clearTimeout(timer);
+      }
+      
+      // If auto-tagging has started but we haven't seen it active yet, wait
+      // This handles the race condition where useEffect runs before setAutoTaggingAssets updates
+      if (hasStartedAutoTagging && !hasSeenAutoTaggingActive.current && autoTaggingAssets.size === 0) {
+        console.log('[Library] Auto-tagging started but not active yet, waiting for state update...');
+        // Don't hide yet - wait for the next render when autoTaggingAssets.size becomes > 0
+        return;
+      }
+      
+      // Auto-tagging hasn't started yet (either no photos imported or no auto-tagging needed)
+      if (!hasStartedAutoTagging) {
+        console.log('[Library] Import complete, waiting for auto-tagging to start...');
+        let hideTimer: ReturnType<typeof setTimeout> | null = null;
+        const checkTimer = setTimeout(() => {
+          // If still no auto-tagging after delay, it means no assets were queued
+          // (maybe edgeBase is not set, no assets were inserted, or all imports failed)
+          if (!hasStartedAutoTagging && autoTaggingAssets.size === 0) {
+            console.log('[Library] No auto-tagging needed, hiding overlay in 1.5s');
+            hideTimer = setTimeout(() => {
+              setIsImporting(false);
+              setImportProgress({ total: 0, imported: 0, currentPhoto: 0 });
+            }, 1500);
+          }
+        }, 1000); // Wait 1 second for auto-tagging to start
+        return () => {
+          clearTimeout(checkTimer);
+          if (hideTimer) {
+            clearTimeout(hideTimer);
+          }
+        };
+      }
+    }
+  }, [isImporting, autoTaggingAssets.size, importProgress.imported, importProgress.total, hasStartedAutoTagging]);
 
   // Initialize default campaign and tags in parallel - wait for auth to be ready
   useEffect(() => {
@@ -261,6 +358,233 @@ export default function LibraryScreen() {
     }
   }, [isTagModalOpen, session]);
 
+  const processImport = useCallback(async (
+    assetsToImport: ImagePicker.ImagePickerAsset[],
+    compressedImages: Array<{ uri: string; width: number; height: number; size: number }>,
+    imageHashes: string[],
+    skipDuplicates: boolean
+  ) => {
+    if (!campaignId || !supabase || !session?.user?.id) {
+      return;
+    }
+
+    const userId = session.user.id;
+    setIsImporting(true);
+    setImportProgress({ total: assetsToImport.length, imported: 0, currentPhoto: 0 });
+
+    const errors: string[] = [];
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < assetsToImport.length; i++) {
+      // Skip duplicates if user chose to skip them
+      if (skipDuplicates && pendingImportData?.duplicateIndices.includes(i)) {
+        console.log(`[Library] Skipping duplicate photo ${i + 1}`);
+        continue;
+      }
+
+      const pickerAsset = assetsToImport[i];
+      const compressedImage = compressedImages[i];
+      
+      try {
+        setImportProgress(prev => ({ ...prev, currentPhoto: i + 1 }));
+        console.log(`[Library] Uploading photo ${i + 1}/${assetsToImport.length}...`);
+
+        // Fetch compressed image data
+        let arrayBuffer: ArrayBuffer;
+        try {
+          const fetchResponse = await fetch(compressedImage.uri);
+          if (!fetchResponse.ok) {
+            throw new Error(`Failed to read compressed image: ${fetchResponse.status} ${fetchResponse.statusText}`);
+          }
+          arrayBuffer = await fetchResponse.arrayBuffer();
+        } catch (fetchError) {
+          const errorMsg = `Failed to read compressed image file: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`;
+          console.error(`[Library] ${errorMsg}`);
+          errors.push(`Photo ${i + 1}: ${errorMsg}`);
+          failCount++;
+          continue;
+        }
+
+        const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const fileName = `${uniqueSuffix}.jpg`;
+        const filePath = `users/${userId}/campaigns/${campaignId}/${fileName}`;
+
+        // Upload compressed image to storage
+        const { error: uploadError } = await supabase.storage.from('assets').upload(filePath, arrayBuffer, {
+          contentType: 'image/jpeg',
+          upsert: false,
+        });
+        
+        if (uploadError) {
+          const errorMsg = uploadError.message || 'Storage upload failed';
+          console.error(`[Library] Storage upload failed for photo ${i + 1}:`, uploadError);
+          errors.push(`Photo ${i + 1}: ${errorMsg}`);
+          failCount++;
+          continue;
+        }
+
+        // Insert into database with user_id and file_hash
+        const insertData: any = {
+          user_id: userId,
+          campaign_id: campaignId,
+          storage_path: filePath,
+          source: 'local',
+          tags: [],
+        };
+
+        // Add file_hash if available (column may not exist yet)
+        const hash = imageHashes[i];
+        if (hash) {
+          insertData.file_hash = hash;
+        }
+
+        const { data: inserted, error: insertError } = await supabase
+          .from('assets')
+          .insert(insertData)
+          .select('*')
+          .single();
+
+        if (insertError) {
+          // If error is due to file_hash column not existing, try without it
+          if (insertError.message?.includes('column') && insertError.message?.includes('file_hash')) {
+            console.warn('[Library] file_hash column does not exist, inserting without hash');
+            const { data: retryInserted, error: retryError } = await supabase
+              .from('assets')
+              .insert({
+                user_id: userId,
+                campaign_id: campaignId,
+                storage_path: filePath,
+                source: 'local',
+                tags: [],
+              })
+              .select('*')
+              .single();
+
+            if (retryError) {
+              const errorMsg = retryError.message || 'Database insert failed';
+              console.error(`[Library] Database insert failed for photo ${i + 1}:`, retryError);
+              errors.push(`Photo ${i + 1}: ${errorMsg}`);
+              failCount++;
+              
+              // Try to clean up storage if DB insert failed
+              try {
+                await supabase.storage.from('assets').remove([filePath]);
+              } catch (cleanupError) {
+                console.error(`[Library] Failed to cleanup storage after DB error:`, cleanupError);
+              }
+              continue;
+            }
+
+            // Success without hash
+            successCount++;
+            setImportProgress(prev => ({ ...prev, imported: successCount }));
+            console.log(`[Library] ✅ Successfully imported photo ${i + 1} (without hash)`);
+            
+            // Trigger auto-tagging
+            const edgeBase = process.env.EXPO_PUBLIC_EDGE_BASE_URL;
+            if (edgeBase && retryInserted) {
+              const publicUrl = supabase.storage.from('assets').getPublicUrl(filePath).data.publicUrl;
+              const assetId = retryInserted.id;
+              setAutoTaggingAssets((prev) => new Set(prev).add(assetId));
+              setHasStartedAutoTagging(true);
+              queueAutoTag(assetId, publicUrl, {
+                onSuccess: (result) => {
+                  setAutoTaggingAssets((prev) => {
+                    const next = new Set(prev);
+                    next.delete(assetId);
+                    return next;
+                  });
+                  setTimeout(async () => {
+                    await loadAssets();
+                  }, 1000);
+                },
+                onError: (error) => {
+                  setAutoTaggingAssets((prev) => {
+                    const next = new Set(prev);
+                    next.delete(assetId);
+                    return next;
+                  });
+                },
+              });
+            }
+            continue;
+          }
+
+          const errorMsg = insertError.message || 'Database insert failed';
+          console.error(`[Library] Database insert failed for photo ${i + 1}:`, insertError);
+          errors.push(`Photo ${i + 1}: ${errorMsg}`);
+          failCount++;
+          
+          // Try to clean up storage if DB insert failed
+          try {
+            await supabase.storage.from('assets').remove([filePath]);
+          } catch (cleanupError) {
+            console.error(`[Library] Failed to cleanup storage after DB error:`, cleanupError);
+          }
+          continue;
+        }
+
+        successCount++;
+        console.log(`[Library] ✅ Successfully imported photo ${i + 1}`);
+        setImportProgress(prev => ({ ...prev, imported: successCount }));
+
+        // Trigger auto-tagging
+        const edgeBase = process.env.EXPO_PUBLIC_EDGE_BASE_URL;
+        if (edgeBase && inserted) {
+          const publicUrl = supabase.storage.from('assets').getPublicUrl(filePath).data.publicUrl;
+          const assetId = inserted.id;
+          setAutoTaggingAssets((prev) => new Set(prev).add(assetId));
+          setHasStartedAutoTagging(true);
+          queueAutoTag(assetId, publicUrl, {
+            onSuccess: (result) => {
+              setAutoTaggingAssets((prev) => {
+                const next = new Set(prev);
+                next.delete(assetId);
+                return next;
+              });
+              setTimeout(async () => {
+                await loadAssets();
+              }, 1000);
+            },
+            onError: (error) => {
+              setAutoTaggingAssets((prev) => {
+                const next = new Set(prev);
+                next.delete(assetId);
+                return next;
+              });
+            },
+          });
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error(`[Library] Unexpected error importing photo ${i + 1}:`, error);
+        errors.push(`Photo ${i + 1}: ${errorMsg}`);
+        failCount++;
+      }
+    }
+
+    // Refresh assets to show newly imported photos
+    await loadAssets();
+
+    // Show results
+    if (failCount > 0 && successCount > 0) {
+      Alert.alert(
+        'Partial Import',
+        `${successCount} photo${successCount > 1 ? 's' : ''} imported successfully.\n\n${failCount} photo${failCount > 1 ? 's' : ''} failed:\n${errors.slice(0, 3).join('\n')}${errors.length > 3 ? `\n...and ${errors.length - 3} more` : ''}`,
+        [{ text: 'OK' }]
+      );
+    } else if (failCount > 0) {
+      Alert.alert(
+        'Import Failed',
+        `Could not import ${failCount} photo${failCount > 1 ? 's' : ''}:\n${errors.slice(0, 3).join('\n')}${errors.length > 3 ? `\n...and ${errors.length - 3} more` : ''}`,
+        [{ text: 'OK' }]
+      );
+    } else if (successCount > 0) {
+      console.log(`[Library] ✅ Successfully imported ${successCount} photo${successCount > 1 ? 's' : ''}`);
+    }
+  }, [campaignId, loadAssets, session, pendingImportData]);
+
   const handleImport = useCallback(async () => {
     if (!campaignId) {
       Alert.alert('Error', 'Library not initialized. Please try again.');
@@ -273,7 +597,6 @@ export default function LibraryScreen() {
     }
 
     try {
-      setIsImporting(true);
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsMultipleSelection: true,
@@ -285,258 +608,106 @@ export default function LibraryScreen() {
         return;
       }
 
-      // Use user ID from session (already available from AuthContext)
       if (!session?.user?.id) {
         Alert.alert('Error', 'You must be signed in to import photos.');
-        setIsImporting(false);
         return;
       }
       const userId = session.user.id;
 
-      const errors: string[] = [];
-      let successCount = 0;
-      let failCount = 0;
-      
+      // Step 1: Process and compress all images
+      console.log('[Library] Processing and compressing images for duplicate detection...');
+      const compressedImages: Array<{ uri: string; width: number; height: number; size: number }> = [];
+      const imageHashes: string[] = [];
+
       for (let i = 0; i < result.assets.length; i++) {
         const pickerAsset = result.assets[i];
-        try {
-          console.log(`[Library] Uploading photo ${i + 1}/${result.assets.length}...`);
-          
-          // Check file extension and mime type
-          // Extract extension from URI - check if it exists before defaulting
-          const uriParts = pickerAsset.uri.split('.');
-          const hasExtension = uriParts.length > 1 && uriParts[uriParts.length - 1].length > 0;
-          const rawExtension = hasExtension ? uriParts[uriParts.length - 1].toLowerCase() : null;
-          let extension = rawExtension ?? 'jpg'; // Default to 'jpg' only after checking
-          let mimeType = pickerAsset.mimeType ?? 'image/jpeg';
-          let imageUri = pickerAsset.uri;
-          
-          // Log file info for debugging
-          console.log(`[Library] Photo ${i + 1} - Extension: ${extension}${!hasExtension ? ' (detected missing)' : ''}, MimeType: ${mimeType}, URI: ${pickerAsset.uri.substring(0, 50)}...`);
-          
-          // Convert HEIC/HEIF (Live Photos) and other unsupported formats to JPEG
-          // Check extension, mime type, and also check if it's a Live Photo (often has no extension)
-          const unsupportedFormats = ['heic', 'heif', 'hevc'];
-          const supportedFormats = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
-          const isUnsupportedFormat = 
-            unsupportedFormats.includes(extension) || 
-            mimeType?.toLowerCase().includes('heic') || 
-            mimeType?.toLowerCase().includes('heif') ||
-            // Live Photos often have no extension or wrong mime type - convert if unsure
-            !hasExtension || // Check if extension was actually missing from URI
-            (!supportedFormats.includes(extension) && mimeType && !mimeType.includes('jpeg') && !mimeType.includes('jpg') && !mimeType.includes('png') && !mimeType.includes('gif') && !mimeType.includes('webp'));
-          
-          // Convert unsupported formats to JPEG
-          if (isUnsupportedFormat) {
-            console.log(`[Library] Converting ${extension || 'unknown'} (${mimeType}) to JPEG for photo ${i + 1}...`);
-            try {
-              // Use ImageManipulator to convert to JPEG
-              const manipulatedImage = await ImageManipulator.manipulateAsync(
-                pickerAsset.uri,
-                [], // No transformations, just convert format
-                { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
-              );
-              imageUri = manipulatedImage.uri;
-              extension = 'jpg';
-              mimeType = 'image/jpeg';
-              console.log(`[Library] ✅ Converted to JPEG: ${imageUri.substring(0, 50)}...`);
-            } catch (convertError) {
-              console.error(`[Library] Failed to convert ${extension} to JPEG:`, convertError);
-              errors.push(`Photo ${i + 1}: Failed to convert ${extension} to JPEG. Please use JPEG, PNG, GIF, or WEBP format.`);
-              failCount++;
-              continue;
-            }
-          } else {
-            console.log(`[Library] Photo ${i + 1} is already JPEG/PNG/GIF/WEBP - no conversion needed`);
-          }
-          
-          // Fetch image data from (possibly converted) URI
-          let arrayBuffer: ArrayBuffer;
+        
+        // Convert unsupported formats to JPEG
+        let imageUri = pickerAsset.uri;
+        const uriParts = pickerAsset.uri.split('.');
+        const hasExtension = uriParts.length > 1 && uriParts[uriParts.length - 1].length > 0;
+        const rawExtension = hasExtension ? uriParts[uriParts.length - 1].toLowerCase() : null;
+        let extension = rawExtension ?? 'jpg';
+        let mimeType = pickerAsset.mimeType ?? 'image/jpeg';
+
+        const unsupportedFormats = ['heic', 'heif', 'hevc'];
+        const supportedFormats = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+        const isUnsupportedFormat = 
+          unsupportedFormats.includes(extension) || 
+          mimeType?.toLowerCase().includes('heic') || 
+          mimeType?.toLowerCase().includes('heif') ||
+          !hasExtension ||
+          (!supportedFormats.includes(extension) && mimeType && !mimeType.includes('jpeg') && !mimeType.includes('jpg') && !mimeType.includes('png') && !mimeType.includes('gif') && !mimeType.includes('webp'));
+
+        if (isUnsupportedFormat) {
           try {
-            const fetchResponse = await fetch(imageUri);
-            if (!fetchResponse.ok) {
-              throw new Error(`Failed to read image: ${fetchResponse.status} ${fetchResponse.statusText}`);
-            }
-            arrayBuffer = await fetchResponse.arrayBuffer();
-          } catch (fetchError) {
-            const errorMsg = `Failed to read image file: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`;
-            console.error(`[Library] ${errorMsg}`);
-            errors.push(`Photo ${i + 1}: ${errorMsg}`);
-            failCount++;
-            continue;
+            const manipulatedImage = await ImageManipulator.manipulateAsync(
+              pickerAsset.uri,
+              [],
+              { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
+            );
+            imageUri = manipulatedImage.uri;
+          } catch (convertError) {
+            console.error(`[Library] Failed to convert photo ${i + 1}:`, convertError);
+            // Continue with original URI
           }
-          
-          const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-          const fileName = `${uniqueSuffix}.${extension}`;
-          // Update storage path to include user_id
-          const filePath = `users/${userId}/campaigns/${campaignId}/${fileName}`;
+        }
 
-          // Upload to storage
-          const { error: uploadError } = await supabase.storage.from('assets').upload(filePath, arrayBuffer, {
-            contentType: mimeType,
-            upsert: false,
-          });
-          
-          if (uploadError) {
-            const errorMsg = uploadError.message || 'Storage upload failed';
-            console.error(`[Library] Storage upload failed for photo ${i + 1}:`, uploadError);
-            errors.push(`Photo ${i + 1}: ${errorMsg}`);
-            failCount++;
-            continue;
+        // Compress image
+        try {
+          const compressed = await compressImageForUpload(imageUri);
+          compressedImages.push(compressed);
+
+          // Compute hash for duplicate detection
+          try {
+            const hash = await computeImageHash(compressed.uri);
+            imageHashes.push(hash);
+          } catch (hashError) {
+            console.warn(`[Library] Failed to compute hash for photo ${i + 1}:`, hashError);
+            imageHashes.push(''); // Empty hash if computation fails
           }
-
-          // Insert into database with user_id
-          const { data: inserted, error: insertError } = await supabase
-            .from('assets')
-            .insert({
-              user_id: userId,
-              campaign_id: campaignId,
-              storage_path: filePath,
-              source: 'local',
-              tags: [],
-            })
-            .select('*')
-            .single();
-
-          if (insertError) {
-            const errorMsg = insertError.message || 'Database insert failed';
-            console.error(`[Library] Database insert failed for photo ${i + 1}:`, insertError);
-            errors.push(`Photo ${i + 1}: ${errorMsg}`);
-            failCount++;
-            
-            // Try to clean up storage if DB insert failed
-            try {
-              await supabase.storage.from('assets').remove([filePath]);
-            } catch (cleanupError) {
-              console.error(`[Library] Failed to cleanup storage after DB error:`, cleanupError);
-            }
-            continue;
-          }
-
-          successCount++;
-          console.log(`[Library] ✅ Successfully imported photo ${i + 1}`);
-
-          // Trigger auto-tagging (non-blocking)
-          const edgeBase = process.env.EXPO_PUBLIC_EDGE_BASE_URL;
-          const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-          if (edgeBase && inserted && supabaseAnonKey) {
-            const publicUrl = supabase.storage.from('assets').getPublicUrl(filePath).data.publicUrl;
-            const assetId = inserted.id;
-            
-            // Mark this asset as being auto-tagged
-            setAutoTaggingAssets((prev) => new Set(prev).add(assetId));
-            
-            console.log('[AutoTag] Triggering auto-tagging for asset:', assetId);
-            console.log('[AutoTag] Image URL:', publicUrl);
-            fetch(`${edgeBase}/auto_tag_asset`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${supabaseAnonKey}`,
-              },
-              body: JSON.stringify({ assetId, imageUrl: publicUrl }),
-            })
-              .then(async (res) => {
-                if (res.ok) {
-                  const result = await res.json();
-                  console.log('[AutoTag] ✅ Success! Tags:', result.tags);
-                  console.log('[AutoTag] Asset ID:', result.assetId);
-                  
-                  // Remove from auto-tagging set and check if all done
-                  setAutoTaggingAssets((prev) => {
-                    const next = new Set(prev);
-                    next.delete(assetId);
-                    
-                    // If this was the last one, show completion toast
-                    if (next.size === 0 && prev.size > 0) {
-                      const totalTags = result.tags?.length || 0;
-                      setAutoTaggingComplete({ count: prev.size, totalTags });
-                      // Clear notification after 4 seconds
-                      setTimeout(() => {
-                        setAutoTaggingComplete(null);
-                      }, 4000);
-                    }
-                    
-                    return next;
-                  });
-                  
-                  // Refresh assets to show new tags
-                  setTimeout(async () => {
-                    await loadAssets();
-                    console.log('[AutoTag] Assets refreshed');
-                  }, 1000); // Small delay to ensure DB update is complete
-                } else {
-                  const errorText = await res.text();
-                  console.error('[AutoTag] ❌ Edge function error:', res.status, errorText);
-                  
-                  // Remove from auto-tagging set even on error
-                  setAutoTaggingAssets((prev) => {
-                    const next = new Set(prev);
-                    next.delete(assetId);
-                    return next;
-                  });
-                  
-                  try {
-                    const errorJson = JSON.parse(errorText);
-                    console.error('[AutoTag] Error details:', errorJson);
-                  } catch {
-                    // Not JSON, already logged as text
-                  }
-                }
-              })
-              .catch((err) => {
-                console.error('[AutoTag] Edge request failed', err);
-                // Remove from auto-tagging set on network error
-                setAutoTaggingAssets((prev) => {
-                  const next = new Set(prev);
-                  next.delete(assetId);
-                  return next;
-                });
-              });
-          } else {
-            if (!edgeBase) {
-              console.warn('[AutoTag] Edge function URL not configured. Set EXPO_PUBLIC_EDGE_BASE_URL to enable auto-tagging.');
-            }
-            if (!supabaseAnonKey) {
-              console.warn('[AutoTag] Supabase anon key not found. Cannot authenticate edge function call.');
-            }
-          }
-        } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : String(error);
-          console.error(`[Library] Unexpected error importing photo ${i + 1}:`, error);
-          errors.push(`Photo ${i + 1}: ${errorMsg}`);
-          failCount++;
+        } catch (compressError) {
+          console.error(`[Library] Failed to compress photo ${i + 1}:`, compressError);
+          // Skip this photo
+          continue;
         }
       }
 
-      // Refresh assets to show newly imported photos
-      await loadAssets();
-
-      // Show results
-      if (failCount > 0 && successCount > 0) {
-        Alert.alert(
-          'Partial Import',
-          `${successCount} photo${successCount > 1 ? 's' : ''} imported successfully.\n\n${failCount} photo${failCount > 1 ? 's' : ''} failed:\n${errors.slice(0, 3).join('\n')}${errors.length > 3 ? `\n...and ${errors.length - 3} more` : ''}`,
-          [{ text: 'OK' }]
-        );
-      } else if (failCount > 0) {
-        Alert.alert(
-          'Import Failed',
-          `Could not import ${failCount} photo${failCount > 1 ? 's' : ''}:\n${errors.slice(0, 3).join('\n')}${errors.length > 3 ? `\n...and ${errors.length - 3} more` : ''}`,
-          [{ text: 'OK' }]
-        );
-      } else if (successCount > 0) {
-        // Success - no alert needed, photos are visible
-        console.log(`[Library] ✅ Successfully imported ${successCount} photo${successCount > 1 ? 's' : ''}`);
+      if (compressedImages.length === 0) {
+        Alert.alert('Error', 'No photos could be processed for import.');
+        return;
       }
+
+      // Step 2: Check for duplicates
+      console.log('[Library] Checking for duplicates...');
+      const duplicateIndices = await checkForDuplicates(userId, imageHashes.filter(h => h !== ''));
+
+      if (duplicateIndices.length > 0) {
+        // Show duplicate dialog
+        setPendingImportData({
+          assets: result.assets.slice(0, compressedImages.length),
+          hashes: imageHashes,
+          compressedImages,
+          duplicateIndices,
+        });
+        setShowDuplicateDialog(true);
+        return;
+      }
+
+      // No duplicates found, proceed with import
+      await processImport(result.assets.slice(0, compressedImages.length), compressedImages, imageHashes, false);
     } catch (error) {
       console.error('[Library] Import failed with unexpected error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       Alert.alert('Import Failed', `An unexpected error occurred: ${errorMessage}`);
-    } finally {
-      setIsImporting(false);
+      setImportProgress(prev => {
+        if (prev.imported === 0 && prev.total > 0) {
+          return { ...prev, imported: prev.total };
+        }
+        return prev;
+      });
     }
-  }, [campaignId, loadAssets, session]);
+  }, [campaignId, loadAssets, session, processImport]);
 
   // Collect all unique tags from all assets in the library
   const allLibraryTags = useMemo(() => {
@@ -576,13 +747,49 @@ export default function LibraryScreen() {
 
 
   const toggleAssetSelection = (asset: Asset) => {
+    // Enter selection mode if not already in it
+    if (!isSelectionMode) {
+      setIsSelectionMode(true);
+    }
+    
     setSelectedAssets((prev) => {
       const exists = prev.some((a) => a.id === asset.id);
       if (exists) {
+        // Deselecting
         return prev.filter((a) => a.id !== asset.id);
+      } else {
+        // Selecting
+        return [...prev, asset];
       }
-      return [...prev, asset];
     });
+  };
+
+  // Handle selection mode exit when all items are deselected
+  // Only exit if we had items selected before (not when first entering selection mode)
+  const prevSelectedCountRef = useRef(selectedAssets.length);
+  useEffect(() => {
+    const hadItemsBefore = prevSelectedCountRef.current > 0;
+    const hasNoItemsNow = selectedAssets.length === 0;
+    
+    // Only exit if we had items before and now have none (user deselected all)
+    if (isSelectionMode && hadItemsBefore && hasNoItemsNow) {
+      setIsSelectionMode(false);
+    }
+    
+    prevSelectedCountRef.current = selectedAssets.length;
+  }, [selectedAssets.length, isSelectionMode]);
+
+  const handleEnterSelectionMode = () => {
+    // Optimize: Set state immediately, haptic is handled in button
+    setIsSelectionMode(true);
+  };
+
+  const handleCancelSelection = () => {
+    // Smooth exit with haptic feedback
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Clear selection and exit mode simultaneously
+    setSelectedAssets([]);
+    setIsSelectionMode(false);
   };
 
   const openTagModal = (asset: Asset) => {
@@ -817,7 +1024,9 @@ export default function LibraryScreen() {
           onTagManagementPress={() => router.push('/tag-management')}
           onProfilePress={() => router.push('/profile')}
           selectedCount={selectedAssets.length}
-          onCancelSelection={() => setSelectedAssets([])}
+          isSelectionMode={isSelectionMode}
+          onEnterSelectionMode={handleEnterSelectionMode}
+          onCancelSelection={handleCancelSelection}
         />
       </View>
 
@@ -916,6 +1125,7 @@ export default function LibraryScreen() {
           <PhotoGrid
             assets={filteredAssets}
             selectedAssets={selectedAssets}
+            isSelectionMode={isSelectionMode}
             onToggleSelect={toggleAssetSelection}
             onOpenTagModal={openTagModal}
             onLongPress={handleLongPress}
@@ -931,7 +1141,7 @@ export default function LibraryScreen() {
         <View 
           className="border-t border-gray-100 bg-white"
           style={{
-            paddingBottom: Math.max(insets.bottom, 8),
+            paddingBottom: Math.max(insets.bottom, 8) + 80, // Extra padding for tab bar
             shadowColor: '#000',
             shadowOffset: { width: 0, height: -1 },
             shadowOpacity: 0.05,
@@ -1012,46 +1222,14 @@ export default function LibraryScreen() {
       />
 
 
-      {/* Auto-tagging completion toast */}
-      {autoTaggingComplete && (
-        <View
-          className="absolute top-20 left-4 right-4 z-50"
-          style={{
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: 0.15,
-            shadowRadius: 12,
-            elevation: 12,
-          }}
-        >
-          <View
-            className="overflow-hidden rounded-[14px] bg-white px-4 py-3"
-            style={{
-              borderWidth: 1,
-              borderColor: 'rgba(179, 143, 91, 0.2)',
-            }}
-          >
-            <View className="flex-row items-center">
-              <View
-                className="mr-3 h-8 w-8 items-center justify-center rounded-full"
-                style={{ backgroundColor: 'rgba(179, 143, 91, 0.12)' }}
-              >
-                <Text className="text-base">✨</Text>
-              </View>
-              <View className="flex-1">
-                <Text className="text-[15px] font-semibold text-gray-900">
-                  AI Tagging Complete
-                </Text>
-                <Text className="mt-0.5 text-[13px] text-gray-600">
-                  {autoTaggingComplete.count === 1 
-                    ? `${autoTaggingComplete.totalTags} ${autoTaggingComplete.totalTags === 1 ? 'tag' : 'tags'} added`
-                    : `${autoTaggingComplete.count} photos tagged`}
-                </Text>
-              </View>
-            </View>
-          </View>
-        </View>
-      )}
+      {/* Import Loading Overlay */}
+      <ImportLoadingOverlay
+        visible={isImporting}
+        totalPhotos={importProgress.total}
+        importedCount={importProgress.imported}
+        autoTaggingCount={autoTaggingAssets.size}
+        currentPhoto={importProgress.currentPhoto}
+      />
 
       {/* Menu Drawer */}
       <MenuDrawer
@@ -1059,12 +1237,43 @@ export default function LibraryScreen() {
         onClose={() => setIsMenuOpen(false)}
       />
 
-      {/* Floating Action Button - Import Photos */}
-      {supabase && (
-        <FloatingActionButton
-          icon="image-plus"
-          onPress={handleImport}
-          visible={!isImporting && selectedAssets.length === 0}
+      {/* Bottom Tab Bar */}
+      <BottomTabBar onAddPress={handleImport} />
+
+      {/* Duplicate Detection Dialog */}
+      {pendingImportData && (
+        <DuplicateDetectionDialog
+          visible={showDuplicateDialog}
+          duplicateCount={pendingImportData.duplicateIndices.length}
+          totalCount={pendingImportData.assets.length}
+          duplicatePhotos={pendingImportData.duplicateIndices.map((index) => ({
+            uri: pendingImportData.compressedImages[index]?.uri || pendingImportData.assets[index]?.uri || '',
+            index,
+          })).filter(photo => photo.uri)}
+          onProceed={async () => {
+            setShowDuplicateDialog(false);
+            await processImport(
+              pendingImportData.assets,
+              pendingImportData.compressedImages,
+              pendingImportData.hashes,
+              false // Import all including duplicates
+            );
+            setPendingImportData(null);
+          }}
+          onSkipDuplicates={async () => {
+            setShowDuplicateDialog(false);
+            await processImport(
+              pendingImportData.assets,
+              pendingImportData.compressedImages,
+              pendingImportData.hashes,
+              true // Skip duplicates
+            );
+            setPendingImportData(null);
+          }}
+          onCancel={() => {
+            setShowDuplicateDialog(false);
+            setPendingImportData(null);
+          }}
         />
       )}
     </View>

@@ -32,9 +32,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .then(({ data: { session }, error }) => {
         if (error) {
           // Handle refresh token errors gracefully
-          if (error.message?.includes('Refresh Token') || 
-              error.message?.includes('refresh_token') ||
-              error.message?.includes('Invalid Refresh Token')) {
+          const isRefreshTokenError = 
+            error.message?.includes('Refresh Token') || 
+            error.message?.includes('refresh_token') ||
+            error.message?.includes('Invalid Refresh Token') ||
+            error.message?.includes('refresh token not found') ||
+            (error as any)?.name === 'AuthApiError' && 
+            (error.message?.toLowerCase().includes('refresh') || error.message?.toLowerCase().includes('token'));
+            
+          if (isRefreshTokenError) {
             console.warn('[AuthContext] Invalid refresh token, clearing session:', error.message);
             // Clear invalid session from storage and let user sign in again
             supabase.auth.signOut().catch(() => {
@@ -52,9 +58,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
       .catch((error) => {
         // Handle AuthApiError specifically
-        if (error.message?.includes('Refresh Token') || 
-            error.message?.includes('refresh_token') ||
-            error.message?.includes('Invalid Refresh Token')) {
+        const isRefreshTokenError = 
+          error.message?.includes('Refresh Token') || 
+          error.message?.includes('refresh_token') ||
+          error.message?.includes('Invalid Refresh Token') ||
+          error.message?.includes('refresh token not found') ||
+          (error as any)?.name === 'AuthApiError' && 
+          (error.message?.toLowerCase().includes('refresh') || error.message?.toLowerCase().includes('token'));
+          
+        if (isRefreshTokenError) {
           console.warn('[AuthContext] Invalid refresh token (catch), clearing session:', error.message);
           supabase.auth.signOut().catch(() => {});
           setSession(null);
@@ -69,14 +81,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      setSession(session);
-      
-      // On first signup, initialize user data
-      if (_event === 'SIGNED_IN' && session) {
-        await initializeUserData(session.user.id);
+      try {
+        // Handle refresh token errors that might occur during automatic refresh
+        if (_event === 'TOKEN_REFRESHED' && !session) {
+          console.warn('[AuthContext] Token refresh failed - clearing session');
+          // Clear invalid session
+          try {
+            await supabase.auth.signOut();
+          } catch (signOutError) {
+            // Ignore sign out errors
+          }
+          setSession(null);
+          setLoading(false);
+          return;
+        }
+        
+        setSession(session);
+        
+        // On first signup, initialize user data
+        if (_event === 'SIGNED_IN' && session) {
+          await initializeUserData(session.user.id);
+        }
+        
+        setLoading(false);
+      } catch (error: any) {
+        // Catch any errors during auth state change (including refresh token errors)
+        const isRefreshTokenError = 
+          error?.message?.includes('Refresh Token') || 
+          error?.message?.includes('refresh_token') ||
+          error?.message?.includes('Invalid Refresh Token') ||
+          error?.message?.includes('refresh token not found') ||
+          error?.name === 'AuthApiError';
+          
+        if (isRefreshTokenError) {
+          console.warn('[AuthContext] Refresh token error in auth state change:', error.message);
+          try {
+            await supabase.auth.signOut();
+          } catch (signOutError) {
+            // Ignore sign out errors
+          }
+          setSession(null);
+        } else {
+          console.error('[AuthContext] Error in auth state change:', error);
+        }
+        setLoading(false);
       }
-      
-      setLoading(false);
     });
 
     return () => subscription.unsubscribe();

@@ -8,6 +8,8 @@ type LibraryHeaderProps = {
   onTagManagementPress?: () => void;
   onProfilePress?: () => void;
   selectedCount?: number;
+  isSelectionMode?: boolean;
+  onEnterSelectionMode?: () => void;
   onCancelSelection?: () => void;
 };
 
@@ -16,10 +18,11 @@ export function LibraryHeader({
   onTagManagementPress, 
   onProfilePress,
   selectedCount = 0,
+  isSelectionMode = false,
+  onEnterSelectionMode,
   onCancelSelection,
 }: LibraryHeaderProps) {
   const insets = useSafeAreaInsets();
-  const isSelecting = selectedCount > 0;
 
   return (
     <View 
@@ -37,10 +40,10 @@ export function LibraryHeader({
       {/* Main title and actions - Apple-style compact header */}
       <View className="mb-3 flex-row items-center justify-between">
         <View className="flex-1">
-          {isSelecting ? (
+          {isSelectionMode ? (
             <View className="flex-row items-center">
               <Text className="text-[22px] font-semibold text-gray-900" style={{ letterSpacing: -0.4 }}>
-                {selectedCount} {selectedCount === 1 ? 'Photo' : 'Photos'}
+                {selectedCount === 0 ? 'Select Items' : `${selectedCount} ${selectedCount === 1 ? 'Photo' : 'Photos'}`}
               </Text>
             </View>
           ) : (
@@ -51,7 +54,7 @@ export function LibraryHeader({
         </View>
         
         {/* Action buttons - Right aligned, contextual */}
-        {isSelecting ? (
+        {isSelectionMode ? (
           // Selection mode: Show Cancel
           <TouchableOpacity
             onPress={onCancelSelection}
@@ -62,8 +65,39 @@ export function LibraryHeader({
             </Text>
           </TouchableOpacity>
         ) : (
-          // Normal mode: Show menu button only
+          // Normal mode: Show Select and Menu buttons
           <View className="flex-row items-center gap-2">
+            {/* Select button - Apple-style prominent CTA */}
+            {onEnterSelectionMode && (
+              <TouchableOpacity
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  // Call immediately without delay
+                  onEnterSelectionMode();
+                }}
+                activeOpacity={0.7}
+                style={{
+                  backgroundColor: '#b38f5b',
+                  paddingHorizontal: 16,
+                  paddingVertical: 8,
+                  borderRadius: 20,
+                  shadowColor: '#b38f5b',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.2,
+                  shadowRadius: 4,
+                  elevation: 3,
+                }}
+              >
+                <Text 
+                  className="text-[16px] font-semibold text-white" 
+                  style={{ 
+                    letterSpacing: -0.2,
+                  }}
+                >
+                  Select
+                </Text>
+              </TouchableOpacity>
+            )}
             {/* Menu button - Hamburger menu */}
             {onMenuPress && (
               <TouchableOpacity

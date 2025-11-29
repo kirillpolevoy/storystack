@@ -55,3 +55,4 @@ eas build --platform ios --profile production
 - The icon appears on the home screen after rebuilding and installing
 - For TestFlight/App Store, the icon must be included in the build submitted to Apple
 
+

@@ -22,3 +22,4 @@ $$;
 -- Grant execute permission to authenticated users
 GRANT EXECUTE ON FUNCTION delete_auth_user(UUID) TO authenticated;
 
+

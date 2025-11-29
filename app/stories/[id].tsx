@@ -10,6 +10,7 @@ import { StoryWithAssets, Asset } from '@/types';
 import { getStoryById, updateStory, deleteStory, removeAssetFromStory, reorderStoryAssets } from '@/utils/stories';
 import { exportStorySequence } from '@/utils/exportStory';
 import { MenuDrawer } from '@/components/MenuDrawer';
+import { BottomTabBar } from '@/components/BottomTabBar';
 import * as Haptics from 'expo-haptics';
 
 export default function StoryDetailScreen() {
@@ -355,6 +356,24 @@ export default function StoryDetailScreen() {
         }}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+          <TouchableOpacity
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.back();
+            }}
+            activeOpacity={0.6}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: 'rgba(179, 143, 91, 0.1)',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginRight: 12,
+            }}
+          >
+            <MaterialCommunityIcons name="arrow-left" size={20} color="#b38f5b" />
+          </TouchableOpacity>
           <View style={{ flex: 1 }}>
             <Text
               style={{
@@ -528,7 +547,7 @@ export default function StoryDetailScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={{
             paddingTop: 12,
-            paddingBottom: Math.max(insets.bottom + 20, 40),
+            paddingBottom: Math.max(insets.bottom + 20, 40) + 80, // Extra padding for tab bar
           }}
           showsVerticalScrollIndicator={false}
           ListFooterComponent={
@@ -742,6 +761,9 @@ export default function StoryDetailScreen() {
 
       {/* Menu Drawer */}
       <MenuDrawer visible={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
+
+      {/* Bottom Tab Bar */}
+      <BottomTabBar onAddPress={() => router.push('/')} />
     </View>
   );
 }

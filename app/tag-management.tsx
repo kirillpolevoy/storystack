@@ -25,8 +25,8 @@ import { TagVocabulary } from '@/types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { TagHeader } from '@/components/TagHeader';
 import { TagListCard } from '@/components/TagListCard';
-import { FloatingActionButton } from '@/components/FloatingActionButton';
 import { MenuDrawer } from '@/components/MenuDrawer';
+import { BottomTabBar } from '@/components/BottomTabBar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const TAG_STORAGE_KEY = '@storystack:tags';
@@ -1258,7 +1258,11 @@ export default function TagManagementScreen() {
   return (
     <View className="flex-1 bg-background">
       {/* Header */}
-      <TagHeader onMenuPress={() => setIsMenuOpen(true)} />
+      <TagHeader 
+        onMenuPress={() => setIsMenuOpen(true)}
+        onAddPress={openNewTagModal}
+        showAddButton={!isLoading && tags.length > 0}
+      />
       
       {/* Menu Drawer */}
       <MenuDrawer visible={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
@@ -1318,7 +1322,7 @@ export default function TagManagementScreen() {
           className="flex-1"
           contentContainerStyle={{ 
             paddingTop: 16,
-            paddingBottom: Math.max(insets.bottom + 100, 120) 
+            paddingBottom: Math.max(insets.bottom + 100, 120) + 80 // Extra padding for tab bar
           }}
           showsVerticalScrollIndicator={true}
         >
@@ -1417,13 +1421,6 @@ export default function TagManagementScreen() {
           )}
         </ScrollView>
       )}
-
-      {/* Floating Action Button - Add Tag */}
-      <FloatingActionButton
-        icon="tag-plus"
-        onPress={openNewTagModal}
-        visible={!isLoading}
-      />
 
       {/* New Tag Modal - Simple, reliable keyboard-aware implementation */}
       <Modal
@@ -1704,6 +1701,9 @@ export default function TagManagementScreen() {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      {/* Bottom Tab Bar */}
+      <BottomTabBar onAddPress={() => router.push('/')} />
     </View>
   );
 }

@@ -15,11 +15,18 @@ import * as ImagePicker from 'expo-image-picker';
 import dayjs from 'dayjs';
 import { supabase } from '@/lib/supabase';
 import { Asset, Campaign, TagVocabulary, BASE_TAGS, BRAND_TAGS } from '@/types';
+import { queueAutoTag } from '@/utils/autoTagQueue';
+import { compressImageForUpload } from '@/utils/compressImage';
 import { TagFilterBar } from '@/components/TagFilterBar';
+import { ImportLoadingOverlay } from '@/components/ImportLoadingOverlay';
 import { TagModal } from '@/components/TagModal';
 import { MenuDrawer } from '@/components/MenuDrawer';
 import { getAllAvailableTags } from '@/utils/getAllAvailableTags';
 import * as Haptics from 'expo-haptics';
+import { computeImageHash, checkForDuplicates } from '@/utils/duplicateDetection';
+import { DuplicateDetectionDialog } from '@/components/DuplicateDetectionDialog';
+import * as ImageManipulator from 'expo-image-manipulator';
+import type { ImagePickerAsset } from 'expo-image-picker';
 
 const fallbackCampaign: Campaign = {
   id: 'fallback',
@@ -47,10 +54,19 @@ export default function CampaignDetailScreen() {
   const [assets, setAssets] = useState<Asset[]>(fallbackAssets);
   const [isLoading, setIsLoading] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState({ total: 0, imported: 0, currentPhoto: 0 });
+  const [autoTaggingAssets, setAutoTaggingAssets] = useState<Set<string>>(new Set());
   const [selectedTags, setSelectedTags] = useState<TagVocabulary[]>([]);
   const [activeAsset, setActiveAsset] = useState<Asset | null>(null);
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
   const [allAvailableTags, setAllAvailableTags] = useState<TagVocabulary[]>([]);
+  const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
+  const [pendingImportData, setPendingImportData] = useState<{
+    assets: ImagePickerAsset[];
+    hashes: string[];
+    compressedImages: Array<{ uri: string; width: number; height: number; size: number }>;
+    duplicateIndices: number[];
+  } | null>(null);
 
   const loadCampaign = useCallback(async () => {
     if (!campaignId) {
@@ -133,6 +149,155 @@ export default function CampaignDetailScreen() {
     }
   }, [isTagModalOpen]);
 
+  const processImport = useCallback(async (
+    assetsToImport: ImagePickerAsset[],
+    compressedImages: Array<{ uri: string; width: number; height: number; size: number }>,
+    imageHashes: string[],
+    skipDuplicates: boolean
+  ) => {
+    if (!campaignId || !supabase) {
+      return;
+    }
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      Alert.alert('Error', 'You must be signed in to import photos.');
+      return;
+    }
+    const userId = user.id;
+
+    setIsImporting(true);
+    setImportProgress({ total: assetsToImport.length, imported: 0, currentPhoto: 0 });
+
+    for (let i = 0; i < assetsToImport.length; i++) {
+      // Skip duplicates if user chose to skip them
+      if (skipDuplicates && pendingImportData?.duplicateIndices.includes(i)) {
+        console.log(`[CampaignDetail] Skipping duplicate photo ${i + 1}`);
+        continue;
+      }
+
+      const compressedImage = compressedImages[i];
+      
+      try {
+        setImportProgress(prev => ({ ...prev, currentPhoto: i + 1 }));
+        console.log('[CampaignDetail] Compressing image to ensure under 5MB...');
+        
+        const arrayBuffer = await fetch(compressedImage.uri).then((res) => res.arrayBuffer());
+
+        const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const fileName = `${uniqueSuffix}.jpg`;
+        const filePath = `users/${userId}/campaigns/${campaignId}/${fileName}`;
+
+        const { error: uploadError } = await supabase.storage.from('assets').upload(filePath, arrayBuffer, {
+          contentType: 'image/jpeg',
+          upsert: false,
+        });
+        if (uploadError) {
+          throw uploadError;
+        }
+
+        const insertData: any = {
+          user_id: userId,
+          campaign_id: campaignId,
+          storage_path: filePath,
+          source: 'local',
+          tags: [],
+        };
+
+        // Add file_hash if available
+        const hash = imageHashes[i];
+        if (hash) {
+          insertData.file_hash = hash;
+        }
+
+        const { data: inserted, error: insertError } = await supabase
+          .from('assets')
+          .insert(insertData)
+          .select('*')
+          .single();
+
+        if (insertError) {
+          // If error is due to file_hash column not existing, try without it
+          if (insertError.message?.includes('column') && insertError.message?.includes('file_hash')) {
+            const { data: retryInserted, error: retryError } = await supabase
+              .from('assets')
+              .insert({
+                user_id: userId,
+                campaign_id: campaignId,
+                storage_path: filePath,
+                source: 'local',
+                tags: [],
+              })
+              .select('*')
+              .single();
+
+            if (retryError) {
+              throw retryError;
+            }
+
+            setImportProgress(prev => ({ ...prev, imported: prev.imported + 1 }));
+            
+            const edgeBase = process.env.EXPO_PUBLIC_EDGE_BASE_URL;
+            if (edgeBase && retryInserted) {
+              const publicUrl = supabase.storage.from('assets').getPublicUrl(filePath).data.publicUrl;
+              setAutoTaggingAssets((prev) => new Set(prev).add(retryInserted.id));
+              queueAutoTag(retryInserted.id, publicUrl, {
+                onSuccess: async (result) => {
+                  setAutoTaggingAssets((prev) => {
+                    const next = new Set(prev);
+                    next.delete(retryInserted.id);
+                    return next;
+                  });
+                  await loadCampaign();
+                },
+                onError: (error) => {
+                  setAutoTaggingAssets((prev) => {
+                    const next = new Set(prev);
+                    next.delete(retryInserted.id);
+                    return next;
+                  });
+                },
+              });
+            }
+            continue;
+          }
+          throw insertError;
+        }
+
+        setImportProgress(prev => ({ ...prev, imported: prev.imported + 1 }));
+
+        const edgeBase = process.env.EXPO_PUBLIC_EDGE_BASE_URL;
+        if (edgeBase && inserted) {
+          const publicUrl = supabase.storage.from('assets').getPublicUrl(filePath).data.publicUrl;
+          setAutoTaggingAssets((prev) => new Set(prev).add(inserted.id));
+          queueAutoTag(inserted.id, publicUrl, {
+            onSuccess: async (result) => {
+              setAutoTaggingAssets((prev) => {
+                const next = new Set(prev);
+                next.delete(inserted.id);
+                return next;
+              });
+              await loadCampaign();
+            },
+            onError: (error) => {
+              setAutoTaggingAssets((prev) => {
+                const next = new Set(prev);
+                next.delete(inserted.id);
+                return next;
+              });
+            },
+          });
+        }
+      } catch (error) {
+        console.error('[CampaignDetail] Error importing photo:', error);
+        Alert.alert('Import failed', 'We could not import one or more photos.');
+      }
+    }
+
+    await loadCampaign();
+    setIsImporting(false);
+  }, [campaignId, loadCampaign, pendingImportData]);
+
   const handleImport = useCallback(async () => {
     if (!campaignId) {
       Alert.alert('Missing campaign', 'Cannot import without a campaign.');
@@ -145,7 +310,6 @@ export default function CampaignDetailScreen() {
     }
 
     try {
-      setIsImporting(true);
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsMultipleSelection: true,
@@ -157,82 +321,98 @@ export default function CampaignDetailScreen() {
         return;
       }
 
-      // Get current user ID
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         Alert.alert('Error', 'You must be signed in to import photos.');
-        setIsImporting(false);
         return;
       }
       const userId = user.id;
 
-      for (const pickerAsset of result.assets) {
-        const extension = pickerAsset.uri.split('.').pop() ?? 'jpg';
-        const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const fileName = `${uniqueSuffix}.${extension}`;
-        // Update storage path to include user_id
-        const filePath = `users/${userId}/campaigns/${campaignId}/${fileName}`;
+      // Process and compress all images
+      console.log('[CampaignDetail] Processing images for duplicate detection...');
+      const compressedImages: Array<{ uri: string; width: number; height: number; size: number }> = [];
+      const imageHashes: string[] = [];
 
-        const arrayBuffer = await fetch(pickerAsset.uri).then((res) => res.arrayBuffer());
+      for (let i = 0; i < result.assets.length; i++) {
+        const pickerAsset = result.assets[i];
+        
+        // Convert unsupported formats if needed
+        let imageUri = pickerAsset.uri;
+        const uriParts = pickerAsset.uri.split('.');
+        const hasExtension = uriParts.length > 1 && uriParts[uriParts.length - 1].length > 0;
+        const rawExtension = hasExtension ? uriParts[uriParts.length - 1].toLowerCase() : null;
+        let extension = rawExtension ?? 'jpg';
+        let mimeType = pickerAsset.mimeType ?? 'image/jpeg';
 
-        const { error: uploadError } = await supabase.storage.from('assets').upload(filePath, arrayBuffer, {
-          contentType: pickerAsset.mimeType ?? 'image/jpeg',
-          upsert: false,
-        });
-        if (uploadError) {
-          throw uploadError;
+        const unsupportedFormats = ['heic', 'heif', 'hevc'];
+        const supportedFormats = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+        const isUnsupportedFormat = 
+          unsupportedFormats.includes(extension) || 
+          mimeType?.toLowerCase().includes('heic') || 
+          mimeType?.toLowerCase().includes('heif') ||
+          !hasExtension ||
+          (!supportedFormats.includes(extension) && mimeType && !mimeType.includes('jpeg') && !mimeType.includes('jpg') && !mimeType.includes('png') && !mimeType.includes('gif') && !mimeType.includes('webp'));
+
+        if (isUnsupportedFormat) {
+          try {
+            const manipulatedImage = await ImageManipulator.manipulateAsync(
+              pickerAsset.uri,
+              [],
+              { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
+            );
+            imageUri = manipulatedImage.uri;
+          } catch (convertError) {
+            console.error(`[CampaignDetail] Failed to convert photo ${i + 1}:`, convertError);
+          }
         }
 
-        const { data: inserted, error: insertError } = await supabase
-          .from('assets')
-          .insert({
-            user_id: userId,
-            campaign_id: campaignId,
-            storage_path: filePath,
-            source: 'local',
-            tags: [],
-          })
-          .select('*')
-          .single();
+        // Compress image
+        try {
+          const compressed = await compressImageForUpload(imageUri);
+          compressedImages.push(compressed);
 
-        if (insertError) {
-          throw insertError;
-        }
-
-        const edgeBase = process.env.EXPO_PUBLIC_EDGE_BASE_URL;
-        const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-        if (edgeBase && inserted && supabaseAnonKey) {
-          const publicUrl = supabase.storage.from('assets').getPublicUrl(filePath).data.publicUrl;
-          fetch(`${edgeBase}/auto_tag_asset`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${supabaseAnonKey}`,
-            },
-            body: JSON.stringify({ assetId: inserted.id, imageUrl: publicUrl }),
-          })
-            .then(async (res) => {
-              if (res.ok) {
-                const result = await res.json();
-                console.log('[AutoTag] Success! Tags:', result.tags);
-                await loadCampaign();
-              } else {
-                const errorText = await res.text();
-                console.error('[AutoTag] Edge function error:', res.status, errorText);
-              }
-            })
-            .catch((err) => console.warn('[AutoTag] Edge request failed', err));
+          // Compute hash
+          try {
+            const hash = await computeImageHash(compressed.uri);
+            imageHashes.push(hash);
+          } catch (hashError) {
+            console.warn(`[CampaignDetail] Failed to compute hash for photo ${i + 1}:`, hashError);
+            imageHashes.push('');
+          }
+        } catch (compressError) {
+          console.error(`[CampaignDetail] Failed to compress photo ${i + 1}:`, compressError);
+          continue;
         }
       }
 
-      await loadCampaign();
+      if (compressedImages.length === 0) {
+        Alert.alert('Error', 'No photos could be processed for import.');
+        return;
+      }
+
+      // Check for duplicates
+      console.log('[CampaignDetail] Checking for duplicates...');
+      const duplicateIndices = await checkForDuplicates(userId, imageHashes.filter(h => h !== ''));
+
+      if (duplicateIndices.length > 0) {
+        setPendingImportData({
+          assets: result.assets.slice(0, compressedImages.length),
+          hashes: imageHashes,
+          compressedImages,
+          duplicateIndices,
+        });
+        setShowDuplicateDialog(true);
+        return;
+      }
+
+      // No duplicates, proceed with import
+      await processImport(result.assets.slice(0, compressedImages.length), compressedImages, imageHashes, false);
     } catch (error) {
       console.error('[CampaignDetail] import failed', error);
       Alert.alert('Import failed', 'We could not import one or more photos.');
-    } finally {
       setIsImporting(false);
     }
-  }, [campaignId, loadCampaign]);
+  }, [campaignId, loadCampaign, processImport]);
 
   const headerTitle = campaign?.name ?? `Campaign ${campaignId?.slice(0, 6) ?? ''}`;
 
@@ -440,6 +620,52 @@ export default function CampaignDetailScreen() {
         onUpdateTags={updateTags}
         allAvailableTags={allAvailableTags}
       />
+
+      {/* Import Loading Overlay */}
+      <ImportLoadingOverlay
+        visible={isImporting}
+        totalPhotos={importProgress.total}
+        importedCount={importProgress.imported}
+        autoTaggingCount={autoTaggingAssets.size}
+        currentPhoto={importProgress.currentPhoto}
+      />
+
+      {/* Duplicate Detection Dialog */}
+      {pendingImportData && (
+        <DuplicateDetectionDialog
+          visible={showDuplicateDialog}
+          duplicateCount={pendingImportData.duplicateIndices.length}
+          totalCount={pendingImportData.assets.length}
+          duplicatePhotos={pendingImportData.duplicateIndices.map((index) => ({
+            uri: pendingImportData.compressedImages[index]?.uri || pendingImportData.assets[index]?.uri || '',
+            index,
+          })).filter(photo => photo.uri)}
+          onProceed={async () => {
+            setShowDuplicateDialog(false);
+            await processImport(
+              pendingImportData.assets,
+              pendingImportData.compressedImages,
+              pendingImportData.hashes,
+              false
+            );
+            setPendingImportData(null);
+          }}
+          onSkipDuplicates={async () => {
+            setShowDuplicateDialog(false);
+            await processImport(
+              pendingImportData.assets,
+              pendingImportData.compressedImages,
+              pendingImportData.hashes,
+              true
+            );
+            setPendingImportData(null);
+          }}
+          onCancel={() => {
+            setShowDuplicateDialog(false);
+            setPendingImportData(null);
+          }}
+        />
+      )}
     </View>
   );
 }

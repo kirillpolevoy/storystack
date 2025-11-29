@@ -8,13 +8,13 @@ import { supabase } from '@/lib/supabase';
 import dayjs from 'dayjs';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { MenuDrawer } from '@/components/MenuDrawer';
+import { BottomTabBar } from '@/components/BottomTabBar';
 import * as Haptics from 'expo-haptics';
 
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, signOut, session, deleteAccount } = useAuth();
-  const [isSigningOut, setIsSigningOut] = useState(false);
+  const { user, session, deleteAccount } = useAuth();
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
@@ -253,29 +253,6 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleSignOut = async () => {
-    Alert.alert(
-      'Sign Out',
-      'Are you sure you want to sign out?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Sign Out',
-          style: 'destructive',
-          onPress: async () => {
-            setIsSigningOut(true);
-            try {
-              await signOut();
-            } catch (error) {
-              Alert.alert('Error', 'Failed to sign out. Please try again.');
-            } finally {
-              setIsSigningOut(false);
-            }
-          },
-        },
-      ]
-    );
-  };
 
   const handleDeleteAccount = async () => {
     Alert.alert(
@@ -441,7 +418,7 @@ export default function ProfileScreen() {
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{
-          paddingBottom: Math.max(insets.bottom, 40),
+          paddingBottom: Math.max(insets.bottom, 40) + 80, // Extra padding for tab bar
         }}
         showsVerticalScrollIndicator={false}
       >
@@ -579,37 +556,6 @@ export default function ProfileScreen() {
               </Text>
             </View>
           </View>
-        </View>
-
-        {/* Sign Out Section */}
-        <View className="mx-5 mb-6">
-          <TouchableOpacity
-            onPress={handleSignOut}
-            disabled={isSigningOut}
-            activeOpacity={0.85}
-            className="w-full rounded-2xl py-4"
-            style={{
-              backgroundColor: isSigningOut ? '#e5e7eb' : '#ef4444',
-              shadowColor: isSigningOut ? 'transparent' : '#ef4444',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: isSigningOut ? 0 : 0.15,
-              shadowRadius: 8,
-              elevation: isSigningOut ? 0 : 3,
-            }}
-          >
-            {isSigningOut ? (
-              <View className="flex-row items-center justify-center">
-                <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 8 }} />
-                <Text className="text-[17px] font-semibold text-white" style={{ letterSpacing: -0.2 }}>
-                  Signing Out...
-                </Text>
-              </View>
-            ) : (
-              <Text className="text-center text-[17px] font-semibold text-white" style={{ letterSpacing: -0.2 }}>
-                Sign Out
-              </Text>
-            )}
-          </TouchableOpacity>
         </View>
 
         {/* App Info */}
@@ -825,6 +771,9 @@ export default function ProfileScreen() {
           </KeyboardAvoidingView>
         </Animated.View>
       </Modal>
+
+      {/* Bottom Tab Bar - Outside ScrollView to prevent glitching */}
+      <BottomTabBar onAddPress={() => router.push('/')} />
     </View>
   );
 }

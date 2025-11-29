@@ -3,8 +3,8 @@
 ## Pre-Deployment
 
 ### ✅ Build Numbers Updated
-- iOS build number: **9** (incremented from 8)
-- Android version code: **8** (incremented from 7)
+- iOS build number: **9**
+- Android version code: **9**
 - App version: **1.1.0**
 
 ### ✅ Key Features Ready

@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef } from 'react';
-import { ActivityIndicator, Animated, Dimensions, FlatList, RefreshControl, Text, TouchableOpacity, View } from 'react-native';
+import { useCallback } from 'react';
+import { ActivityIndicator, Dimensions, FlatList, RefreshControl, Text, TouchableOpacity, View } from 'react-native';
 import { Image } from 'expo-image';
+import * as Haptics from 'expo-haptics';
 import { Asset } from '@/types';
 
 type PhotoGridProps = {
   assets: Asset[];
   selectedAssets: Asset[];
+  isSelectionMode?: boolean;
   onToggleSelect: (asset: Asset) => void;
   onOpenTagModal: (asset: Asset) => void;
   onLongPress?: (asset: Asset) => void;
@@ -33,143 +35,37 @@ function PhotoTile({
   isAutoTagging?: boolean;
   isMultiSelectMode: boolean;
 }) {
-  const scaleAnim = useRef(new Animated.Value(1)).current;
-  const opacityAnim = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.spring(scaleAnim, {
-        toValue: isSelected ? 0.95 : 1,
-        useNativeDriver: true,
-        tension: 300,
-        friction: 20,
-      }),
-      Animated.timing(opacityAnim, {
-        toValue: isSelected ? 0.9 : 1,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [isSelected]);
-
   const handlePress = () => {
-    // Apple Photos behavior:
-    // - If NOT in multi-select mode: tap opens photo
-    // - If IN multi-select mode: tap toggles selection
     if (isMultiSelectMode) {
-      // In multi-select mode: toggle selection
-      Animated.sequence([
-        Animated.parallel([
-          Animated.spring(scaleAnim, {
-            toValue: 0.92,
-            useNativeDriver: true,
-            tension: 300,
-            friction: 10,
-          }),
-          Animated.timing(opacityAnim, {
-            toValue: 0.85,
-            duration: 100,
-            useNativeDriver: true,
-          }),
-        ]),
-        Animated.parallel([
-          Animated.spring(scaleAnim, {
-            toValue: isSelected ? 0.95 : 1,
-            useNativeDriver: true,
-            tension: 300,
-            friction: 20,
-          }),
-          Animated.timing(opacityAnim, {
-            toValue: isSelected ? 0.9 : 1,
-            duration: 150,
-            useNativeDriver: true,
-          }),
-        ]),
-      ]).start();
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       onToggleSelect(asset);
     } else {
-      // Not in multi-select mode: open photo
-      Animated.sequence([
-        Animated.parallel([
-          Animated.spring(scaleAnim, {
-            toValue: 0.92,
-            useNativeDriver: true,
-            tension: 300,
-            friction: 10,
-          }),
-          Animated.timing(opacityAnim, {
-            toValue: 0.85,
-            duration: 100,
-            useNativeDriver: true,
-          }),
-        ]),
-        Animated.parallel([
-          Animated.spring(scaleAnim, {
-            toValue: 1,
-            useNativeDriver: true,
-            tension: 300,
-            friction: 20,
-          }),
-          Animated.timing(opacityAnim, {
-            toValue: 1,
-            duration: 150,
-            useNativeDriver: true,
-          }),
-        ]),
-      ]).start();
       onOpenTagModal(asset);
     }
   };
 
-  const handleLongPress = () => {
-    // Long press enables multi-select mode (selects this photo)
-    // In Apple Photos, long press always enables multi-select
-    Animated.sequence([
-      Animated.parallel([
-        Animated.spring(scaleAnim, {
-          toValue: 0.92,
-          useNativeDriver: true,
-          tension: 300,
-          friction: 10,
-        }),
-        Animated.timing(opacityAnim, {
-          toValue: 0.85,
-          duration: 100,
-          useNativeDriver: true,
-        }),
-      ]),
-      Animated.parallel([
-        Animated.spring(scaleAnim, {
-          toValue: isSelected ? 0.95 : 1,
-          useNativeDriver: true,
-          tension: 300,
-          friction: 20,
-        }),
-        Animated.timing(opacityAnim, {
-          toValue: isSelected ? 0.9 : 1,
-          duration: 150,
-          useNativeDriver: true,
-        }),
-      ]),
-    ]).start();
-    onToggleSelect(asset);
+  const handleLongPressAction = () => {
+    if (onLongPress) {
+      onLongPress(asset);
+    } else {
+      onToggleSelect(asset);
+    }
   };
 
   return (
-    <Animated.View
+    <View
       style={{
         flex: 1,
         aspectRatio: 1,
         margin: 1.5,
-        transform: [{ scale: scaleAnim }],
-        opacity: opacityAnim,
+        opacity: isMultiSelectMode && isSelected ? 0.7 : 1,
       }}
     >
       <TouchableOpacity
         onPress={handlePress}
-        onLongPress={handleLongPress}
+        onLongPress={handleLongPressAction}
         className="relative h-full w-full overflow-hidden rounded-2xl"
-        activeOpacity={1}
+        activeOpacity={0.8}
       >
         {asset.publicUrl ? (
           <Image 
@@ -189,30 +85,16 @@ function PhotoTile({
           </View>
         )}
 
-        {/* Selection overlay - refined Apple-style */}
-        {isSelected && (
-          <>
-            <View 
-              className="absolute inset-0 rounded-2xl"
-              style={{ 
-                backgroundColor: 'rgba(179, 143, 91, 0.08)',
-                borderWidth: 2.5,
-                borderColor: '#b38f5b',
-                zIndex: 1,
-              }}
-            />
-            {/* Subtle inner glow for depth */}
-            <View 
-              className="absolute inset-0 rounded-2xl"
-              style={{ 
-                backgroundColor: 'rgba(179, 143, 91, 0.03)',
-                borderWidth: 1,
-                borderColor: 'rgba(179, 143, 91, 0.2)',
-                zIndex: 2,
-                margin: 2,
-              }}
-            />
-          </>
+        {/* Selection border */}
+        {isMultiSelectMode && isSelected && (
+          <View 
+            className="absolute inset-0 rounded-2xl"
+            style={{ 
+              borderWidth: 3,
+              borderColor: '#b38f5b',
+              zIndex: 1,
+            }}
+          />
         )}
 
         {/* Auto-tagging indicator */}
@@ -249,49 +131,31 @@ function PhotoTile({
           </View>
         )}
 
-        {/* Selection indicator - refined Apple-style */}
-        {isSelected && !isAutoTagging && (
+        {/* Selection checkmark */}
+        {isMultiSelectMode && (
           <View 
-            className="absolute right-2.5 top-2.5 h-7 w-7 items-center justify-center rounded-full"
+            className="absolute right-2 top-2 h-7 w-7 items-center justify-center rounded-full"
             style={{
-              backgroundColor: '#b38f5b',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.25,
-              shadowRadius: 4,
-              elevation: 3,
-              zIndex: 4,
+              backgroundColor: isSelected ? '#b38f5b' : 'rgba(0, 0, 0, 0.3)',
+              zIndex: 2,
             }}
           >
-            {/* Inner white circle for depth */}
-            <View 
-              className="absolute inset-0.5 rounded-full"
-              style={{
-                backgroundColor: 'rgba(255, 255, 255, 0.2)',
-                borderWidth: 0.5,
-                borderColor: 'rgba(255, 255, 255, 0.3)',
-              }}
-            />
-            <Text 
-              className="text-[14px] font-bold text-white" 
-              style={{ 
-                textShadowColor: 'rgba(0, 0, 0, 0.2)',
-                textShadowOffset: { width: 0, height: 0.5 },
-                textShadowRadius: 1,
-              }}
-            >
-              ✓
-            </Text>
+            {isSelected && (
+              <Text className="text-[14px] font-bold text-white">
+                ✓
+              </Text>
+            )}
           </View>
         )}
       </TouchableOpacity>
-    </Animated.View>
+    </View>
   );
 }
 
 export function PhotoGrid({
   assets,
   selectedAssets,
+  isSelectionMode = false,
   onToggleSelect,
   onOpenTagModal,
   onLongPress,
@@ -303,7 +167,7 @@ export function PhotoGrid({
     ({ item }: { item: Asset }) => {
       const isSelected = selectedAssets.some((asset) => asset.id === item.id);
       const isAutoTagging = autoTaggingAssets.has(item.id);
-      const isMultiSelectMode = selectedAssets.length > 0;
+      const isMultiSelectMode = isSelectionMode;
       return (
         <PhotoTile 
           asset={item} 
@@ -316,7 +180,7 @@ export function PhotoGrid({
         />
       );
     },
-    [selectedAssets, onToggleSelect, onOpenTagModal, onLongPress, autoTaggingAssets],
+    [selectedAssets, isSelectionMode, onToggleSelect, onOpenTagModal, onLongPress, autoTaggingAssets],
   );
 
   return (
@@ -325,7 +189,7 @@ export function PhotoGrid({
       renderItem={renderItem}
       keyExtractor={keyExtractor}
       numColumns={3}
-      contentContainerStyle={{ padding: 3, paddingBottom: 100 }}
+      contentContainerStyle={{ padding: 3, paddingBottom: 180 }} // Extra padding for tab bar
       columnWrapperStyle={{ paddingHorizontal: 1.5 }}
       showsVerticalScrollIndicator={true}
       refreshing={refreshing}

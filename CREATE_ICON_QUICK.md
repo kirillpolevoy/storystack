@@ -49,3 +49,4 @@ no text, solid background, professional --ar 1:1 --v 6
    ```
 3. The new icon will appear after rebuilding!
 
+

@@ -9,7 +9,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { StoryWithAssets } from '@/types';
 import { getStories, deleteStory } from '@/utils/stories';
 import { MenuDrawer } from '@/components/MenuDrawer';
-import { FloatingActionButton } from '@/components/FloatingActionButton';
+import { BottomTabBar } from '@/components/BottomTabBar';
 import * as Haptics from 'expo-haptics';
 
 export default function StoriesScreen() {
@@ -285,6 +285,7 @@ export default function StoriesScreen() {
           shadowOpacity: 0.05,
           shadowRadius: 4,
           elevation: 2,
+          zIndex: 1000,
         }}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -298,23 +299,58 @@ export default function StoriesScreen() {
           >
             Stories
           </Text>
-          <TouchableOpacity
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              setIsMenuOpen(true);
-            }}
-            activeOpacity={0.6}
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 18,
-              backgroundColor: 'rgba(179, 143, 91, 0.1)',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <MaterialCommunityIcons name="menu" size={20} color="#b38f5b" />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {!isLoading && filteredStories.length > 0 && (
+              <TouchableOpacity
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  router.push({
+                    pathname: '/story-builder',
+                    params: {},
+                  } as any);
+                }}
+                activeOpacity={0.7}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  backgroundColor: '#b38f5b',
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                  borderRadius: 20,
+                  marginRight: 8,
+                }}
+              >
+                <MaterialCommunityIcons name="plus" size={16} color="#ffffff" style={{ marginRight: 6 }} />
+                <Text
+                  style={{
+                    fontSize: 15,
+                    fontWeight: '600',
+                    color: '#ffffff',
+                    letterSpacing: -0.2,
+                  }}
+                >
+                  Create
+                </Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setIsMenuOpen(true);
+              }}
+              activeOpacity={0.6}
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 18,
+                backgroundColor: 'rgba(179, 143, 91, 0.1)',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <MaterialCommunityIcons name="menu" size={20} color="#b38f5b" />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Search Bar - Refined */}
@@ -326,6 +362,7 @@ export default function StoriesScreen() {
             borderRadius: 14,
             paddingHorizontal: 16,
             paddingVertical: 12,
+            marginTop: 12, // Add spacing between title row and search bar
           }}
         >
           <MaterialCommunityIcons name="magnify" size={20} color="#8e8e93" style={{ marginRight: 10 }} />
@@ -492,29 +529,19 @@ export default function StoriesScreen() {
             renderItem={renderStoryItem}
             keyExtractor={(item) => item.id}
             contentContainerStyle={{
-              paddingTop: 8,
-              paddingBottom: Math.max(insets.bottom + 100, 120),
+              paddingTop: 16, // Increased padding between search bar and content
+              paddingBottom: Math.max(insets.bottom + 100, 120) + 80, // Extra padding for tab bar
             }}
             showsVerticalScrollIndicator={false}
-          />
-          
-          {/* Floating Action Button - Create Story */}
-          <FloatingActionButton
-            icon="plus"
-            onPress={() => {
-              // Navigate to empty story builder, which will show empty state
-              router.push({
-                pathname: '/story-builder',
-                params: {},
-              } as any);
-            }}
-            visible={!searchQuery}
           />
         </>
       )}
 
       {/* Menu Drawer */}
       <MenuDrawer visible={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
+
+      {/* Bottom Tab Bar */}
+      <BottomTabBar onAddPress={() => router.push('/')} />
     </View>
   );
 }
