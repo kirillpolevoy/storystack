@@ -174,24 +174,31 @@ export default function LibraryScreen() {
 
     const userId = session.user.id;
 
-    // Parallelize initialization: load campaign and tags simultaneously
+    // Optimized initialization: load campaign first (blocking), then tags (non-blocking)
     const initializeData = async () => {
       try {
-        // Load campaign and tags in parallel for faster initialization
-        const [campaignIdResult, tagsResult] = await Promise.all([
-          getDefaultCampaignId(userId),
-          getAllAvailableTags(userId),
-        ]);
+        // Load campaign first (required for assets)
+        const campaignIdResult = await getDefaultCampaignId(userId);
 
         if (campaignIdResult) {
           setCampaignId(campaignIdResult);
         } else {
           console.error('[LibraryScreen] Failed to initialize campaign: No campaign ID returned');
           setIsLoading(false);
+          return;
         }
 
-        // Set tags immediately (don't wait for campaign)
-        setAllAvailableTags(tagsResult);
+        // Load tags in background (non-blocking) - don't await, let it complete asynchronously
+        // This allows assets to load immediately while tags populate in the background
+        getAllAvailableTags(userId)
+          .then((tagsResult) => {
+            setAllAvailableTags(tagsResult);
+          })
+          .catch((error) => {
+            console.warn('[LibraryScreen] Failed to load tags (non-critical):', error);
+            // Set empty tags array as fallback - tags will be populated as assets load
+            setAllAvailableTags([]);
+          });
       } catch (error) {
         console.error('[LibraryScreen] Failed to initialize data:', error);
         setIsLoading(false);
@@ -271,6 +278,33 @@ export default function LibraryScreen() {
         return { ...asset, publicUrl: data.publicUrl, tags } as Asset;
       });
       setAssets(mapped);
+
+      // Extract tags from loaded assets and merge with existing tags (non-blocking)
+      // This populates tags incrementally as assets load, improving perceived performance
+      const extractedTags = new Set<string>();
+      mapped.forEach((asset) => {
+        if (Array.isArray(asset.tags)) {
+          asset.tags.forEach((tag: string) => {
+            if (tag && tag.trim()) {
+              extractedTags.add(tag.trim());
+            }
+          });
+        }
+      });
+
+      // Merge with existing tags (update state only if new tags found)
+      if (extractedTags.size > 0) {
+        setAllAvailableTags((prevTags) => {
+          const existingTagsSet = new Set(prevTags);
+          extractedTags.forEach((tag) => existingTagsSet.add(tag));
+          const mergedTags = Array.from(existingTagsSet).sort();
+          // Only update if tags actually changed (avoid unnecessary re-renders)
+          if (mergedTags.length !== prevTags.length || mergedTags.some((tag, i) => tag !== prevTags[i])) {
+            return mergedTags;
+          }
+          return prevTags;
+        });
+      }
     }
 
     setIsLoading(false);
@@ -596,6 +630,47 @@ export default function LibraryScreen() {
       return;
     }
 
+    // Strongly encourage tag setup before import (but allow skipping)
+    let shouldProceedWithImport = true;
+    if (session?.user?.id) {
+      const { hasTagsSetUp } = await import('@/utils/tagSetup');
+      const hasTags = await hasTagsSetUp(session.user.id);
+      
+      if (!hasTags) {
+        // Show alert and wait for user choice
+        await new Promise<void>((resolve) => {
+          Alert.alert(
+            'Set Up Tags First',
+            'Tags are the core of StoryStack. Creating tags before importing photos ensures your photos can be properly organized and automatically categorized. You can skip this, but we strongly recommend setting up tags first.',
+            [
+              { 
+                text: 'Skip for Now', 
+                style: 'cancel',
+                onPress: () => {
+                  shouldProceedWithImport = true;
+                  resolve();
+                }
+              },
+              {
+                text: 'Set Up Tags',
+                style: 'default',
+                onPress: () => {
+                  shouldProceedWithImport = false;
+                  router.push('/tag-management?setup=true');
+                  resolve();
+                },
+              },
+            ]
+          );
+        });
+        
+        // If user chose to set up tags, don't proceed with import
+        if (!shouldProceedWithImport) {
+          return;
+        }
+      }
+    }
+
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
@@ -614,80 +689,102 @@ export default function LibraryScreen() {
       }
       const userId = session.user.id;
 
-      // Step 1: Process and compress all images
+      // Step 1: Process and compress all images in batches
       console.log('[Library] Processing and compressing images for duplicate detection...');
       const compressedImages: Array<{ uri: string; width: number; height: number; size: number }> = [];
       const imageHashes: string[] = [];
 
-      for (let i = 0; i < result.assets.length; i++) {
-        const pickerAsset = result.assets[i];
+      const BATCH_SIZE = 5; // Process 5 images at a time to avoid blocking UI
+
+      for (let i = 0; i < result.assets.length; i += BATCH_SIZE) {
+        const batch = result.assets.slice(i, i + BATCH_SIZE);
         
-        // Convert unsupported formats to JPEG
-        let imageUri = pickerAsset.uri;
-        const uriParts = pickerAsset.uri.split('.');
-        const hasExtension = uriParts.length > 1 && uriParts[uriParts.length - 1].length > 0;
-        const rawExtension = hasExtension ? uriParts[uriParts.length - 1].toLowerCase() : null;
-        let extension = rawExtension ?? 'jpg';
-        let mimeType = pickerAsset.mimeType ?? 'image/jpeg';
+        const batchResults = await Promise.all(
+          batch.map(async (pickerAsset, batchIndex) => {
+            const index = i + batchIndex;
+            
+            // Convert unsupported formats to JPEG
+            let imageUri = pickerAsset.uri;
+            const uriParts = pickerAsset.uri.split('.');
+            const hasExtension = uriParts.length > 1 && uriParts[uriParts.length - 1].length > 0;
+            const rawExtension = hasExtension ? uriParts[uriParts.length - 1].toLowerCase() : null;
+            let extension = rawExtension ?? 'jpg';
+            let mimeType = pickerAsset.mimeType ?? 'image/jpeg';
 
-        const unsupportedFormats = ['heic', 'heif', 'hevc'];
-        const supportedFormats = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
-        const isUnsupportedFormat = 
-          unsupportedFormats.includes(extension) || 
-          mimeType?.toLowerCase().includes('heic') || 
-          mimeType?.toLowerCase().includes('heif') ||
-          !hasExtension ||
-          (!supportedFormats.includes(extension) && mimeType && !mimeType.includes('jpeg') && !mimeType.includes('jpg') && !mimeType.includes('png') && !mimeType.includes('gif') && !mimeType.includes('webp'));
+            const unsupportedFormats = ['heic', 'heif', 'hevc'];
+            const supportedFormats = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+            const isUnsupportedFormat = 
+              unsupportedFormats.includes(extension) || 
+              mimeType?.toLowerCase().includes('heic') || 
+              mimeType?.toLowerCase().includes('heif') ||
+              !hasExtension ||
+              (!supportedFormats.includes(extension) && mimeType && !mimeType.includes('jpeg') && !mimeType.includes('jpg') && !mimeType.includes('png') && !mimeType.includes('gif') && !mimeType.includes('webp'));
 
-        if (isUnsupportedFormat) {
-          try {
-            const manipulatedImage = await ImageManipulator.manipulateAsync(
-              pickerAsset.uri,
-              [],
-              { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
-            );
-            imageUri = manipulatedImage.uri;
-          } catch (convertError) {
-            console.error(`[Library] Failed to convert photo ${i + 1}:`, convertError);
-            // Continue with original URI
+            if (isUnsupportedFormat) {
+              try {
+                const manipulatedImage = await ImageManipulator.manipulateAsync(
+                  pickerAsset.uri,
+                  [],
+                  { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
+                );
+                imageUri = manipulatedImage.uri;
+              } catch (convertError) {
+                console.error(`[Library] Failed to convert photo ${index + 1}:`, convertError);
+                // Continue with original URI
+              }
+            }
+
+            // Compress image
+            try {
+              const compressed = await compressImageForUpload(imageUri);
+              
+              // Compute hash for duplicate detection
+              let hash = '';
+              try {
+                hash = await computeImageHash(compressed.uri);
+              } catch (hashError) {
+                console.warn(`[Library] Failed to compute hash for photo ${index + 1}:`, hashError);
+              }
+              
+              return { compressed, hash, index };
+            } catch (compressError) {
+              console.error(`[Library] Failed to compress photo ${index + 1}:`, compressError);
+              return null; // Will be filtered out
+            }
+          })
+        );
+
+        // Store results in correct order
+        batchResults.forEach((result) => {
+          if (result) {
+            compressedImages[result.index] = result.compressed;
+            imageHashes[result.index] = result.hash;
           }
-        }
+        });
 
-        // Compress image
-        try {
-          const compressed = await compressImageForUpload(imageUri);
-          compressedImages.push(compressed);
-
-          // Compute hash for duplicate detection
-          try {
-            const hash = await computeImageHash(compressed.uri);
-            imageHashes.push(hash);
-          } catch (hashError) {
-            console.warn(`[Library] Failed to compute hash for photo ${i + 1}:`, hashError);
-            imageHashes.push(''); // Empty hash if computation fails
-          }
-        } catch (compressError) {
-          console.error(`[Library] Failed to compress photo ${i + 1}:`, compressError);
-          // Skip this photo
-          continue;
-        }
+        // Log progress
+        console.log(`[Library] Processed batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(result.assets.length / BATCH_SIZE)}`);
       }
 
-      if (compressedImages.length === 0) {
+      // Filter out any null results (failed compressions) and maintain order
+      const validCompressedImages = compressedImages.filter(Boolean) as Array<{ uri: string; width: number; height: number; size: number }>;
+      const validHashes = imageHashes.filter(h => h !== '');
+
+      if (validCompressedImages.length === 0) {
         Alert.alert('Error', 'No photos could be processed for import.');
         return;
       }
 
       // Step 2: Check for duplicates
       console.log('[Library] Checking for duplicates...');
-      const duplicateIndices = await checkForDuplicates(userId, imageHashes.filter(h => h !== ''));
+      const duplicateIndices = await checkForDuplicates(userId, validHashes);
 
       if (duplicateIndices.length > 0) {
         // Show duplicate dialog
         setPendingImportData({
-          assets: result.assets.slice(0, compressedImages.length),
+          assets: result.assets.slice(0, validCompressedImages.length),
           hashes: imageHashes,
-          compressedImages,
+          compressedImages: validCompressedImages,
           duplicateIndices,
         });
         setShowDuplicateDialog(true);
@@ -695,7 +792,7 @@ export default function LibraryScreen() {
       }
 
       // No duplicates found, proceed with import
-      await processImport(result.assets.slice(0, compressedImages.length), compressedImages, imageHashes, false);
+      await processImport(result.assets.slice(0, validCompressedImages.length), validCompressedImages, imageHashes, false);
     } catch (error) {
       console.error('[Library] Import failed with unexpected error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';

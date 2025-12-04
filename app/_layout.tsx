@@ -11,29 +11,9 @@ import { hasCompletedOnboarding } from '@/utils/onboarding';
 // Keep splash screen visible while we load
 SplashScreen.preventAutoHideAsync();
 
-// Lazy load router and gesture handler to prevent crashes
-let Slot: any;
-let GestureHandlerRootView: any;
-
-try {
-  Slot = require('expo-router').Slot;
-} catch (e) {
-  console.error('[RootLayout] Failed to load Slot:', e);
-  Slot = () => (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-      <Text style={{ fontSize: 16, color: '#666', textAlign: 'center' }}>
-        Failed to load router
-      </Text>
-    </View>
-  );
-}
-
-try {
-  GestureHandlerRootView = require('react-native-gesture-handler').GestureHandlerRootView;
-} catch (e) {
-  console.warn('[RootLayout] GestureHandlerRootView not available:', e);
-  GestureHandlerRootView = View;
-}
+// Import router and gesture handler normally (Metro needs proper imports for file watching)
+import { Slot } from 'expo-router';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 class ErrorBoundary extends Component<
   { children: ReactNode },

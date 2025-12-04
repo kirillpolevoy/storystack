@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Animated, Easing } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Animated, Easing, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
 import * as Haptics from 'expo-haptics';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function SignupScreen() {
   const router = useRouter();
@@ -20,11 +22,10 @@ export default function SignupScreen() {
   // Refs for auto-focus
   const passwordInputRef = useRef<TextInput>(null);
   
-  // Animations
+  // Animations - simplified
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
-  const logoScaleAnim = useRef(new Animated.Value(0.8)).current;
-  const logoRotateAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(20)).current;
+  const logoScaleAnim = useRef(new Animated.Value(0.9)).current;
   const emailBorderAnim = useRef(new Animated.Value(0)).current;
   const passwordBorderAnim = useRef(new Animated.Value(0)).current;
   const buttonScaleAnim = useRef(new Animated.Value(1)).current;
@@ -32,53 +33,36 @@ export default function SignupScreen() {
   const passwordErrorOpacityAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // Smooth, elegant entrance animation with logo
+    // Clean, refined entrance
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
-        duration: 700,
-        easing: Easing.out(Easing.ease),
+        duration: 600,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
         useNativeDriver: true,
       }),
-      Animated.timing(slideAnim, {
+      Animated.spring(slideAnim, {
         toValue: 0,
-        duration: 700,
-        easing: Easing.bezier(0.2, 0, 0, 1),
+        tension: 100,
+        friction: 20,
         useNativeDriver: true,
       }),
       Animated.spring(logoScaleAnim, {
         toValue: 1,
-        tension: 50,
-        friction: 7,
+        tension: 80,
+        friction: 12,
+        delay: 100,
         useNativeDriver: true,
       }),
     ]).start();
-
-    // Subtle logo rotation animation
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(logoRotateAnim, {
-          toValue: 1,
-          duration: 3000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(logoRotateAnim, {
-          toValue: 0,
-          duration: 3000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
   }, []);
 
   // Animate input borders on focus
   useEffect(() => {
-    Animated.timing(emailBorderAnim, {
+    Animated.spring(emailBorderAnim, {
       toValue: emailFocused ? 1 : 0,
-      duration: 250,
-      easing: Easing.out(Easing.ease),
+      tension: 200,
+      friction: 20,
       useNativeDriver: false,
     }).start();
     
@@ -88,10 +72,10 @@ export default function SignupScreen() {
   }, [emailFocused]);
 
   useEffect(() => {
-    Animated.timing(passwordBorderAnim, {
+    Animated.spring(passwordBorderAnim, {
       toValue: passwordFocused ? 1 : 0,
-      duration: 250,
-      easing: Easing.out(Easing.ease),
+      tension: 200,
+      friction: 20,
       useNativeDriver: false,
     }).start();
     
@@ -103,10 +87,10 @@ export default function SignupScreen() {
   // Animate error messages
   useEffect(() => {
     if (error) {
-      Animated.timing(errorOpacityAnim, {
+      Animated.spring(errorOpacityAnim, {
         toValue: 1,
-        duration: 300,
-        easing: Easing.out(Easing.ease),
+        tension: 150,
+        friction: 15,
         useNativeDriver: true,
       }).start();
     } else {
@@ -125,10 +109,10 @@ export default function SignupScreen() {
 
   useEffect(() => {
     if (passwordError) {
-      Animated.timing(passwordErrorOpacityAnim, {
+      Animated.spring(passwordErrorOpacityAnim, {
         toValue: 1,
-        duration: 300,
-        easing: Easing.out(Easing.ease),
+        tension: 150,
+        friction: 15,
         useNativeDriver: true,
       }).start();
     } else {
@@ -169,11 +153,11 @@ export default function SignupScreen() {
       let errorMessage = signUpError.message || 'Please try again';
       
       if (signUpError.message?.includes('invalid') || signUpError.message?.includes('Invalid email')) {
-        errorMessage = 'Please use a valid email address (e.g., yourname@gmail.com)';
+        errorMessage = 'Please use a valid email address';
       } else if (signUpError.message?.includes('already registered') || signUpError.message?.includes('already exists')) {
         errorMessage = 'An account with this email already exists. Please sign in instead.';
       } else if (signUpError.message?.includes('Password')) {
-        errorMessage = 'Password does not meet requirements. Please use a stronger password.';
+        errorMessage = 'Password does not meet requirements';
       }
       
       setError(errorMessage);
@@ -182,10 +166,8 @@ export default function SignupScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       const data = (result as any).data;
       if (data?.user && !data.session) {
-        // Email confirmation required - handled by router redirect
         router.replace('/login');
       } else {
-        // Account created - redirect to login
         router.replace('/login');
       }
     }
@@ -193,16 +175,16 @@ export default function SignupScreen() {
 
   const handleButtonPress = () => {
     Animated.sequence([
-      Animated.timing(buttonScaleAnim, {
-        toValue: 0.96,
-        duration: 100,
-        easing: Easing.out(Easing.ease),
+      Animated.spring(buttonScaleAnim, {
+        toValue: 0.97,
+        tension: 400,
+        friction: 15,
         useNativeDriver: true,
       }),
-      Animated.timing(buttonScaleAnim, {
+      Animated.spring(buttonScaleAnim, {
         toValue: 1,
-        duration: 150,
-        easing: Easing.out(Easing.ease),
+        tension: 400,
+        friction: 15,
         useNativeDriver: true,
       }),
     ]).start();
@@ -216,17 +198,12 @@ export default function SignupScreen() {
 
   const emailBorderColor = emailBorderAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ['#e5e7eb', '#b38f5b'],
+    outputRange: ['rgba(0, 0, 0, 0.1)', '#b38f5b'],
   });
 
   const passwordBorderColor = passwordBorderAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ['#e5e7eb', '#b38f5b'],
-  });
-
-  const logoRotation = logoRotateAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['-2deg', '2deg'],
+    outputRange: ['rgba(0, 0, 0, 0.1)', '#b38f5b'],
   });
 
   const isFormValid = email.trim() && password.trim() && !passwordError;
@@ -234,14 +211,39 @@ export default function SignupScreen() {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={{ flex: 1, backgroundColor: '#ffffff' }}
+      style={{ flex: 1 }}
     >
+      {/* Subtle warm background - distinguishes from login */}
+      <Animated.View
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: '#faf8f5',
+          opacity: fadeAnim,
+        }}
+      >
+        {/* Subtle gold gradient overlay */}
+        <View
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: SCREEN_WIDTH * 0.4,
+            backgroundColor: 'rgba(179, 143, 91, 0.03)',
+          }}
+        />
+      </Animated.View>
+
       <ScrollView
         contentContainerStyle={{
           flexGrow: 1,
-          paddingTop: Math.max(insets.top + 20, 60),
+          paddingTop: Math.max(insets.top + 40, 80),
           paddingBottom: Math.max(insets.bottom + 40, 60),
-          paddingHorizontal: 28,
+          paddingHorizontal: 32,
         }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
@@ -257,42 +259,58 @@ export default function SignupScreen() {
             transform: [{ translateY: slideAnim }],
           }}
         >
-          {/* Logo/Icon - Apple-style minimal branding with subtle animation */}
+          {/* Logo - Clean and centered with subtle accent */}
           <View style={{ alignItems: 'center', marginBottom: 48 }}>
             <Animated.View
               style={{
-                width: 80,
-                height: 80,
-                borderRadius: 20,
+                width: 96,
+                height: 96,
+                borderRadius: 24,
                 backgroundColor: '#b38f5b',
                 justifyContent: 'center',
                 alignItems: 'center',
-                marginBottom: 24,
+                marginBottom: 32,
                 shadowColor: '#b38f5b',
                 shadowOffset: { width: 0, height: 8 },
                 shadowOpacity: 0.25,
-                shadowRadius: 20,
+                shadowRadius: 16,
                 elevation: 8,
-                transform: [
-                  { scale: logoScaleAnim },
-                  { rotate: logoRotation },
-                ],
+                transform: [{ scale: logoScaleAnim }],
               }}
             >
-              <Text style={{ fontSize: 40, fontWeight: '600', color: '#ffffff', letterSpacing: -1 }}>
+              <View
+                style={{
+                  position: 'absolute',
+                  width: 96,
+                  height: 96,
+                  borderRadius: 24,
+                  backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                }}
+              />
+              <Text style={{ fontSize: 48, fontWeight: '800', color: '#ffffff', letterSpacing: -1.5 }}>
                 S
               </Text>
             </Animated.View>
+            {/* Subtle decorative accent - unique to signup */}
+            <View style={{ alignItems: 'center', marginTop: -16 }}>
+              <View style={{ 
+                width: 60, 
+                height: 3, 
+                backgroundColor: '#b38f5b', 
+                borderRadius: 2,
+                opacity: 0.2,
+              }} />
+            </View>
           </View>
 
-          {/* Title Section - Apple's signature large, clear typography */}
+          {/* Title Section - Clean typography */}
           <View style={{ marginBottom: 40 }}>
             <Text
               style={{
                 fontSize: 34,
                 fontWeight: '700',
                 color: '#000000',
-                letterSpacing: -0.5,
+                letterSpacing: -0.6,
                 marginBottom: 8,
                 textAlign: 'center',
               }}
@@ -313,17 +331,17 @@ export default function SignupScreen() {
             </Text>
           </View>
 
-          {/* Form - Clean, focused inputs */}
-          <View style={{ marginBottom: 24 }}>
+          {/* Form - Clean inputs */}
+          <View style={{ marginBottom: 32 }}>
             {/* Email Input */}
-            <View style={{ marginBottom: 20 }}>
+            <View style={{ marginBottom: 24 }}>
               <Text
                 style={{
                   fontSize: 13,
                   fontWeight: '600',
                   color: '#374151',
-                  letterSpacing: -0.1,
-                  marginBottom: 8,
+                  letterSpacing: 0.2,
+                  marginBottom: 10,
                   textTransform: 'uppercase',
                 }}
               >
@@ -334,8 +352,13 @@ export default function SignupScreen() {
                   borderRadius: 12,
                   borderWidth: 1.5,
                   borderColor: emailBorderColor,
-                  backgroundColor: emailFocused ? '#ffffff' : '#f9fafb',
+                  backgroundColor: '#ffffff',
                   overflow: 'hidden',
+                  shadowColor: emailFocused ? '#b38f5b' : 'transparent',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: emailFocused ? 0.15 : 0,
+                  shadowRadius: 8,
+                  elevation: emailFocused ? 3 : 0,
                 }}
               >
                 <TextInput
@@ -363,22 +386,22 @@ export default function SignupScreen() {
                     fontWeight: '400',
                     color: '#111827',
                     letterSpacing: -0.2,
-                    paddingHorizontal: 16,
-                    paddingVertical: 14,
+                    paddingHorizontal: 18,
+                    paddingVertical: 16,
                   }}
                 />
               </Animated.View>
             </View>
 
             {/* Password Input */}
-            <View style={{ marginBottom: 8 }}>
+            <View style={{ marginBottom: 12 }}>
               <Text
                 style={{
                   fontSize: 13,
                   fontWeight: '600',
                   color: '#374151',
-                  letterSpacing: -0.1,
-                  marginBottom: 8,
+                  letterSpacing: 0.2,
+                  marginBottom: 10,
                   textTransform: 'uppercase',
                 }}
               >
@@ -389,15 +412,20 @@ export default function SignupScreen() {
                   borderRadius: 12,
                   borderWidth: 1.5,
                   borderColor: passwordBorderColor,
-                  backgroundColor: passwordFocused ? '#ffffff' : '#f9fafb',
+                  backgroundColor: '#ffffff',
                   overflow: 'hidden',
                   flexDirection: 'row',
                   alignItems: 'center',
+                  shadowColor: passwordFocused ? '#b38f5b' : 'transparent',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: passwordFocused ? 0.15 : 0,
+                  shadowRadius: 8,
+                  elevation: passwordFocused ? 3 : 0,
                 }}
               >
                 <TextInput
                   ref={passwordInputRef}
-                  placeholder="At least 6 characters"
+                  placeholder="Create a password"
                   placeholderTextColor="#9ca3af"
                   value={password}
                   onChangeText={(text) => {
@@ -419,15 +447,15 @@ export default function SignupScreen() {
                     fontWeight: '400',
                     color: '#111827',
                     letterSpacing: -0.2,
-                    paddingHorizontal: 16,
-                    paddingVertical: 14,
+                    paddingHorizontal: 18,
+                    paddingVertical: 16,
                   }}
                 />
                 <TouchableOpacity
                   onPress={handleShowPassword}
                   style={{
-                    paddingHorizontal: 16,
-                    paddingVertical: 14,
+                    paddingHorizontal: 18,
+                    paddingVertical: 16,
                   }}
                   activeOpacity={0.6}
                 >
@@ -447,13 +475,13 @@ export default function SignupScreen() {
                 <Animated.View
                   style={{
                     opacity: passwordErrorOpacityAnim,
-                    marginTop: 6,
+                    marginTop: 8,
                   }}
                 >
                   <Text
                     style={{
                       fontSize: 13,
-                      fontWeight: '400',
+                      fontWeight: '500',
                       color: '#ef4444',
                       letterSpacing: -0.1,
                     }}
@@ -464,12 +492,12 @@ export default function SignupScreen() {
               )}
             </View>
 
-            {/* Error Message - Inline, elegant */}
+            {/* Error Message */}
             {error && (
               <Animated.View
                 style={{
                   opacity: errorOpacityAnim,
-                  marginTop: 12,
+                  marginTop: 8,
                   paddingHorizontal: 4,
                 }}
               >
@@ -479,6 +507,7 @@ export default function SignupScreen() {
                     fontWeight: '500',
                     color: '#ef4444',
                     letterSpacing: -0.1,
+                    lineHeight: 20,
                   }}
                 >
                   {error}
@@ -487,7 +516,7 @@ export default function SignupScreen() {
             )}
           </View>
 
-          {/* Sign Up Button - Apple-style prominent primary action */}
+          {/* Sign Up Button */}
           <Animated.View
             style={{
               transform: [{ scale: buttonScaleAnim }],
@@ -540,13 +569,13 @@ export default function SignupScreen() {
             </TouchableOpacity>
           </Animated.View>
 
-          {/* Sign In Link - Subtle, Apple-style secondary action */}
+          {/* Sign In Link */}
           <TouchableOpacity
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               router.push('/login');
             }}
-            style={{ alignItems: 'center', paddingVertical: 12 }}
+            style={{ alignItems: 'center', paddingVertical: 16 }}
             activeOpacity={0.6}
           >
             <Text

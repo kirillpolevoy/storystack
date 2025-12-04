@@ -89,12 +89,17 @@ export async function getAllAvailableTags(userId?: string): Promise<TagVocabular
     const deletedTagsSet = new Set<string>(deletedTags);
     
     // Get all unique tags from assets in the database (user-specific)
+    // Optimized: Only select tags column, limit to recent assets for faster query
     const allTagsSet = new Set<string>();
     
+    // Query assets with limit for faster initial load - tags will be updated as assets load
+    // This prevents blocking initialization when user has many assets
     const { data: assets } = await supabase
       .from('assets')
       .select('tags')
-      .eq('user_id', finalUserId);
+      .eq('user_id', finalUserId)
+      .order('created_at', { ascending: false })
+      .limit(1000); // Limit to 1000 most recent assets for faster tag extraction
     
     if (assets) {
       assets.forEach((asset) => {

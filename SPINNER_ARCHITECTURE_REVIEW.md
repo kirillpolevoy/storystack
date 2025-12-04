@@ -433,3 +433,4 @@ Dot Pulse: Continuous (800ms cycle, staggered)
 - React Native Animation Performance Guide
 - Apple Design Resources
 
+

@@ -20,8 +20,18 @@ export default function OnboardingScreen() {
     // Only mark as completed if this is first-time onboarding
     if (isFirstTime && session) {
       await markOnboardingCompleted(session.user.id);
-      // For first-time onboarding, navigate to home (no back stack)
-      router.replace('/');
+      // For first-time onboarding, redirect to tag setup first
+      // Check if user already has tags set up
+      const { hasTagsSetUp } = await import('@/utils/tagSetup');
+      const hasTags = await hasTagsSetUp(session.user.id);
+      
+      if (!hasTags) {
+        // Redirect to tag management for setup
+        router.replace('/tag-management?setup=true');
+      } else {
+        // User already has tags, go to library
+        router.replace('/');
+      }
     } else {
       // For menu access, navigate to home instead of going back
       // This prevents the GO_BACK error when there's no previous screen

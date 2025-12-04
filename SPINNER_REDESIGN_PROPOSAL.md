@@ -95,3 +95,4 @@ Animated.parallel([
 
 **That's it.** Simple, reliable, consumer-grade.
 
+

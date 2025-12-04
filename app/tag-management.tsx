@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
@@ -42,10 +42,12 @@ type TagConfig = {
 
 export default function TagManagementScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ setup?: string }>();
   if (!router) {
     return null;
   }
 
+  const isSetupMode = params.setup === 'true';
   const [tags, setTags] = useState<TagConfig[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [newTagName, setNewTagName] = useState('');
@@ -325,6 +327,14 @@ export default function TagManagementScreen() {
 
     try {
       setIsSaving(true);
+      
+      // Get current user ID
+      let userId: string | null = null;
+      if (supabase) {
+        const { data: { user } } = await supabase.auth.getUser();
+        userId = user?.id || null;
+      }
+      
       const newTag: TagConfig = {
         name: trimmed,
         isAutoTag: false, // New tags are not auto-tag by default
@@ -342,6 +352,12 @@ export default function TagManagementScreen() {
       
       // Save custom tag to persist it (so it appears even if not used on assets yet)
       await saveCustomTag(trimmed);
+      
+      // Mark tag setup as completed (user has created their first tag)
+      if (userId) {
+        const { markTagSetupCompleted } = await import('@/utils/tagSetup');
+        await markTagSetupCompleted(userId);
+      }
       
       // Clear input and close modal after successful save
       setNewTagName('');
@@ -1289,11 +1305,27 @@ export default function TagManagementScreen() {
           
           <Animated.View style={{ opacity: emptyTextOpacity }} className="items-center">
             <Text className="mb-2 text-center text-[22px] font-semibold text-gray-900">
-              No Tags Yet
+              {isSetupMode ? 'Set Up Your Tags' : 'No Tags Yet'}
             </Text>
             <Text className="mb-8 text-center text-[15px] leading-[22px] text-gray-500">
-              Create tags to organize and automatically categorize your photos.
+              {isSetupMode 
+                ? 'Tags are the core of StoryStack. We strongly recommend creating at least one tag before importing photos. This ensures your photos can be properly organized and automatically categorized.'
+                : 'Create tags to organize and automatically categorize your photos.'}
             </Text>
+            {isSetupMode && (
+              <TouchableOpacity
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  router.replace('/');
+                }}
+                className="mb-4"
+                activeOpacity={0.7}
+              >
+                <Text className="text-[15px] font-medium text-gray-500">
+                  Skip for now
+                </Text>
+              </TouchableOpacity>
+            )}
           </Animated.View>
 
           <Animated.View
@@ -1311,7 +1343,7 @@ export default function TagManagementScreen() {
               activeOpacity={0.8}
             >
               <Text className="text-center text-[17px] font-semibold text-white">
-                Create Your First Tag
+                {isSetupMode ? 'Create Your First Tag' : 'Create Your First Tag'}
               </Text>
             </TouchableOpacity>
           </Animated.View>

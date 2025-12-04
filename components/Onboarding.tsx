@@ -31,9 +31,15 @@ const ImportVisual = () => (
           <View key={i} style={{ width: 60, height: 60, backgroundColor: '#e5e7eb', borderRadius: 8 }} />
         ))}
       </View>
-      {/* Floating Action Button */}
-      <View style={{ position: 'absolute', bottom: 16, right: 16, width: 56, height: 56, borderRadius: 28, backgroundColor: '#b38f5b', alignItems: 'center', justifyContent: 'center', shadowColor: '#b38f5b', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 8 }}>
-        <MaterialCommunityIcons name="image-plus" size={28} color="#ffffff" />
+      {/* Bottom Tab Bar with Add button highlighted */}
+      <View style={{ position: 'absolute', bottom: 16, left: 16, right: 16, height: 60, backgroundColor: '#ffffff', borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingHorizontal: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 4 }}>
+        <MaterialCommunityIcons name="view-grid-outline" size={20} color="#9ca3af" />
+        <MaterialCommunityIcons name="book-outline" size={20} color="#9ca3af" />
+        <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: '#b38f5b', alignItems: 'center', justifyContent: 'center', shadowColor: '#b38f5b', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 8 }}>
+          <MaterialCommunityIcons name="plus" size={24} color="#ffffff" />
+        </View>
+        <MaterialCommunityIcons name="tag-outline" size={20} color="#9ca3af" />
+        <MaterialCommunityIcons name="account-outline" size={20} color="#9ca3af" />
       </View>
     </View>
   </View>
@@ -142,9 +148,12 @@ const TagManagementVisual = () => (
         ))}
       </View>
       
-      {/* Floating Action Button */}
-      <View style={{ position: 'absolute', bottom: -28, right: 0, width: 64, height: 64, borderRadius: 32, backgroundColor: '#D4A574', alignItems: 'center', justifyContent: 'center', shadowColor: '#D4A574', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.6, shadowRadius: 20, elevation: 12 }}>
-        <MaterialCommunityIcons name="plus" size={32} color="#ffffff" />
+      {/* Add Tag button in header (matching actual implementation) */}
+      <View style={{ marginTop: 12, flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16 }}>
+        <View style={{ backgroundColor: '#b38f5b', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <MaterialCommunityIcons name="plus" size={16} color="#ffffff" />
+          <Text style={{ fontSize: 15, fontWeight: '600', color: '#ffffff' }}>Add Tag</Text>
+        </View>
       </View>
     </View>
   </View>
@@ -316,24 +325,12 @@ const StoriesVisual = () => (
         </View>
       </View>
       
-      {/* Floating Action Button */}
-      <View style={{ 
-        position: 'absolute', 
-        bottom: -28, 
-        right: 0, 
-        width: 64, 
-        height: 64, 
-        borderRadius: 32, 
-        backgroundColor: '#D4A574', 
-        alignItems: 'center', 
-        justifyContent: 'center', 
-        shadowColor: '#D4A574', 
-        shadowOffset: { width: 0, height: 10 }, 
-        shadowOpacity: 0.6, 
-        shadowRadius: 20, 
-        elevation: 12 
-      }}>
-        <MaterialCommunityIcons name="plus" size={32} color="#ffffff" />
+      {/* Create button in header (matching actual implementation) */}
+      <View style={{ marginTop: 12, flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16 }}>
+        <View style={{ backgroundColor: '#b38f5b', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <MaterialCommunityIcons name="plus" size={16} color="#ffffff" />
+          <Text style={{ fontSize: 15, fontWeight: '600', color: '#ffffff' }}>Create</Text>
+        </View>
       </View>
     </View>
   </View>
@@ -343,36 +340,36 @@ const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     id: 'welcome',
     title: 'Welcome to StoryStack',
-    description: 'Organize your photos into beautiful stories. Import, tag, and create collections effortlessly.',
+    description: 'Organize your photos into beautiful stories. Let\'s start by setting up your tags, then you\'ll import your photos.',
     icon: 'book-open-variant',
+    iconColor: '#b38f5b',
+  },
+  {
+    id: 'tag-management',
+    title: 'Set Up Your Tags',
+    description: 'First, create your tags. Access Tag Management from the bottom navigation bar to create tags that will help organize your photos. You can add tags like "Nature", "Family", "Work", or anything that matters to you.',
+    icon: 'tag-multiple-outline',
+    iconColor: '#b38f5b',
+  },
+  {
+    id: 'auto-tagging',
+    title: 'Enable AI Auto-Tagging',
+    description: 'In Tag Management, tap the star icon next to any tag to enable AI auto-tagging. When enabled, AI will automatically suggest these tags for new photos you import, saving you time.',
+    icon: 'robot',
     iconColor: '#b38f5b',
   },
   {
     id: 'import',
     title: 'Import Your Photos',
-    description: 'Tap the floating button or use the "Import Photos" button to add photos from your library. Select multiple photos at once.',
+    description: 'Now you\'re ready to import photos! Tap the "Add" button in the bottom navigation bar to import photos from your library. Select multiple photos at once.',
     icon: 'image-plus',
     iconColor: '#b38f5b',
   },
   {
     id: 'tags',
     title: 'Tag Your Photos',
-    description: 'Tap any photo to add tags. Use AI-powered auto-tagging or create custom tags. Organize your library with meaningful labels.',
+    description: 'After importing, tap any photo to add or edit tags. AI will suggest tags if you enabled auto-tagging. You can also add custom tags to organize your library.',
     icon: 'tag-multiple',
-    iconColor: '#b38f5b',
-  },
-  {
-    id: 'tag-management',
-    title: 'Manage Tags',
-    description: 'Access Tag Management from the menu to view all your tags, see how many photos use each tag, rename tags, and create new ones. Keep your tag library organized.',
-    icon: 'tag-multiple-outline',
-    iconColor: '#b38f5b',
-  },
-  {
-    id: 'auto-tagging',
-    title: 'AI Auto-Tagging',
-    description: 'In Tag Management, tap the star icon next to any tag to enable AI auto-tagging. When enabled, AI will automatically suggest these tags for new photos you import, saving you time.',
-    icon: 'robot',
     iconColor: '#b38f5b',
   },
   {
@@ -392,7 +389,7 @@ const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     id: 'ready',
     title: "You're All Set!",
-    description: 'Start importing photos and building your first story. You can always access this guide from the menu.',
+    description: 'Now let\'s set up your first tags. Tags are the core of StoryStack - they help organize and automatically categorize your photos. You can always access this guide from the menu.',
     icon: 'check-circle',
     iconColor: '#b38f5b',
   },

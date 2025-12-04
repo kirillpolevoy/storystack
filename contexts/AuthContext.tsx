@@ -28,6 +28,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     // Get initial session with error handling for invalid refresh tokens
+    if (!supabase) {
+      console.warn('[AuthContext] Supabase client not available');
+      setLoading(false);
+      return;
+    }
+    
     supabase.auth.getSession()
       .then(({ data: { session }, error }) => {
         if (error) {
@@ -78,6 +84,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
     // Listen for auth changes
+    if (!supabase) {
+      setLoading(false);
+      return;
+    }
+    
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
@@ -132,6 +143,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signUp = async (email: string, password: string) => {
+    if (!supabase) {
+      return { error: { message: 'Supabase client not available' }, data: null };
+    }
     // For mobile: Use deep link directly
     // Supabase will handle the redirect properly if configured
     const { data, error } = await supabase.auth.signUp({
@@ -146,6 +160,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signIn = async (email: string, password: string) => {
+    if (!supabase) {
+      return { error: { message: 'Supabase client not available' } };
+    }
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
@@ -154,6 +171,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
+    if (!supabase) return;
     await supabase.auth.signOut();
   };
 

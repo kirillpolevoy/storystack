@@ -56,3 +56,4 @@ eas build --platform ios --profile production
 - For TestFlight/App Store, the icon must be included in the build submitted to Apple
 
 
+

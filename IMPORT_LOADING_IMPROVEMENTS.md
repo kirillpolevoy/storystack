@@ -255,3 +255,4 @@ const ring3Scale = useRef(new Animated.Value(0)).current;
 
 Each phase should be tested thoroughly before moving to the next.
 
+

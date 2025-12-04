@@ -2,7 +2,7 @@
   "expo": {
     "name": "StoryStack",
     "slug": "storystack",
-    "version": "1.1.0",
+    "version": "1.1.4",
     "scheme": "storystack",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -17,7 +17,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.storystackstudio.app",
-      "buildNumber": "9",
+      "buildNumber": "10",
       "icon": "./assets/icon.png",
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to import photos for tagging.",
@@ -25,7 +25,7 @@
       }
     },
     "android": {
-      "versionCode": 9,
+      "versionCode": 10,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"

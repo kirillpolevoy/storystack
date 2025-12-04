@@ -22,62 +22,43 @@ export default function LoginScreen() {
   
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
-  const logoScaleAnim = useRef(new Animated.Value(0.8)).current;
-  const logoRotateAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(20)).current;
+  const logoScaleAnim = useRef(new Animated.Value(0.9)).current;
   const emailBorderAnim = useRef(new Animated.Value(0)).current;
   const passwordBorderAnim = useRef(new Animated.Value(0)).current;
   const buttonScaleAnim = useRef(new Animated.Value(1)).current;
   const errorOpacityAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // Smooth, elegant entrance animation with logo
+    // Refined entrance animation - Apple's signature smoothness
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
-        duration: 700,
-        easing: Easing.out(Easing.ease),
+        duration: 600,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
         useNativeDriver: true,
       }),
-      Animated.timing(slideAnim, {
+      Animated.spring(slideAnim, {
         toValue: 0,
-        duration: 700,
-        easing: Easing.bezier(0.2, 0, 0, 1),
+        tension: 100,
+        friction: 20,
         useNativeDriver: true,
       }),
       Animated.spring(logoScaleAnim, {
         toValue: 1,
-        tension: 50,
-        friction: 7,
+        tension: 80,
+        friction: 12,
         useNativeDriver: true,
       }),
     ]).start();
-
-    // Subtle logo rotation animation
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(logoRotateAnim, {
-          toValue: 1,
-          duration: 3000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(logoRotateAnim, {
-          toValue: 0,
-          duration: 3000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
   }, []);
 
-  // Animate input borders on focus
+  // Animate input borders on focus - refined spring physics
   useEffect(() => {
-    Animated.timing(emailBorderAnim, {
+    Animated.spring(emailBorderAnim, {
       toValue: emailFocused ? 1 : 0,
-      duration: 250,
-      easing: Easing.out(Easing.ease),
+      tension: 200,
+      friction: 20,
       useNativeDriver: false,
     }).start();
     
@@ -87,10 +68,10 @@ export default function LoginScreen() {
   }, [emailFocused]);
 
   useEffect(() => {
-    Animated.timing(passwordBorderAnim, {
+    Animated.spring(passwordBorderAnim, {
       toValue: passwordFocused ? 1 : 0,
-      duration: 250,
-      easing: Easing.out(Easing.ease),
+      tension: 200,
+      friction: 20,
       useNativeDriver: false,
     }).start();
     
@@ -99,13 +80,13 @@ export default function LoginScreen() {
     }
   }, [passwordFocused]);
 
-  // Animate error message
+  // Animate error message with refined timing
   useEffect(() => {
     if (error) {
-      Animated.timing(errorOpacityAnim, {
+      Animated.spring(errorOpacityAnim, {
         toValue: 1,
-        duration: 300,
-        easing: Easing.out(Easing.ease),
+        tension: 150,
+        friction: 15,
         useNativeDriver: true,
       }).start();
     } else {
@@ -145,16 +126,16 @@ export default function LoginScreen() {
 
   const handleButtonPress = () => {
     Animated.sequence([
-      Animated.timing(buttonScaleAnim, {
-        toValue: 0.96,
-        duration: 100,
-        easing: Easing.out(Easing.ease),
+      Animated.spring(buttonScaleAnim, {
+        toValue: 0.97,
+        tension: 400,
+        friction: 15,
         useNativeDriver: true,
       }),
-      Animated.timing(buttonScaleAnim, {
+      Animated.spring(buttonScaleAnim, {
         toValue: 1,
-        duration: 150,
-        easing: Easing.out(Easing.ease),
+        tension: 400,
+        friction: 15,
         useNativeDriver: true,
       }),
     ]).start();
@@ -168,17 +149,12 @@ export default function LoginScreen() {
 
   const emailBorderColor = emailBorderAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ['#e5e7eb', '#b38f5b'],
+    outputRange: ['rgba(0, 0, 0, 0.1)', '#b38f5b'],
   });
 
   const passwordBorderColor = passwordBorderAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ['#e5e7eb', '#b38f5b'],
-  });
-
-  const logoRotation = logoRotateAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['-2deg', '2deg'],
+    outputRange: ['rgba(0, 0, 0, 0.1)', '#b38f5b'],
   });
 
   const isFormValid = email.trim() && password.trim();
@@ -191,9 +167,9 @@ export default function LoginScreen() {
       <ScrollView
         contentContainerStyle={{
           flexGrow: 1,
-          paddingTop: Math.max(insets.top + 20, 60),
+          paddingTop: Math.max(insets.top + 32, 80),
           paddingBottom: Math.max(insets.bottom + 40, 60),
-          paddingHorizontal: 28,
+          paddingHorizontal: 32,
         }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
@@ -209,42 +185,49 @@ export default function LoginScreen() {
             transform: [{ translateY: slideAnim }],
           }}
         >
-          {/* Logo/Icon - Apple-style minimal branding with subtle animation */}
+          {/* Logo - Premium gold icon */}
           <View style={{ alignItems: 'center', marginBottom: 48 }}>
             <Animated.View
               style={{
-                width: 80,
-                height: 80,
-                borderRadius: 20,
+                width: 96,
+                height: 96,
+                borderRadius: 24,
                 backgroundColor: '#b38f5b',
                 justifyContent: 'center',
                 alignItems: 'center',
-                marginBottom: 24,
+                marginBottom: 28,
                 shadowColor: '#b38f5b',
-                shadowOffset: { width: 0, height: 8 },
-                shadowOpacity: 0.25,
-                shadowRadius: 20,
-                elevation: 8,
-                transform: [
-                  { scale: logoScaleAnim },
-                  { rotate: logoRotation },
-                ],
+                shadowOffset: { width: 0, height: 12 },
+                shadowOpacity: 0.35,
+                shadowRadius: 24,
+                elevation: 12,
+                transform: [{ scale: logoScaleAnim }],
               }}
             >
-              <Text style={{ fontSize: 40, fontWeight: '600', color: '#ffffff', letterSpacing: -1 }}>
+              {/* Inner glow effect */}
+              <View
+                style={{
+                  position: 'absolute',
+                  width: 96,
+                  height: 96,
+                  borderRadius: 24,
+                  backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                }}
+              />
+              <Text style={{ fontSize: 48, fontWeight: '800', color: '#ffffff', letterSpacing: -1.5 }}>
                 S
               </Text>
             </Animated.View>
           </View>
 
-          {/* Title Section - Apple's signature large, clear typography */}
+          {/* Title Section - Apple's refined typography */}
           <View style={{ marginBottom: 40 }}>
             <Text
               style={{
                 fontSize: 34,
                 fontWeight: '700',
                 color: '#000000',
-                letterSpacing: -0.5,
+                letterSpacing: -0.6,
                 marginBottom: 8,
                 textAlign: 'center',
               }}
@@ -261,21 +244,21 @@ export default function LoginScreen() {
                 textAlign: 'center',
               }}
             >
-              Sign in to continue organizing your photos
+              Sign in to continue to StoryStack
             </Text>
           </View>
 
-          {/* Form - Clean, focused inputs */}
-          <View style={{ marginBottom: 24 }}>
+          {/* Form - Refined inputs */}
+          <View style={{ marginBottom: 32 }}>
             {/* Email Input */}
-            <View style={{ marginBottom: 20 }}>
+            <View style={{ marginBottom: 24 }}>
               <Text
                 style={{
                   fontSize: 13,
                   fontWeight: '600',
                   color: '#374151',
-                  letterSpacing: -0.1,
-                  marginBottom: 8,
+                  letterSpacing: 0.2,
+                  marginBottom: 10,
                   textTransform: 'uppercase',
                 }}
               >
@@ -286,8 +269,13 @@ export default function LoginScreen() {
                   borderRadius: 12,
                   borderWidth: 1.5,
                   borderColor: emailBorderColor,
-                  backgroundColor: emailFocused ? '#ffffff' : '#f9fafb',
+                  backgroundColor: '#ffffff',
                   overflow: 'hidden',
+                  shadowColor: emailFocused ? '#b38f5b' : 'transparent',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: emailFocused ? 0.15 : 0,
+                  shadowRadius: 8,
+                  elevation: emailFocused ? 3 : 0,
                 }}
               >
                 <TextInput
@@ -315,22 +303,22 @@ export default function LoginScreen() {
                     fontWeight: '400',
                     color: '#111827',
                     letterSpacing: -0.2,
-                    paddingHorizontal: 16,
-                    paddingVertical: 14,
+                    paddingHorizontal: 18,
+                    paddingVertical: 16,
                   }}
                 />
               </Animated.View>
             </View>
 
             {/* Password Input */}
-            <View style={{ marginBottom: 8 }}>
+            <View style={{ marginBottom: 12 }}>
               <Text
                 style={{
                   fontSize: 13,
                   fontWeight: '600',
                   color: '#374151',
-                  letterSpacing: -0.1,
-                  marginBottom: 8,
+                  letterSpacing: 0.2,
+                  marginBottom: 10,
                   textTransform: 'uppercase',
                 }}
               >
@@ -341,10 +329,15 @@ export default function LoginScreen() {
                   borderRadius: 12,
                   borderWidth: 1.5,
                   borderColor: passwordBorderColor,
-                  backgroundColor: passwordFocused ? '#ffffff' : '#f9fafb',
+                  backgroundColor: '#ffffff',
                   overflow: 'hidden',
                   flexDirection: 'row',
                   alignItems: 'center',
+                  shadowColor: passwordFocused ? '#b38f5b' : 'transparent',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: passwordFocused ? 0.15 : 0,
+                  shadowRadius: 8,
+                  elevation: passwordFocused ? 3 : 0,
                 }}
               >
                 <TextInput
@@ -371,15 +364,15 @@ export default function LoginScreen() {
                     fontWeight: '400',
                     color: '#111827',
                     letterSpacing: -0.2,
-                    paddingHorizontal: 16,
-                    paddingVertical: 14,
+                    paddingHorizontal: 18,
+                    paddingVertical: 16,
                   }}
                 />
                 <TouchableOpacity
                   onPress={handleShowPassword}
                   style={{
-                    paddingHorizontal: 16,
-                    paddingVertical: 14,
+                    paddingHorizontal: 18,
+                    paddingVertical: 16,
                   }}
                   activeOpacity={0.6}
                 >
@@ -397,7 +390,7 @@ export default function LoginScreen() {
               </Animated.View>
             </View>
 
-            {/* Error Message - Inline, elegant */}
+            {/* Error Message */}
             {error && (
               <Animated.View
                 style={{
@@ -412,6 +405,7 @@ export default function LoginScreen() {
                     fontWeight: '500',
                     color: '#ef4444',
                     letterSpacing: -0.1,
+                    lineHeight: 20,
                   }}
                 >
                   {error}
@@ -420,7 +414,7 @@ export default function LoginScreen() {
             )}
           </View>
 
-          {/* Sign In Button - Apple-style prominent primary action */}
+          {/* Sign In Button - Apple's prominent primary action */}
           <Animated.View
             style={{
               transform: [{ scale: buttonScaleAnim }],
@@ -473,13 +467,13 @@ export default function LoginScreen() {
             </TouchableOpacity>
           </Animated.View>
 
-          {/* Sign Up Link - Subtle, Apple-style secondary action */}
+          {/* Sign Up Link - Refined secondary action */}
           <TouchableOpacity
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               router.push('/signup');
             }}
-            style={{ alignItems: 'center', paddingVertical: 12 }}
+            style={{ alignItems: 'center', paddingVertical: 16 }}
             activeOpacity={0.6}
           >
             <Text

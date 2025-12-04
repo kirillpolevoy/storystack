@@ -1,7 +1,8 @@
-import { useCallback } from 'react';
-import { ActivityIndicator, Dimensions, FlatList, RefreshControl, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useMemo } from 'react';
+import { ActivityIndicator, Dimensions, RefreshControl, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Asset } from '@/types';
 
 type PhotoGridProps = {
@@ -16,9 +17,8 @@ type PhotoGridProps = {
   autoTaggingAssets?: Set<string>;
 };
 
-const keyExtractor = (item: Asset) => item.id;
-
-function PhotoTile({
+// Memoized PhotoTile component for optimal performance
+const PhotoTile = React.memo(({
   asset,
   isSelected,
   onToggleSelect,
@@ -34,7 +34,7 @@ function PhotoTile({
   onLongPress?: (asset: Asset) => void;
   isAutoTagging?: boolean;
   isMultiSelectMode: boolean;
-}) {
+}) => {
   const handlePress = () => {
     if (isMultiSelectMode) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -59,6 +59,7 @@ function PhotoTile({
         aspectRatio: 1,
         margin: 1.5,
         opacity: isMultiSelectMode && isSelected ? 0.7 : 1,
+        backgroundColor: '#f5f5f5', // Always show background to prevent blank spaces
       }}
     >
       <TouchableOpacity
@@ -66,14 +67,20 @@ function PhotoTile({
         onLongPress={handleLongPressAction}
         className="relative h-full w-full overflow-hidden rounded-2xl"
         activeOpacity={0.8}
+        style={{
+          backgroundColor: '#f5f5f5', // Always show background
+        }}
       >
         {asset.publicUrl ? (
           <Image 
             source={{ uri: asset.publicUrl }} 
             className="h-full w-full rounded-2xl" 
             contentFit="cover"
-            transition={200}
+            transition={150}
             cachePolicy="memory-disk"
+            priority="low"
+            recyclingKey={asset.id}
+            allowDownscaling={true}
             placeholder={{ blurhash: 'LGF5]+Yk^6#M@-5c,1J5@[or[Q6.' }}
             style={{
               backgroundColor: '#f5f5f5',
@@ -150,7 +157,17 @@ function PhotoTile({
       </TouchableOpacity>
     </View>
   );
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison function for React.memo
+  return (
+    prevProps.asset.id === nextProps.asset.id &&
+    prevProps.isSelected === nextProps.isSelected &&
+    prevProps.isAutoTagging === nextProps.isAutoTagging &&
+    prevProps.isMultiSelectMode === nextProps.isMultiSelectMode
+  );
+});
+
+PhotoTile.displayName = 'PhotoTile';
 
 export function PhotoGrid({
   assets,
@@ -163,37 +180,113 @@ export function PhotoGrid({
   onRefresh,
   autoTaggingAssets = new Set(),
 }: PhotoGridProps) {
-  const renderItem = useCallback(
-    ({ item }: { item: Asset }) => {
-      const isSelected = selectedAssets.some((asset) => asset.id === item.id);
-      const isAutoTagging = autoTaggingAssets.has(item.id);
-      const isMultiSelectMode = isSelectionMode;
-      return (
-        <PhotoTile 
-          asset={item} 
-          isSelected={isSelected} 
-          onToggleSelect={onToggleSelect} 
-          onOpenTagModal={onOpenTagModal}
-          onLongPress={onLongPress}
-          isAutoTagging={isAutoTagging}
-          isMultiSelectMode={isMultiSelectMode}
-        />
-      );
-    },
-    [selectedAssets, isSelectionMode, onToggleSelect, onOpenTagModal, onLongPress, autoTaggingAssets],
-  );
+  const insets = useSafeAreaInsets();
+  const screenWidth = Dimensions.get('window').width;
+  
+  // Calculate item size for 3-column grid
+  const itemSize = useMemo(() => {
+    const padding = 6; // 3px on each side
+    const gaps = 3; // 1.5px margin on each side of 3 items = 3 gaps
+    return (screenWidth - padding - gaps) / 3;
+  }, [screenWidth]);
+
+  // Convert assets array into rows of 3 items each
+  const rows = useMemo(() => {
+    const rowsArray: Asset[][] = [];
+    for (let i = 0; i < assets.length; i += 3) {
+      rowsArray.push(assets.slice(i, i + 3));
+    }
+    return rowsArray;
+  }, [assets]);
+
+  // Create selected assets Set for O(1) lookup
+  const selectedAssetsSet = useMemo(() => {
+    return new Set(selectedAssets.map(asset => asset.id));
+  }, [selectedAssets]);
+
+  const renderRow = useCallback((row: Asset[], rowIndex: number) => {
+    return (
+      <View
+        key={`row-${rowIndex}`}
+        style={{
+          flexDirection: 'row',
+          paddingHorizontal: 1.5,
+          marginBottom: 0, // Margin handled by PhotoTile
+        }}
+      >
+        {row.map((asset) => {
+          const isSelected = selectedAssetsSet.has(asset.id);
+          const isAutoTagging = autoTaggingAssets.has(asset.id);
+          return (
+            <PhotoTile
+              key={asset.id}
+              asset={asset}
+              isSelected={isSelected}
+              onToggleSelect={onToggleSelect}
+              onOpenTagModal={onOpenTagModal}
+              onLongPress={onLongPress}
+              isAutoTagging={isAutoTagging}
+              isMultiSelectMode={isSelectionMode}
+            />
+          );
+        })}
+        {/* Fill remaining columns if row has less than 3 items */}
+        {row.length < 3 && (
+          Array.from({ length: 3 - row.length }).map((_, idx) => (
+            <View key={`spacer-${idx}`} style={{ flex: 1, margin: 1.5 }} />
+          ))
+        )}
+      </View>
+    );
+  }, [selectedAssetsSet, autoTaggingAssets, isSelectionMode, onToggleSelect, onOpenTagModal, onLongPress]);
+
+  const bottomPadding = useMemo(() => {
+    return Math.max(insets.bottom + 100, 120) + 80; // Extra padding for tab bar
+  }, [insets.bottom]);
+
+  if (assets.length === 0) {
+    return (
+      <ScrollView
+        contentContainerStyle={{
+          flex: 1,
+          justifyContent: 'center',
+          alignItems: 'center',
+          paddingTop: 96,
+          paddingBottom: bottomPadding,
+        }}
+        refreshControl={
+          refreshing !== undefined && onRefresh ? (
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#b38f5b"
+              colors={['#b38f5b']}
+            />
+          ) : undefined
+        }
+      >
+        <View className="items-center px-8">
+          <View className="mb-4 h-16 w-16 items-center justify-center rounded-full bg-gray-100">
+            <Text className="text-3xl">📷</Text>
+          </View>
+          <Text className="mb-1 text-center text-[17px] font-semibold text-gray-900">
+            No photos yet
+          </Text>
+          <Text className="text-center text-[15px] leading-[20px] text-gray-500">
+            Import photos from your camera roll to get started
+          </Text>
+        </View>
+      </ScrollView>
+    );
+  }
 
   return (
-    <FlatList
-      data={assets}
-      renderItem={renderItem}
-      keyExtractor={keyExtractor}
-      numColumns={3}
-      contentContainerStyle={{ padding: 3, paddingBottom: 180 }} // Extra padding for tab bar
-      columnWrapperStyle={{ paddingHorizontal: 1.5 }}
+    <ScrollView
+      contentContainerStyle={{
+        padding: 3,
+        paddingBottom: bottomPadding,
+      }}
       showsVerticalScrollIndicator={true}
-      refreshing={refreshing}
-      onRefresh={onRefresh}
       refreshControl={
         refreshing !== undefined && onRefresh ? (
           <RefreshControl
@@ -209,35 +302,14 @@ export function PhotoGrid({
       scrollIndicatorInsets={{ right: 1 }}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="on-drag"
-      // Performance optimizations
-      initialNumToRender={12}
-      maxToRenderPerBatch={6}
-      updateCellsBatchingPeriod={50}
-      windowSize={10}
-      removeClippedSubviews={true}
-      getItemLayout={useCallback((data: ArrayLike<Asset> | null | undefined, index: number) => {
-        const screenWidth = Dimensions.get('window').width;
-        const itemSize = (screenWidth - 16) / 3; // Account for padding
-        const row = Math.floor(index / 3);
-        return {
-          length: itemSize,
-          offset: itemSize * row,
-          index,
-        };
-      }, [])}
-      ListEmptyComponent={
-        <View className="mt-24 items-center px-8">
-          <View className="mb-4 h-16 w-16 items-center justify-center rounded-full bg-gray-100">
-            <Text className="text-3xl">📷</Text>
-          </View>
-          <Text className="mb-1 text-center text-[17px] font-semibold text-gray-900">
-            No photos yet
-          </Text>
-          <Text className="text-center text-[15px] leading-[20px] text-gray-500">
-            Import photos from your camera roll to get started
-          </Text>
-        </View>
-      }
-    />
+      // Optimize scroll performance
+      decelerationRate="normal"
+      // Remove momentum scrolling issues
+      bounces={true}
+      // Smooth scrolling
+      scrollEventThrottle={16}
+    >
+      {rows.map((row, index) => renderRow(row, index))}
+    </ScrollView>
   );
 }
