@@ -7,20 +7,40 @@ A React Native mobile application for organizing, tagging, and building photo st
 - 📸 **Photo Library Management**: Import and organize photos from your device
 - 🏷️ **Smart Tagging**: Tag photos with custom or predefined tags
 - 🤖 **AI Auto-Tagging**: Automatically tag photos using AI vision (configurable per tag)
+  - Batch processing with intelligent retry logic
+  - Partial success handling - individual image failures don't block others
+  - Automatic image compression and optimization for AI processing
 - 📚 **Tag Management**: Create, edit, rename, and delete tags with usage tracking
 - 🎬 **Story Builder**: Select and arrange photos to create story sequences
 - 💾 **Export Stories**: Export story sequences to your device's photo library as albums
-- 🔍 **Filter & Search**: Filter photos by tags to quickly find what you need
+- 🔍 **Filter & Search**: 
+  - Filter photos by tags to quickly find what you need
+  - Filter photos without tags
+  - Multi-select mode for batch operations
+- 🔄 **Batch Retagging**: Select multiple photos and rerun autotagging in bulk
+- 🚫 **Duplicate Detection**: Automatically detect and handle duplicate photos during import
 - 📱 **Campaign Organization**: Organize photos into campaigns
 
 ## Tech Stack
 
 - **Framework**: React Native with Expo (SDK 54)
 - **Navigation**: Expo Router (file-based routing)
-- **Backend**: Supabase (PostgreSQL database + Storage)
+- **Backend**: Supabase (PostgreSQL database + Storage + Edge Functions)
+- **AI**: OpenAI GPT-4 Vision API (via Supabase Edge Functions)
 - **Styling**: NativeWind (Tailwind CSS for React Native)
 - **State Management**: React Hooks
 - **Build & Deploy**: EAS Build & Submit
+
+## Current Version
+
+**v1.1.6** (Build 11)
+
+Latest improvements:
+- Enhanced batch autotagging with better error handling
+- Multi-select retagging functionality
+- Filter photos without tags
+- Improved image compression for AI processing
+- Partial success handling for batch operations
 
 ## Prerequisites
 
@@ -68,7 +88,10 @@ A React Native mobile application for organizing, tagging, and building photo st
    - `tag_config` - Stores tag configuration (custom tags, deleted tags, auto-tag settings)
    
    Storage bucket:
-   - `assets` - Stores uploaded photos
+   - `assets` - Stores uploaded photos (includes A1 originals and A2 AI-optimized versions)
+   
+   Edge Functions:
+   - `auto_tag_asset` - Handles AI tagging requests with batch processing
 
 5. **Run the development server**
    ```bash
@@ -145,13 +168,21 @@ storystack/
 │   ├── PhotoGrid.tsx
 │   ├── StoryPanel.tsx
 │   ├── TagFilterBar.tsx
-│   └── TagModal.tsx
+│   ├── TagModal.tsx
+│   ├── ImportLoadingOverlay.tsx
+│   └── LibraryHeader.tsx
 ├── lib/                   # Library code
 │   └── supabase.ts        # Supabase client configuration
 ├── utils/                 # Utility functions
 │   ├── exportStory.ts     # Story export functionality
 │   ├── getDefaultCampaign.ts
-│   └── getAllAvailableTags.ts
+│   ├── getAllAvailableTags.ts
+│   ├── autoTagQueue.ts    # Batch autotagging queue management
+│   ├── compressImage.ts   # Image compression utilities
+│   └── duplicateDetection.ts
+├── supabase/
+│   └── functions/
+│       └── auto_tag_asset/ # Edge Function for AI tagging
 ├── types.ts              # TypeScript type definitions
 ├── app.json              # Expo configuration
 ├── eas.json              # EAS Build configuration
@@ -165,6 +196,7 @@ storystack/
 - **Auto-Tagging**: Enable AI auto-tagging for specific tags
 - **Tag Usage**: See how many photos use each tag
 - **Tag Deletion**: Delete tags and optionally remove them from all photos
+- **Batch Retagging**: Select multiple photos in multi-select mode and rerun autotagging for all selected photos
 
 ### Story Builder
 - Select multiple photos from your library
@@ -176,6 +208,13 @@ storystack/
 - Organize photos into campaigns
 - Each campaign has its own photo collection
 - Filter and manage photos within campaigns
+
+### AI Auto-Tagging
+- **Intelligent Batching**: Processes multiple images efficiently with rate limiting
+- **Partial Success**: If one image fails, others continue processing
+- **Image Optimization**: Automatically creates optimized A2 versions for AI processing
+- **Error Recovery**: Automatic retry logic for transient failures
+- **Size Management**: Handles large images with compression and Base64 conversion when needed
 
 ## Troubleshooting
 
@@ -194,6 +233,12 @@ If you get errors about build number being too low:
 - Check device logs for error messages
 - Verify all environment variables are set
 - Ensure Supabase tables exist and are accessible
+
+### Autotagging Issues
+- Verify OpenAI API key is set in Supabase Edge Function secrets
+- Check Edge Function logs in Supabase dashboard
+- Ensure `tag_config` table has proper auto-tag settings configured
+- Large images are automatically compressed, but check Edge Function logs if issues persist
 
 ## Contributing
 
