@@ -24,14 +24,6 @@ try {
       },
     });
     
-    // Add global error handler for auth errors (including refresh token errors)
-    supabaseClient.auth.onAuthStateChange((event, session) => {
-      // Handle token refresh errors
-      if (event === 'TOKEN_REFRESHED' && !session) {
-        console.warn('[Supabase] Token refresh failed - session cleared');
-      }
-    });
-    
     console.log('[Supabase] Client initialized successfully');
   }
 } catch (error) {

@@ -6,10 +6,12 @@ import * as Haptics from 'expo-haptics';
 type StoryHeaderProps = {
   onMenuPress?: () => void;
   onAddMorePress?: () => void;
+  onBackPress?: () => void;
   showAddMore?: boolean;
+  showBack?: boolean;
 };
 
-export function StoryHeader({ onMenuPress, onAddMorePress, showAddMore = false }: StoryHeaderProps) {
+export function StoryHeader({ onMenuPress, onAddMorePress, onBackPress, showAddMore = false, showBack = false }: StoryHeaderProps) {
   const insets = useSafeAreaInsets();
 
   return (
@@ -26,9 +28,30 @@ export function StoryHeader({ onMenuPress, onAddMorePress, showAddMore = false }
       }}
     >
       <View className="flex-row items-center justify-between">
-        <Text className="text-[20px] font-bold text-gray-900" style={{ letterSpacing: -0.5 }}>
-          New Story
-        </Text>
+        <View className="flex-row items-center gap-3">
+          {showBack && onBackPress && (
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                onBackPress();
+              }}
+              activeOpacity={0.6}
+              className="h-9 w-9 items-center justify-center rounded-full"
+              style={{
+                backgroundColor: 'rgba(179, 143, 91, 0.1)',
+              }}
+            >
+              <MaterialCommunityIcons
+                name="arrow-left"
+                size={20}
+                color="#b38f5b"
+              />
+            </TouchableOpacity>
+          )}
+          <Text className="text-[20px] font-bold text-gray-900" style={{ letterSpacing: -0.5 }}>
+            New Story
+          </Text>
+        </View>
         <View className="flex-row items-center gap-2">
           {showAddMore && onAddMorePress && (
             <TouchableOpacity

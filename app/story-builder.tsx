@@ -464,6 +464,9 @@ export default function StoryBuilderScreen() {
         {/* Header */}
         <StoryHeader 
           onMenuPress={() => setIsMenuOpen(true)}
+          onBackPress={() => {
+            router.push('/stories' as any);
+          }}
           onAddMorePress={() => {
             // Navigate to library with current story's asset IDs
             const currentAssetIds = orderedAssets.map((a) => a.id).join(',');
@@ -476,6 +479,7 @@ export default function StoryBuilderScreen() {
             });
           }}
           showAddMore={orderedAssets.length > 0}
+          showBack={orderedAssets.length === 0}
         />
 
         {isLoading ? (

@@ -99,10 +99,16 @@ export default function ProfileScreen() {
       if (response.ok) {
         // Add cache busting to ensure fresh image
         setProfilePhoto(`${data.publicUrl}?t=${Date.now()}`);
+      } else if (response.status === 404) {
+        // File doesn't exist - this is expected for users without profile photos
+        console.log('[Profile] No profile photo found (404)');
+      } else {
+        // Other errors (400, 403, etc.) - log but don't show error to user
+        console.warn(`[Profile] Error checking profile photo: ${response.status} ${response.statusText}`);
       }
     } catch (error) {
-      // Photo doesn't exist yet, that's fine
-      console.log('[Profile] No profile photo found');
+      // Network error or other exception - silently handle
+      console.log('[Profile] Could not check profile photo:', error);
     }
   };
 

@@ -6,6 +6,7 @@ import {
   Animated,
   Dimensions,
   StyleSheet,
+  Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
@@ -21,14 +22,36 @@ type OnboardingStep = {
   iconColor: string;
 };
 
+// Professional photos for brand teams and small businesses
+const ONBOARDING_PHOTOS = {
+  product1: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=400&h=400&fit=crop',
+  product2: 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?w=400&h=400&fit=crop',
+  product3: 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=400&h=400&fit=crop',
+  product4: 'https://images.unsplash.com/photo-1556228578-0d85b1a4d571?w=400&h=400&fit=crop',
+  workspace: 'https://images.unsplash.com/photo-1521737604893-d14cc237f11d?w=600&h=400&fit=crop',
+  team: 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=600&h=400&fit=crop',
+  brand: 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?w=600&h=400&fit=crop',
+  marketing: 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=600&h=400&fit=crop',
+};
+
 // Visual components for each feature
 const ImportVisual = () => (
   <View style={{ marginTop: 32, alignItems: 'center', width: '100%' }}>
     <View style={{ position: 'relative', width: 280, height: 200, backgroundColor: '#ffffff', borderRadius: 16, padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4 }}>
-      {/* Photo grid mockup */}
+      {/* Photo grid with real photos */}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        {[1, 2, 3, 4].map((i) => (
-          <View key={i} style={{ width: 60, height: 60, backgroundColor: '#e5e7eb', borderRadius: 8 }} />
+        {[
+          ONBOARDING_PHOTOS.product1,
+          ONBOARDING_PHOTOS.product2,
+          ONBOARDING_PHOTOS.product3,
+          ONBOARDING_PHOTOS.product4,
+        ].map((photo, i) => (
+          <Image
+            key={i}
+            source={{ uri: photo }}
+            style={{ width: 60, height: 60, borderRadius: 8 }}
+            resizeMode="cover"
+          />
         ))}
       </View>
       {/* Bottom Tab Bar with Add button highlighted */}
@@ -48,13 +71,17 @@ const ImportVisual = () => (
 const TagsVisual = () => (
   <View style={{ marginTop: 32, alignItems: 'center', width: '100%' }}>
     <View style={{ width: 280, backgroundColor: '#ffffff', borderRadius: 16, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4 }}>
-      {/* Photo mockup */}
-      <View style={{ width: '100%', height: 120, backgroundColor: '#e5e7eb', borderRadius: 12, marginBottom: 16, alignItems: 'center', justifyContent: 'center' }}>
-        <MaterialCommunityIcons name="image" size={48} color="#9ca3af" />
+      {/* Real product photo */}
+      <View style={{ width: '100%', height: 120, borderRadius: 12, marginBottom: 16, overflow: 'hidden' }}>
+        <Image
+          source={{ uri: ONBOARDING_PHOTOS.product1 }}
+          style={{ width: '100%', height: '100%' }}
+          resizeMode="cover"
+        />
       </View>
       {/* Tags */}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        {['Nature', 'Outdoor', 'Summer'].map((tag, i) => (
+        {['Product', 'Brand', 'Campaign'].map((tag, i) => (
           <View key={i} style={{ backgroundColor: 'rgba(179, 143, 91, 0.12)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}>
             <Text style={{ fontSize: 12, fontWeight: '500', color: '#b38f5b' }}>{tag}</Text>
           </View>
@@ -74,21 +101,31 @@ const FilteringVisual = () => (
       {/* Search bar */}
       <View style={{ backgroundColor: '#f9fafb', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <MaterialCommunityIcons name="magnify" size={18} color="#9ca3af" />
-        <Text style={{ fontSize: 14, color: '#9ca3af' }}>Search by tags...</Text>
+        <Text style={{ fontSize: 14, color: '#9ca3af' }}>Search assets by tags...</Text>
       </View>
       {/* Active filters */}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-        {['Nature', 'Summer'].map((tag, i) => (
+        {['Product', 'Brand'].map((tag, i) => (
           <View key={i} style={{ backgroundColor: '#b38f5b', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Text style={{ fontSize: 12, fontWeight: '600', color: '#ffffff' }}>{tag}</Text>
             <MaterialCommunityIcons name="close" size={14} color="#ffffff" />
           </View>
         ))}
       </View>
-      {/* Photo grid showing filtered results */}
+      {/* Photo grid showing filtered results with real photos */}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        {[1, 2, 3, 4].map((i) => (
-          <View key={i} style={{ width: 60, height: 60, backgroundColor: '#e5e7eb', borderRadius: 8 }} />
+        {[
+          ONBOARDING_PHOTOS.product1,
+          ONBOARDING_PHOTOS.product2,
+          ONBOARDING_PHOTOS.product3,
+          ONBOARDING_PHOTOS.product4,
+        ].map((photo, i) => (
+          <Image
+            key={i}
+            source={{ uri: photo }}
+            style={{ width: 60, height: 60, borderRadius: 8 }}
+            resizeMode="cover"
+          />
         ))}
       </View>
     </View>
@@ -118,10 +155,10 @@ const TagManagementVisual = () => (
         
         {/* Tag rows */}
         {[
-          { name: 'Nature', enabled: true, count: 12 },
-          { name: 'Outdoor', enabled: false, count: 8 },
-          { name: 'Summer', enabled: true, count: 5 },
-          { name: 'Product', enabled: false, count: 15 },
+          { name: 'Product', enabled: true, count: 12 },
+          { name: 'Brand', enabled: false, count: 8 },
+          { name: 'Campaign', enabled: true, count: 5 },
+          { name: 'Marketing', enabled: false, count: 15 },
         ].map((tag, i) => (
           <View key={i}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, backgroundColor: '#ffffff' }}>
@@ -181,10 +218,10 @@ const AutoTaggingVisual = () => (
       {/* Tag list with star icons */}
       <View>
         {[
-          { name: 'Nature', enabled: true, count: 12 },
-          { name: 'Outdoor', enabled: true, count: 8 },
-          { name: 'Summer', enabled: false, count: 5 },
-          { name: 'Product', enabled: true, count: 15 },
+          { name: 'Product', enabled: true, count: 12 },
+          { name: 'Brand', enabled: true, count: 8 },
+          { name: 'Campaign', enabled: false, count: 5 },
+          { name: 'Marketing', enabled: true, count: 15 },
         ].map((tag, i) => (
           <View key={i}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, backgroundColor: '#ffffff' }}>
@@ -237,16 +274,17 @@ const StoriesVisual = () => (
         marginBottom: 12,
       }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 100 }}>
-          {/* Thumbnail */}
+          {/* Thumbnail with real photo */}
           <View style={{ 
             width: 100, 
             height: 100, 
-            backgroundColor: '#f5f5f7', 
-            alignItems: 'center', 
-            justifyContent: 'center',
             overflow: 'hidden',
           }}>
-            <MaterialCommunityIcons name="image-outline" size={36} color="#c7c7cc" />
+            <Image
+              source={{ uri: ONBOARDING_PHOTOS.workspace }}
+              style={{ width: 100, height: 100 }}
+              resizeMode="cover"
+            />
           </View>
           
           {/* Story Info */}
@@ -258,7 +296,7 @@ const StoriesVisual = () => (
               letterSpacing: -0.4, 
               marginBottom: 6 
             }} numberOfLines={1}>
-              My Summer Trip
+              Brand Campaign
             </Text>
             <Text style={{ 
               fontSize: 15, 
@@ -289,13 +327,18 @@ const StoriesVisual = () => (
         elevation: 3,
       }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 100 }}>
-          {/* Thumbnail with image */}
+          {/* Thumbnail with real photo */}
           <View style={{ 
             width: 100, 
             height: 100, 
-            backgroundColor: '#e5e7eb', 
             overflow: 'hidden',
-          }} />
+          }}>
+            <Image
+              source={{ uri: ONBOARDING_PHOTOS.product1 }}
+              style={{ width: 100, height: 100 }}
+              resizeMode="cover"
+            />
+          </View>
           
           {/* Story Info */}
           <View style={{ flex: 1, padding: 20, paddingLeft: 16 }}>
@@ -340,56 +383,56 @@ const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     id: 'welcome',
     title: 'Welcome to StoryStack',
-    description: 'Organize your photos into beautiful stories. Let\'s start by setting up your tags, then you\'ll import your photos.',
+    description: 'Organize your visual assets into powerful stories. Let\'s start by setting up your tags, then you\'ll import your photos.',
     icon: 'book-open-variant',
     iconColor: '#b38f5b',
   },
   {
     id: 'tag-management',
     title: 'Set Up Your Tags',
-    description: 'First, create your tags. Access Tag Management from the bottom navigation bar to create tags that will help organize your photos. You can add tags like "Nature", "Family", "Work", or anything that matters to you.',
+    description: 'First, create your tags. Access Tag Management from the bottom navigation bar to create tags that will help organize your photos. Add tags like "Product", "Campaign", "Brand", or any categories that matter to your business.',
     icon: 'tag-multiple-outline',
     iconColor: '#b38f5b',
   },
   {
     id: 'auto-tagging',
     title: 'Enable AI Auto-Tagging',
-    description: 'In Tag Management, tap the star icon next to any tag to enable AI auto-tagging. When enabled, AI will automatically suggest these tags for new photos you import, saving you time.',
+    description: 'In Tag Management, tap the star icon next to any tag to enable AI auto-tagging. AI will automatically categorize your assets, saving your team valuable time.',
     icon: 'robot',
     iconColor: '#b38f5b',
   },
   {
     id: 'import',
-    title: 'Import Your Photos',
-    description: 'Now you\'re ready to import photos! Tap the "Add" button in the bottom navigation bar to import photos from your library. Select multiple photos at once.',
+    title: 'Import Your Assets',
+    description: 'Tap the "Add" button in the bottom navigation bar to import photos from your library. Select multiple assets at once.',
     icon: 'image-plus',
     iconColor: '#b38f5b',
   },
   {
     id: 'tags',
     title: 'Tag Your Photos',
-    description: 'After importing, tap any photo to add or edit tags. AI will suggest tags if you enabled auto-tagging. You can also add custom tags to organize your library.',
+    description: 'After importing, AI will automatically apply tags you\'ve enabled. Tap any photo to review and update tags, or add custom tags to organize your content.',
     icon: 'tag-multiple',
     iconColor: '#b38f5b',
   },
   {
     id: 'filtering',
     title: 'Filter Your Photos',
-    description: 'Use the search bar at the top to filter photos by tags. Tap multiple tags to find photos that match all selected tags. Clear filters anytime.',
+    description: 'Use the search bar at the top to filter photos by tags. Tap multiple tags to refine your search and find exactly what you need.',
     icon: 'filter-variant',
     iconColor: '#b38f5b',
   },
   {
     id: 'stories',
     title: 'Create Stories',
-    description: 'Select photos and add them to stories. Organize your photos into collections. Build beautiful narratives from your library.',
+    description: 'Select photos and organize them into stories. Build campaign narratives, product collections, and brand stories.',
     icon: 'book-multiple',
     iconColor: '#b38f5b',
   },
   {
     id: 'ready',
     title: "You're All Set!",
-    description: 'Now let\'s set up your first tags. Tags are the core of StoryStack - they help organize and automatically categorize your photos. You can always access this guide from the menu.',
+    description: 'Tags are the foundation of StoryStack - they help organize and automatically categorize your visual assets. Set up your first tags to start managing your content. You can always access this guide from the menu.',
     icon: 'check-circle',
     iconColor: '#b38f5b',
   },

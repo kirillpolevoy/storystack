@@ -25,7 +25,7 @@ type TagModalProps = {
   asset: Asset | null;
   visible: boolean;
   onClose: () => void;
-  onUpdateTags: (newTags: TagVocabulary[]) => Promise<void>;
+  onUpdateTags: (newTags: TagVocabulary[], location?: string | null) => Promise<void>;
   allAvailableTags?: TagVocabulary[];
   multipleAssets?: Asset[];
   onDelete?: (asset: Asset) => void;
@@ -42,12 +42,13 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
   
   const [localTags, setLocalTags] = useState<TagVocabulary[]>([]);
   const [savedTags, setSavedTags] = useState<TagVocabulary[]>([]); // Track saved tags to display at bottom
-  const [location, setLocation] = useState<string>(''); // Location is a reserved tag, stored separately
+  const [location, setLocation] = useState<string>(''); // Location is stored in separate column
   const [newTag, setNewTag] = useState('');
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [isRetryingAutoTag, setIsRetryingAutoTag] = useState(false);
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
+  const locationInputRef = useRef<TextInput>(null);
   const inputRef = useRef<TextInput>(null);
   
   // Tag indicator animations - Apple-grade smooth
@@ -782,13 +783,16 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                 return;
               }
               
-              // Single-edit mode: auto-save tags when panel is dismissed
+              // Single-edit mode: auto-save tags and location when panel is dismissed
               const currentTagsStr = JSON.stringify((asset?.tags ?? []).sort());
               const localTagsStr = JSON.stringify(localTags.sort());
-              const shouldAutoSave = currentTagsStr !== localTagsStr;
+              const tagsChanged = currentTagsStr !== localTagsStr;
+              const currentLocation = asset?.location || null;
+              const locationChanged = location.trim() !== (currentLocation || '');
+              const shouldAutoSave = tagsChanged || locationChanged;
               
               if (shouldAutoSave) {
-                console.log('[TagModal] Auto-saving tags on panel dismiss');
+                console.log('[TagModal] Auto-saving tags and location on panel dismiss', { tagsChanged, locationChanged });
                 // handleSave will handle the animation, so return early
                 handleSave(true); // skipClose=true to only close panel, not modal
                 return;
@@ -952,56 +956,30 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
         setSavedTags([]);
         // In multi-edit, check if all assets have the same location
         const locations = multipleAssets
-          .map(a => {
-            const tags = a.tags ?? [];
-            // Try prefixed format first
-            const prefixedLocation = tags.find(tag => tag.startsWith('Location: '));
-            if (prefixedLocation) {
-              return prefixedLocation.replace(/^Location:\s*/i, '');
-            }
-            // Fallback to legacy format
-            return tags.find(tag => tag.toLowerCase() === 'location');
-          })
+          .map(a => a.location)
           .filter(Boolean) as string[];
         // If all assets have the same location, show it; otherwise show empty
         const uniqueLocations = Array.from(new Set(locations));
         setLocation(uniqueLocations.length === 1 ? uniqueLocations[0] : '');
       } else if (asset) {
         // Always sync with latest tags from asset prop to show all tags
-        // Extract location (reserved tag) separately
-        // Location tag is identified by prefix "Location: " or if it's the only tag that looks like a city name
+        // Location is now stored in separate column, not in tags
         const assetTags = asset.tags ?? [];
-        // First, try to find tag with "Location: " prefix
-        let locationTag = assetTags.find(tag => tag.startsWith('Location: '));
-        if (locationTag) {
-          locationTag = locationTag.replace(/^Location:\s*/i, ''); // Remove prefix
-        } else {
-          // Fallback: look for tag that equals "location" (case-insensitive) - legacy format
-          const legacyLocationTag = assetTags.find(tag => tag.toLowerCase() === 'location');
-          if (legacyLocationTag) {
-            locationTag = legacyLocationTag;
-          }
-        }
-        // Filter out location tags (both prefixed and legacy)
-        const tagsWithoutLocation = assetTags.filter(tag => 
-          !tag.startsWith('Location: ') && tag.toLowerCase() !== 'location'
-        );
-        
-        setLocalTags(tagsWithoutLocation);
-        setLocation(locationTag || '');
+        setLocalTags(assetTags);
+        setLocation(asset.location || '');
         
         if (assetChanged) {
           // Reset savedTags when asset changes (new photo selected)
-          setSavedTags(tagsWithoutLocation);
+          setSavedTags(assetTags);
           prevAssetIdForTagsRef.current = asset.id;
         } else if (savedTags.length > 0) {
           // If we have savedTags and asset.tags matches them, update savedTags
           // This handles the case where database update completes and asset.tags is now correct
           const savedTagsStr = JSON.stringify(savedTags.sort());
-          const assetTagsStr = JSON.stringify(tagsWithoutLocation.sort());
+          const assetTagsStr = JSON.stringify(assetTags.sort());
           // Only update if they match (database update completed) or if asset has more tags (new tags added)
-          if (assetTagsStr === savedTagsStr || tagsWithoutLocation.length >= savedTags.length) {
-            setSavedTags(tagsWithoutLocation);
+          if (assetTagsStr === savedTagsStr || assetTags.length >= savedTags.length) {
+            setSavedTags(assetTags);
           }
         }
       } else {
@@ -1120,24 +1098,9 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
   const handleSave = async (skipClose = false) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     
-    // Combine location (reserved tag) with other tags
-    // Store location with "Location: " prefix to identify it as reserved tag
+    // Location is now stored in separate column, not in tags
     const finalTags: TagVocabulary[] = [...localTags];
-    if (location.trim()) {
-      // Remove any existing location tags (prefixed or legacy) and add the new one with prefix
-      const tagsWithoutLocation = finalTags.filter(tag => 
-        !tag.startsWith('Location: ') && tag.toLowerCase() !== 'location'
-      );
-      finalTags.length = 0;
-      finalTags.push(...tagsWithoutLocation, `Location: ${location.trim()}`);
-    } else {
-      // Remove location tag if empty
-      const tagsWithoutLocation = finalTags.filter(tag => 
-        !tag.startsWith('Location: ') && tag.toLowerCase() !== 'location'
-      );
-      finalTags.length = 0;
-      finalTags.push(...tagsWithoutLocation);
-    }
+    const locationValue = location.trim() || null;
     
     // Save the tags we're about to save - use this for bottom display
     setSavedTags(localTags);
@@ -1147,26 +1110,33 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
     if (asset && onAssetChange && !isMultiEdit) {
       // Only update single asset in single-edit mode
       // In multi-edit mode, onUpdateTags handles updating all assets
-      onAssetChange({ ...asset, tags: finalTags });
+      onAssetChange({ ...asset, tags: finalTags, location: locationValue });
     }
     
     // In multi-edit mode, always close modal completely (go back to library)
     // In single-edit mode, respect skipClose parameter
     if (isMultiEdit) {
       // Multi-edit: close modal immediately for fast UX, save tags in background
-      console.log('[TagModal] Closing modal immediately, saving tags in background');
+      console.log('[TagModal] Closing modal immediately, saving tags and location in background');
       
       // Close modal immediately (optimistic close for fast UX)
       handleClose();
       
-      // Update tags in database in background (don't await - let it happen async)
-      onUpdateTags(finalTags).catch((error) => {
-        console.error('[TagModal] Failed to update tags:', error);
+      // Update tags and location in database in background (don't await - let it happen async)
+      onUpdateTags(finalTags, locationValue).catch((error) => {
+        console.error('[TagModal] Failed to update tags/location:', error);
         // Show error alert but don't block the UI
-        Alert.alert('Update failed', 'Unable to save tags. Please try again.');
+        Alert.alert('Update failed', 'Unable to save tags and location. Please try again.');
       });
     } else if (!skipClose) {
-      // Single-edit: close panel and modal normally
+      // Single-edit: save first, then close panel and modal
+      // Save tags and location before closing to ensure they persist
+      await onUpdateTags(finalTags, locationValue).catch((error) => {
+        console.error('[TagModal] Failed to update tags/location:', error);
+        Alert.alert('Update failed', 'Unable to save tags and location. Please try again.');
+        // Don't close if save failed
+        return;
+      });
       handleClose();
     } else {
       // Single-edit auto-save: just close the panel, don't close the modal
@@ -1202,25 +1172,16 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
     
     // Update tags in database (only for single-edit auto-save, multi-edit already handled above)
     if (!isMultiEdit && skipClose) {
-      onUpdateTags(finalTags).catch((error) => {
-        console.error('[TagModal] Failed to update tags:', error);
+      onUpdateTags(finalTags, locationValue).catch((error) => {
+        console.error('[TagModal] Failed to update tags/location:', error);
         // Revert optimistic update on error
         if (asset && onAssetChange) {
-          // Extract location from finalTags for revert
-          const assetTags = asset.tags ?? [];
-          const locationTag = assetTags.find(tag => tag.toLowerCase() === 'location');
-          const tagsWithoutLocation = assetTags.filter(tag => tag.toLowerCase() !== 'location');
-          onAssetChange({ ...asset, tags: tagsWithoutLocation });
-          setLocation(locationTag || '');
+          // Revert to original asset state
+          onAssetChange({ ...asset, tags: asset.tags ?? [], location: asset.location || null });
+          setLocation(asset.location || '');
         }
         // Revert saved tags on error
         setSavedTags(asset?.tags ?? []);
-      });
-    } else if (!isMultiEdit && !skipClose) {
-      // Single-edit mode, closing modal - save tags including location
-      onUpdateTags(finalTags).catch((error) => {
-        console.error('[TagModal] Failed to update tags:', error);
-        Alert.alert('Update failed', 'Unable to save tags. Please try again.');
       });
     }
   };
@@ -1576,13 +1537,16 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                   return;
                 }
                 
-                // Single-edit mode: auto-save tags when backdrop is tapped
+                // Single-edit mode: auto-save tags and location when backdrop is tapped
                 const currentTagsStr = JSON.stringify((asset?.tags ?? []).sort());
                 const localTagsStr = JSON.stringify(localTags.sort());
-                const shouldAutoSave = currentTagsStr !== localTagsStr;
+                const tagsChanged = currentTagsStr !== localTagsStr;
+                const currentLocation = asset?.location || null;
+                const locationChanged = location.trim() !== (currentLocation || '');
+                const shouldAutoSave = tagsChanged || locationChanged;
                 
                 if (shouldAutoSave) {
-                  console.log('[TagModal] Auto-saving tags on backdrop tap');
+                  console.log('[TagModal] Auto-saving tags and location on backdrop tap', { tagsChanged, locationChanged });
                   // handleSave will handle the animation, so return early
                   handleSave(true); // skipClose=true to only close panel, not modal
                   return;
@@ -1921,10 +1885,8 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
             >
               {/* Header */}
               {!isMultiEdit ? (
-                <View style={{ paddingTop: 8, paddingBottom: 20 }}>
-                  <Text style={{ fontSize: 17, fontWeight: '600', color: '#111827' }}>
-                    Tags
-                  </Text>
+                <View style={{ paddingTop: 8, paddingBottom: 24 }}>
+                  {/* Removed generic "Tags" header - content is self-explanatory */}
                 </View>
               ) : (
                 // Multi-edit header with photo grid - Apple-style clean design
@@ -1982,39 +1944,169 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                 </View>
               )}
               
-              {/* Auto-tag / Re-tag Section */}
+              {/* Location Section - Core metadata first */}
+              <View style={{ marginBottom: 32 }}>
+                <Text
+                  style={{
+                    fontSize: 15,
+                    fontWeight: '600',
+                    color: '#111827',
+                    marginBottom: 12,
+                    letterSpacing: -0.2,
+                  }}
+                >
+                  Location
+                </Text>
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  style={{
+                    backgroundColor: '#f9fafb',
+                    borderRadius: 12,
+                    borderWidth: 1.5,
+                    borderColor: location ? '#b38f5b' : '#e5e7eb',
+                    paddingVertical: 14,
+                    paddingHorizontal: 16,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    shadowColor: 'transparent',
+                    shadowOffset: { width: 0, height: 0 },
+                    shadowOpacity: 0,
+                    shadowRadius: 0,
+                  }}
+                  onPress={() => {
+                    // Focus the TextInput when the container is tapped
+                    // This provides a larger tap target and better UX
+                    locationInputRef.current?.focus();
+                  }}
+                >
+                  {/* Map Pin Icon - SF Symbol style */}
+                  <View
+                    style={{
+                      width: 20,
+                      height: 20,
+                      borderRadius: 10,
+                      backgroundColor: location ? '#b38f5b' : '#8e8e93',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      marginRight: 12,
+                    }}
+                  >
+                    <MaterialCommunityIcons 
+                      name="map-marker" 
+                      size={12} 
+                      color="#ffffff" 
+                    />
+                  </View>
+                  
+                  {/* Text Input - Integrated */}
+                  <TextInput
+                    ref={locationInputRef}
+                    placeholder="Add a location..."
+                    placeholderTextColor="#8e8e93"
+                    value={location}
+                    onChangeText={setLocation}
+                    returnKeyType="done"
+                    maxLength={50}
+                    onFocus={() => {
+                      setIsInputFocused(true);
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    }}
+                    onBlur={() => setIsInputFocused(false)}
+                    style={{
+                      flex: 1,
+                      fontSize: 16,
+                      fontWeight: location ? '500' : '400',
+                      color: location ? '#111827' : '#8e8e93',
+                      padding: 0, // Remove default padding since container handles it
+                    }}
+                  />
+                  
+                  {/* Clear button - only show when there's text */}
+                  {location.length > 0 && (
+                    <TouchableOpacity
+                      onPress={() => setLocation('')}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 10,
+                        backgroundColor: '#e5e7eb',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        marginLeft: 8,
+                      }}
+                    >
+                      <MaterialCommunityIcons 
+                        name="close" 
+                        size={12} 
+                        color="#6b7280" 
+                      />
+                    </TouchableOpacity>
+                  )}
+                </TouchableOpacity>
+                
+                {/* Helper text for multi-edit */}
+                {isMultiEdit && location && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+                    <MaterialCommunityIcons name="information-outline" size={14} color="#6b7280" style={{ marginRight: 6 }} />
+                    <Text style={{ fontSize: 13, color: '#6b7280', flex: 1 }}>
+                      Will be applied to all {multipleAssets.length} selected photos
+                    </Text>
+                  </View>
+                )}
+                
+                {/* Helper text for empty state - subtle guidance */}
+                {!location && !isMultiEdit && (
+                  <View style={{ 
+                    marginTop: 8, 
+                    flexDirection: 'row', 
+                    alignItems: 'center',
+                    backgroundColor: '#f9fafb',
+                    borderRadius: 8,
+                    paddingVertical: 8,
+                    paddingHorizontal: 12,
+                  }}>
+                    <MaterialCommunityIcons name="information-outline" size={14} color="#9ca3af" style={{ marginRight: 6 }} />
+                    <Text style={{ fontSize: 13, color: '#9ca3af', flex: 1 }}>
+                      Location from photo metadata will appear here
+                    </Text>
+                  </View>
+                )}
+              </View>
+              
+              {/* Auto-tag / Re-tag Section - Primary action after location */}
               {asset && (
-                <View style={{ marginBottom: 24 }}>
+                <View style={{ marginBottom: 32 }}>
                   <TouchableOpacity
                     onPress={handleRetryAutoTag}
                     disabled={isRetryingAutoTag}
-                    activeOpacity={0.7}
+                    activeOpacity={0.8}
                     style={{
                       flexDirection: 'row',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      gap: 8,
-                      paddingVertical: 14,
-                      paddingHorizontal: 20,
-                      borderRadius: 12,
+                      gap: 10,
+                      paddingVertical: 18,
+                      paddingHorizontal: 24,
+                      borderRadius: 16,
                       backgroundColor: isRetryingAutoTag
-                        ? 'rgba(179, 143, 91, 0.1)'
+                        ? 'rgba(179, 143, 91, 0.08)'
                         : localTags.length > 0
-                        ? '#ffffff'
+                        ? '#f9fafb'
                         : '#b38f5b',
-                      borderWidth: localTags.length > 0 && !isRetryingAutoTag ? 2 : 0,
+                      borderWidth: localTags.length > 0 && !isRetryingAutoTag ? 2.5 : 0,
                       borderColor: localTags.length > 0 ? '#b38f5b' : 'transparent',
-                      shadowColor: localTags.length === 0 ? '#000000' : 'transparent',
-                      shadowOffset: { width: 0, height: 2 },
-                      shadowOpacity: localTags.length === 0 ? 0.1 : 0,
-                      shadowRadius: 4,
-                      elevation: localTags.length === 0 ? 2 : 0,
+                      shadowColor: localTags.length === 0 ? '#b38f5b' : localTags.length > 0 ? '#b38f5b' : 'transparent',
+                      shadowOffset: { width: 0, height: localTags.length === 0 ? 6 : 2 },
+                      shadowOpacity: localTags.length === 0 ? 0.2 : localTags.length > 0 ? 0.08 : 0,
+                      shadowRadius: localTags.length === 0 ? 12 : 4,
+                      elevation: localTags.length === 0 ? 4 : localTags.length > 0 ? 1 : 0,
                     }}
                   >
                     {isRetryingAutoTag ? (
                       <>
                         <ActivityIndicator size="small" color="#b38f5b" />
-                        <Text style={{ fontSize: 17, fontWeight: '600', color: '#b38f5b' }}>
+                        <Text style={{ fontSize: 17, fontWeight: '600', color: '#b38f5b', letterSpacing: -0.3 }}>
                           {isMultiEdit ? 'Tagging Photos...' : 'Tagging...'}
                         </Text>
                       </>
@@ -2022,7 +2114,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                       <>
                         <MaterialCommunityIcons
                           name="auto-fix"
-                          size={20}
+                          size={22}
                           color={localTags.length > 0 ? '#b38f5b' : '#ffffff'}
                         />
                         <Text
@@ -2030,6 +2122,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                             fontSize: 17,
                             fontWeight: '600',
                             color: localTags.length > 0 ? '#b38f5b' : '#ffffff',
+                            letterSpacing: -0.3,
                           }}
                         >
                           {isMultiEdit 
@@ -2043,74 +2136,48 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                 </View>
               )}
               
-              {/* Location Section */}
-              <View style={{ marginBottom: 28 }}>
-                <Text
-                  style={{
-                    fontSize: 13,
-                    fontWeight: '600',
-                    color: '#6b7280',
-                    marginBottom: 10,
-                    letterSpacing: 0.5,
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  Location
-                </Text>
-                <TextInput
-                  placeholder={isMultiEdit ? "Add a location..." : "Add a location..."}
-                  placeholderTextColor="#8e8e93"
-                  value={location}
-                  onChangeText={setLocation}
-                  returnKeyType="done"
-                  maxLength={50}
-                  style={{
-                    backgroundColor: '#f9fafb',
-                    borderRadius: 14,
-                    paddingVertical: 16,
-                    paddingHorizontal: 18,
-                    fontSize: 16,
-                    fontWeight: '400',
-                    color: '#111827',
-                    borderWidth: 1,
-                    borderColor: '#e5e7eb',
-                  }}
-                />
-                {isMultiEdit && location && (
-                  <Text style={{ fontSize: 13, color: '#6b7280', marginTop: 8 }}>
-                    This location will be applied to all {multipleAssets.length} selected photos
-                  </Text>
-                )}
-              </View>
-              
-              {/* Selected Tags */}
-              {localTags.length > 0 && (
-                <View style={{ marginBottom: 28 }}>
-                  <Text
-                    style={{
-                      fontSize: 13,
-                      fontWeight: '600',
-                      color: '#6b7280',
-                      marginBottom: 12,
-                      letterSpacing: 0.5,
-                      textTransform: 'uppercase',
-                    }}
-                  >
-                    Tags
-                  </Text>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {/* Tags Section - Show existing tags */}
+              {localTags.length > 0 ? (
+                <View style={{ marginBottom: 32 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <Text
+                      style={{
+                        fontSize: 15,
+                        fontWeight: '600',
+                        color: '#111827',
+                        letterSpacing: -0.2,
+                      }}
+                    >
+                      Tags
+                    </Text>
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        fontWeight: '500',
+                        color: '#6b7280',
+                      }}
+                    >
+                      {localTags.length} {localTags.length === 1 ? 'tag' : 'tags'}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
                     {localTags.map((tag) => (
                       <TouchableOpacity
                         key={tag}
                         onPress={() => toggleTag(tag)}
-                        activeOpacity={0.8}
+                        activeOpacity={0.7}
                         style={{
                           backgroundColor: '#b38f5b',
-                          borderRadius: 20,
-                          paddingVertical: 10,
-                          paddingHorizontal: 16,
+                          borderRadius: 22,
+                          paddingVertical: 11,
+                          paddingHorizontal: 18,
                           flexDirection: 'row',
                           alignItems: 'center',
+                          shadowColor: '#b38f5b',
+                          shadowOffset: { width: 0, height: 2 },
+                          shadowOpacity: 0.1,
+                          shadowRadius: 4,
+                          elevation: 2,
                         }}
                       >
                         <Text
@@ -2119,27 +2186,59 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                             fontWeight: '500',
                             color: '#ffffff',
                             marginRight: 8,
+                            letterSpacing: -0.2,
                           }}
                         >
                           {tag}
                         </Text>
-                        <MaterialCommunityIcons name="close" size={14} color="#ffffff" />
+                        <MaterialCommunityIcons name="close" size={15} color="#ffffff" />
                       </TouchableOpacity>
                     ))}
                   </View>
                 </View>
+              ) : (
+                <View style={{ marginBottom: 32 }}>
+                  <Text
+                    style={{
+                      fontSize: 15,
+                      fontWeight: '600',
+                      color: '#111827',
+                      marginBottom: 12,
+                      letterSpacing: -0.2,
+                    }}
+                  >
+                    Tags
+                  </Text>
+                  <View style={{ 
+                    backgroundColor: '#f9fafb', 
+                    borderRadius: 12, 
+                    paddingVertical: 24, 
+                    paddingHorizontal: 20,
+                    alignItems: 'center',
+                    borderWidth: 1,
+                    borderColor: '#e5e7eb',
+                    borderStyle: 'dashed',
+                  }}>
+                    <MaterialCommunityIcons name="tag-outline" size={24} color="#9ca3af" style={{ marginBottom: 8 }} />
+                    <Text style={{ fontSize: 15, fontWeight: '500', color: '#6b7280', marginBottom: 4 }}>
+                      No tags yet
+                    </Text>
+                    <Text style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center' }}>
+                      Add tags manually or use auto-tag
+                    </Text>
+                  </View>
+                </View>
               )}
               
-              {/* Add Tag Input */}
-              <View style={{ marginBottom: 28 }}>
+              {/* Add Tag Section */}
+              <View style={{ marginBottom: 32 }}>
                 <Text
                   style={{
-                    fontSize: 13,
+                    fontSize: 15,
                     fontWeight: '600',
-                    color: '#6b7280',
-                    marginBottom: 10,
-                    letterSpacing: 0.5,
-                    textTransform: 'uppercase',
+                    color: '#111827',
+                    marginBottom: 12,
+                    letterSpacing: -0.2,
                   }}
                 >
                   Add Tag
@@ -2197,19 +2296,28 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
               
               {/* Suggested Tags */}
               {allAvailableTagsCombined.length > 0 && (
-                <View>
-                  <Text
-                    style={{
-                      fontSize: 13,
-                      fontWeight: '600',
-                      color: '#6b7280',
-                      marginBottom: 12,
-                      letterSpacing: 0.5,
-                      textTransform: 'uppercase',
-                    }}
-                  >
-                    Suggested Tags
-                  </Text>
+                <View style={{ marginBottom: 32 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <Text
+                      style={{
+                        fontSize: 15,
+                        fontWeight: '600',
+                        color: '#111827',
+                        letterSpacing: -0.2,
+                      }}
+                    >
+                      Suggested Tags
+                    </Text>
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        fontWeight: '500',
+                        color: '#6b7280',
+                      }}
+                    >
+                      {allAvailableTagsCombined.length} {allAvailableTagsCombined.length === 1 ? 'suggestion' : 'suggestions'}
+                    </Text>
+                  </View>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                     {allAvailableTagsCombined.map((tag) => {
                       const isActive = tagsSet.has(tag);
@@ -2219,12 +2327,17 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                           onPress={() => toggleTag(tag)}
                           activeOpacity={0.7}
                           style={{
-                            backgroundColor: isActive ? '#b38f5b' : '#f3f4f6',
-                            borderRadius: 20,
-                            paddingVertical: 10,
-                            paddingHorizontal: 16,
-                            borderWidth: isActive ? 0 : 1,
+                            backgroundColor: isActive ? '#b38f5b' : '#f9fafb',
+                            borderRadius: 22,
+                            paddingVertical: 11,
+                            paddingHorizontal: 18,
+                            borderWidth: isActive ? 0 : 1.5,
                             borderColor: '#e5e7eb',
+                            shadowColor: isActive ? '#b38f5b' : 'transparent',
+                            shadowOffset: { width: 0, height: 2 },
+                            shadowOpacity: isActive ? 0.1 : 0,
+                            shadowRadius: 4,
+                            elevation: isActive ? 2 : 0,
                           }}
                         >
                           <Text
@@ -2232,6 +2345,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                               fontSize: 15,
                               fontWeight: '500',
                               color: isActive ? '#ffffff' : '#374151',
+                              letterSpacing: -0.2,
                             }}
                           >
                             {tag}

@@ -1825,67 +1825,13 @@ async function processBatchResults(
   console.log(`[auto_tag_asset] 💾 Updating ${resultsMap.size} assets with tags...`);
   
   for (const [assetId, aiTags] of resultsMap.entries()) {
-    // Fetch existing tags to preserve location (reserved tag)
-    // Retry up to 3 times with exponential backoff to handle race conditions
-    let existingTags: string[] = [];
-    let locationTag: string | undefined = undefined;
-    let fetchAttempts = 0;
-    const maxFetchAttempts = 3;
-    
-    while (fetchAttempts < maxFetchAttempts) {
-      const { data: existingAsset, error: fetchError } = await supabaseClient
-        .from('assets')
-        .select('tags')
-        .eq('id', assetId)
-        .single();
-      
-      if (fetchError) {
-        fetchAttempts++;
-        if (fetchAttempts < maxFetchAttempts) {
-          const delay = Math.pow(2, fetchAttempts) * 100; // 100ms, 200ms, 400ms
-          console.warn(`[auto_tag_asset] ⚠️  Failed to fetch existing tags for asset ${assetId} (attempt ${fetchAttempts}/${maxFetchAttempts}), retrying in ${delay}ms...`, fetchError);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          continue;
-        } else {
-          console.error(`[auto_tag_asset] ❌ Failed to fetch existing tags for asset ${assetId} after ${maxFetchAttempts} attempts:`, fetchError);
-          break;
-        }
-      }
-      
-      existingTags = (existingAsset?.tags || []) as string[];
-      console.log(`[auto_tag_asset] Existing tags for asset ${assetId}:`, JSON.stringify(existingTags));
-      
-      // Extract location tag (prefixed format "Location: City" or legacy "location")
-      locationTag = existingTags.find(tag => tag.startsWith('Location: '));
-      if (!locationTag) {
-        // Fallback to legacy format
-        locationTag = existingTags.find(tag => tag.toLowerCase() === 'location');
-      }
-      break; // Success, exit retry loop
-    }
-    
-    console.log(`[auto_tag_asset] Found location tag for asset ${assetId}:`, locationTag || 'none');
-    
-    // Merge AI tags with location tag (if exists)
-    const finalTags = [...aiTags];
-    if (locationTag) {
-      // Remove any location tag from AI tags (prefixed or legacy)
-      const aiTagsWithoutLocation = finalTags.filter(tag => 
-        !tag.startsWith('Location: ') && tag.toLowerCase() !== 'location'
-      );
-      finalTags.length = 0;
-      finalTags.push(...aiTagsWithoutLocation, locationTag);
-      console.log(`[auto_tag_asset] ✅ Preserving location tag "${locationTag}" for asset ${assetId}`);
-      console.log(`[auto_tag_asset] Final tags (${finalTags.length}):`, JSON.stringify(finalTags));
-    } else {
-      console.log(`[auto_tag_asset] ⚠️  No location tag found for asset ${assetId}, using AI tags only`);
-    }
-    
+    // Location is now stored in separate column, so we just update tags directly
+    // No need to preserve location from tags anymore
     const { error } = await supabaseClient
       .from('assets')
       .update({
-        tags: finalTags,
-        auto_tag_status: finalTags.length > 0 ? 'completed' : 'failed',
+        tags: aiTags,
+        auto_tag_status: aiTags.length > 0 ? 'completed' : 'failed',
         openai_batch_id: null, // Clear batch_id after processing
       })
       .eq('id', assetId);
@@ -1893,7 +1839,7 @@ async function processBatchResults(
     if (error) {
       console.error(`[auto_tag_asset] ❌ Failed to update asset ${assetId}:`, error);
     } else {
-      console.log(`[auto_tag_asset] ✅ Updated asset ${assetId} with ${finalTags.length} tags (${aiTags.length} AI tags${locationTag ? ` + location "${locationTag}"` : ''})`);
+      console.log(`[auto_tag_asset] ✅ Updated asset ${assetId} with ${aiTags.length} AI tags`);
     }
   }
   
@@ -2843,70 +2789,16 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Fetch existing tags to preserve location (reserved tag)
-      // Retry up to 3 times with exponential backoff to handle race conditions
-      let existingTags: string[] = [];
-      let locationTag: string | undefined = undefined;
-      let fetchAttempts = 0;
-      const maxFetchAttempts = 3;
-      
-      while (fetchAttempts < maxFetchAttempts) {
-        const { data: existingAsset, error: fetchError } = await supabaseClient
-          .from('assets')
-          .select('tags')
-          .eq('id', singleBody.assetId)
-          .single();
-        
-        if (fetchError) {
-          fetchAttempts++;
-          if (fetchAttempts < maxFetchAttempts) {
-            const delay = Math.pow(2, fetchAttempts) * 100; // 100ms, 200ms, 400ms
-            console.warn(`[auto_tag_asset] ⚠️  Failed to fetch existing tags for asset ${singleBody.assetId} (attempt ${fetchAttempts}/${maxFetchAttempts}), retrying in ${delay}ms...`, fetchError);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            continue;
-          } else {
-            console.error(`[auto_tag_asset] ❌ Failed to fetch existing tags for asset ${singleBody.assetId} after ${maxFetchAttempts} attempts:`, fetchError);
-            break;
-          }
-        }
-        
-        existingTags = (existingAsset?.tags || []) as string[];
-        console.log(`[auto_tag_asset] Existing tags for asset ${singleBody.assetId}:`, JSON.stringify(existingTags));
-        
-        // Extract location tag (prefixed format "Location: City" or legacy "location")
-        locationTag = existingTags.find(tag => tag.startsWith('Location: '));
-        if (!locationTag) {
-          // Fallback to legacy format
-          locationTag = existingTags.find(tag => tag.toLowerCase() === 'location');
-        }
-        break; // Success, exit retry loop
-      }
-      
-      console.log(`[auto_tag_asset] Found location tag for asset ${singleBody.assetId}:`, locationTag || 'none');
-      
-      // Merge AI tags with location tag (if exists)
-      const finalTags = [...tags];
-      if (locationTag) {
-        // Remove any location tag from AI tags (prefixed or legacy)
-        const aiTagsWithoutLocation = finalTags.filter(tag => 
-          !tag.startsWith('Location: ') && tag.toLowerCase() !== 'location'
-        );
-        finalTags.length = 0;
-        finalTags.push(...aiTagsWithoutLocation, locationTag);
-        console.log(`[auto_tag_asset] ✅ Preserving location tag "${locationTag}" for asset ${singleBody.assetId}`);
-        console.log(`[auto_tag_asset] Final tags (${finalTags.length}):`, JSON.stringify(finalTags));
-      } else {
-        console.log(`[auto_tag_asset] ⚠️  No location tag found for asset ${singleBody.assetId}, using AI tags only`);
-      }
-      
+      // Location is now stored in separate column, so we just update tags directly
+      // No need to preserve location from tags anymore
       // Update with tags and status (empty array if tagging failed - user can tag manually)
-      console.log('[auto_tag_asset] Updating asset with tags:', finalTags);
+      console.log('[auto_tag_asset] Updating asset with tags:', tags);
       console.log('[auto_tag_asset] Asset ID:', singleBody.assetId);
       const { data: updatedAsset, error } = await supabaseClient
         .from('assets')
         .update({ 
-          tags: finalTags,
-          auto_tag_status: finalTags.length > 0 ? 'completed' : 'failed'
+          tags: tags,
+          auto_tag_status: tags.length > 0 ? 'completed' : 'failed'
         })
         .eq('id', singleBody.assetId)
         .select('id, tags')

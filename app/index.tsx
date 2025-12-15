@@ -110,7 +110,7 @@ export default function LibraryScreen() {
     // Check database for the specific assets we just imported
     const { data: importedAssets, error: importedError } = await supabase
       .from('assets')
-      .select('id, tags, auto_tag_status')
+      .select('id, tags, location, auto_tag_status')
       .in('id', importedIdsArray);
     
     if (importedError) {
@@ -378,7 +378,7 @@ export default function LibraryScreen() {
     // Optimized: Batch URL generation and use efficient mapping
     const { data: assetData, error: assetError } = await supabase
       .from('assets')
-      .select('id, campaign_id, storage_path, source, tags, created_at, auto_tag_status')
+      .select('id, campaign_id, storage_path, source, tags, location, created_at, auto_tag_status')
       .eq('campaign_id', campaignId)
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
@@ -640,17 +640,13 @@ export default function LibraryScreen() {
         console.log(`[Library] Uploading photo ${i + 1}/${assetsToImport.length}...`);
 
         // Use location extracted BEFORE compression (EXIF data is lost during compression)
-        const locationTag = locations[i] || null;
-        if (locationTag) {
-          console.log(`[Library] Using pre-extracted location for photo ${i + 1}: ${locationTag}`);
+        const locationValue = locations[i] || null;
+        if (locationValue) {
+          console.log(`[Library] Using pre-extracted location for photo ${i + 1}: ${locationValue}`);
         }
 
-        // Prepare initial tags array with location if available
-        // Store location with "Location: " prefix to identify it as reserved tag
+        // Prepare initial tags array (location is now stored in separate column)
         const initialTags: string[] = [];
-        if (locationTag) {
-          initialTags.push(`Location: ${locationTag}`);
-        }
 
         // Fetch compressed image data
         let arrayBuffer: ArrayBuffer;
@@ -688,7 +684,7 @@ export default function LibraryScreen() {
         }
 
         // Insert into database with user_id and file_hash
-        // Include location as a tag if extracted from EXIF
+        // Include location in separate column if extracted from EXIF
         const insertData: any = {
           user_id: userId,
           campaign_id: campaignId,
@@ -696,6 +692,11 @@ export default function LibraryScreen() {
           source: 'local',
           tags: initialTags,
         };
+
+        // Add location if available (stored in separate column, not as tag)
+        if (locationValue) {
+          insertData.location = locationValue;
+        }
 
         // Add file_hash if available (column may not exist yet)
         const hash = imageHashes[i];
@@ -713,15 +714,19 @@ export default function LibraryScreen() {
           // If error is due to file_hash column not existing, try without it
           if (insertError.message?.includes('column') && insertError.message?.includes('file_hash')) {
             console.warn('[Library] file_hash column does not exist, inserting without hash');
+            const retryInsertData: any = {
+              user_id: userId,
+              campaign_id: campaignId,
+              storage_path: filePath,
+              source: 'local',
+              tags: initialTags,
+            };
+            if (locationValue) {
+              retryInsertData.location = locationValue;
+            }
             const { data: retryInserted, error: retryError } = await supabase
               .from('assets')
-              .insert({
-                user_id: userId,
-                campaign_id: campaignId,
-                storage_path: filePath,
-                source: 'local',
-                tags: initialTags,
-              })
+              .insert(retryInsertData)
               .select('*')
               .single();
 
@@ -1419,6 +1424,40 @@ export default function LibraryScreen() {
 
   // Special constant for "no tags" filter
   const NO_TAGS_FILTER = '__NO_TAGS__' as TagVocabulary;
+  const LOCATION_PREFIX = '__LOCATION__' as TagVocabulary;
+
+  // Helper to check if a filter is a location filter
+  const isLocationFilter = (value: TagVocabulary): boolean => {
+    return typeof value === 'string' && value.startsWith(LOCATION_PREFIX);
+  };
+
+  // Extract location name from location filter
+  const getLocationName = (locationFilter: TagVocabulary): string => {
+    return locationFilter.replace(LOCATION_PREFIX, '');
+  };
+
+  // Extract unique locations from assets
+  const availableLocations = useMemo(() => {
+    const locations = new Set<string>();
+    assets.forEach((asset) => {
+      if (asset.location && asset.location.trim()) {
+        locations.add(asset.location.trim());
+      }
+    });
+    return Array.from(locations).sort();
+  }, [assets]);
+
+  // Calculate location counts (how many photos have each location)
+  const locationCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    assets.forEach((asset) => {
+      if (asset.location && asset.location.trim()) {
+        const location = asset.location.trim();
+        counts.set(location, (counts.get(location) || 0) + 1);
+      }
+    });
+    return counts;
+  }, [assets]);
 
   // Calculate tag counts (how many photos have each tag)
   const tagCounts = useMemo(() => {
@@ -1436,28 +1475,51 @@ export default function LibraryScreen() {
     return counts;
   }, [assets]);
 
-  // Filter assets using OR logic: show photos that have ANY of the selected tags
-  // Special handling for "no tags" filter
+  // Filter assets using OR logic: show photos that have ANY of the selected tags or locations
+  // Special handling for "no tags" filter and location filters
   const filteredAssets = useMemo(() => {
     if (!selectedTags.length) return assets;
     
     const hasNoTagsFilter = selectedTags.includes(NO_TAGS_FILTER);
-    const regularTags = selectedTags.filter((tag) => tag !== NO_TAGS_FILTER);
+    const locationFilters = selectedTags.filter((tag) => isLocationFilter(tag));
+    const regularTags = selectedTags.filter((tag) => tag !== NO_TAGS_FILTER && !isLocationFilter(tag));
     
-    if (hasNoTagsFilter && regularTags.length === 0) {
-      // Only "no tags" filter selected
+    const selectedLocations = locationFilters.map((filter) => getLocationName(filter));
+    
+    // If only "no tags" filter selected
+    if (hasNoTagsFilter && regularTags.length === 0 && selectedLocations.length === 0) {
       return assets.filter((asset) => !asset.tags || asset.tags.length === 0);
-    } else if (hasNoTagsFilter && regularTags.length > 0) {
-      // Both "no tags" and regular tags selected - show photos with no tags OR with any selected tag
-      return assets.filter((asset) => {
-        const hasNoTags = !asset.tags || asset.tags.length === 0;
-        const hasSelectedTag = regularTags.some((tag) => asset.tags.includes(tag));
-        return hasNoTags || hasSelectedTag;
-      });
-    } else {
-      // Only regular tags selected
-      return assets.filter((asset) => regularTags.some((tag) => asset.tags.includes(tag)));
     }
+    
+    // Filter assets that match any of the selected criteria (OR logic)
+    return assets.filter((asset) => {
+      // Check if asset matches location filter
+      const matchesLocation = selectedLocations.length > 0 && 
+        asset.location && 
+        selectedLocations.includes(asset.location.trim());
+      
+      // Check if asset matches tag filter
+      const hasNoTags = !asset.tags || asset.tags.length === 0;
+      const matchesNoTagsFilter = hasNoTagsFilter && hasNoTags;
+      const matchesRegularTags = regularTags.length > 0 && regularTags.some((tag) => asset.tags.includes(tag));
+      const matchesTags = matchesNoTagsFilter || matchesRegularTags;
+      
+      // OR logic: match location OR match tags
+      // If no filters of a type are selected, that type doesn't restrict results
+      const locationMatches = selectedLocations.length === 0 || matchesLocation;
+      const tagMatches = (hasNoTagsFilter && regularTags.length === 0) ? matchesNoTagsFilter : 
+                        (regularTags.length === 0 && !hasNoTagsFilter) ? true : 
+                        matchesTags;
+      
+      // Asset matches if it satisfies location filters OR tag filters
+      // If both types are selected, asset must match at least one type
+      if (selectedLocations.length > 0 && (hasNoTagsFilter || regularTags.length > 0)) {
+        return matchesLocation || matchesTags;
+      }
+      
+      // Only one type of filter selected
+      return locationMatches && tagMatches;
+    });
   }, [assets, selectedTags]);
 
   const toggleTagFilter = (tag: TagVocabulary) => {
@@ -1576,7 +1638,7 @@ export default function LibraryScreen() {
     }, 5500);
   }, []);
 
-  const updateTags = async (newTags: TagVocabulary[]) => {
+  const updateTags = async (newTags: TagVocabulary[], location?: string | null) => {
     if (!activeAssetsForTagging.length || !supabase) {
       return;
     }
@@ -1585,15 +1647,23 @@ export default function LibraryScreen() {
       const assetIds = activeAssetsForTagging.map((a) => a.id);
       
       if (activeAssetsForTagging.length === 1) {
-        // Single asset: replace tags (normal behavior)
+        // Single asset: replace tags and location (normal behavior)
         const assetId = assetIds[0];
         console.log(`[Library] Updating tags for asset ${assetId}:`, newTags);
+        if (location !== undefined) {
+          console.log(`[Library] Updating location for asset ${assetId}:`, location);
+        }
+        
+        const updateData: any = { tags: newTags };
+        if (location !== undefined) {
+          updateData.location = location;
+        }
         
         const { data, error } = await supabase
           .from('assets')
-          .update({ tags: newTags })
+          .update(updateData)
           .eq('id', assetId)
-          .select('id, tags')
+          .select('id, tags, location')
           .single();
 
         if (error) {
@@ -1612,7 +1682,20 @@ export default function LibraryScreen() {
           return;
         }
         
+        // Verify location was saved correctly
+        if (location !== undefined && data.location !== location) {
+          console.error('[Library] ❌ Location update verification failed!', {
+            expected: location,
+            received: data?.location
+          });
+          Alert.alert('Update failed', 'Location was not saved correctly. Please try again.');
+          return;
+        }
+        
         console.log(`[Library] ✅ Tags successfully saved to database for asset ${assetId}:`, data.tags);
+        if (location !== undefined) {
+          console.log(`[Library] ✅ Location successfully saved to database for asset ${assetId}:`, data.location);
+        }
         
         // Track this optimistic update - prevent sync useEffect from overwriting for 10 seconds
         optimisticTagUpdatesRef.current.set(assetId, {
@@ -1623,17 +1706,39 @@ export default function LibraryScreen() {
         // Optimistically update activeAsset immediately so TagModal shows new tags
         if (activeAsset && activeAsset.id === assetId) {
           console.log(`[Library] Optimistically updating activeAsset with tags:`, newTags);
-          setActiveAsset({ ...activeAsset, tags: newTags });
+          const updatedAsset = { ...activeAsset, tags: newTags };
+          if (location !== undefined) {
+            updatedAsset.location = location;
+          }
+          setActiveAsset(updatedAsset);
         }
         // Also update activeAssetsForTagging
         setActiveAssetsForTagging((prev) => 
-          prev.map(a => a.id === assetId ? { ...a, tags: newTags } : a)
+          prev.map(a => {
+            if (a.id === assetId) {
+              const updated = { ...a, tags: newTags };
+              if (location !== undefined) {
+                updated.location = location;
+              }
+              return updated;
+            }
+            return a;
+          })
         );
         
         // Optimistically update assets array so filteredAssets has correct tags
         // This prevents sync useEffect from overwriting with stale data
         setAssets((prev) => {
-          const updated = prev.map(a => a.id === assetId ? { ...a, tags: newTags } : a);
+          const updated = prev.map(a => {
+            if (a.id === assetId) {
+              const updatedAsset = { ...a, tags: newTags };
+              if (location !== undefined) {
+                updatedAsset.location = location;
+              }
+              return updatedAsset;
+            }
+            return a;
+          });
           console.log(`[Library] Optimistically updated assets array. Asset ${assetId} now has tags:`, 
             updated.find(a => a.id === assetId)?.tags);
           return updated;
@@ -1652,7 +1757,7 @@ export default function LibraryScreen() {
         // Fetch current tags for all assets
         const { data: currentAssets, error: fetchError } = await supabase
           .from('assets')
-          .select('id, tags')
+          .select('id, tags, location')
           .in('id', assetIds);
 
         if (fetchError) {
@@ -1671,13 +1776,20 @@ export default function LibraryScreen() {
         });
         
         console.log(`[Library] Updating tags for ${assetIds.length} assets (merge mode):`, newTags);
+        if (location !== undefined) {
+          console.log(`[Library] Updating location for ${assetIds.length} assets:`, location);
+        }
         
-        // Update each asset with merged tags
+        // Update each asset with merged tags and location
         const updates = currentAssets.map((currentAsset) => {
           const finalTags = finalTagsMap.get(currentAsset.id)!;
+          const updateData: any = { tags: finalTags };
+          if (location !== undefined) {
+            updateData.location = location;
+          }
           return supabase
             .from('assets')
-            .update({ tags: finalTags })
+            .update(updateData)
             .eq('id', currentAsset.id);
         });
 
@@ -1695,7 +1807,7 @@ export default function LibraryScreen() {
         console.log(`[Library] Verifying bulk tag updates for ${assetIds.length} assets...`);
         const { data: verifiedAssets, error: verifyError } = await supabase
           .from('assets')
-          .select('id, tags')
+          .select('id, tags, location')
           .in('id', assetIds);
           
         if (verifyError) {
@@ -2366,6 +2478,8 @@ export default function LibraryScreen() {
           availableTags={allAvailableTags || []}
           tagCounts={tagCounts}
           showNoTagsOption={true}
+          availableLocations={availableLocations}
+          locationCounts={locationCounts}
           noTagsLabel="No Tags"
         />
       </View>
