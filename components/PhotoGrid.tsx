@@ -1,9 +1,10 @@
-import React, { useCallback, useMemo } from 'react';
-import { ActivityIndicator, Dimensions, RefreshControl, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { ActivityIndicator, Animated, Dimensions, Easing, FlatList, RefreshControl, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Asset } from '@/types';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 type PhotoGridProps = {
   assets: Asset[];
@@ -15,6 +16,7 @@ type PhotoGridProps = {
   refreshing?: boolean;
   onRefresh?: () => void;
   autoTaggingAssets?: Set<string>;
+  recentlyTaggedAssets?: Set<string>;
 };
 
 // Memoized PhotoTile component for optimal performance
@@ -26,6 +28,7 @@ const PhotoTile = React.memo(({
   onLongPress,
   isAutoTagging,
   isMultiSelectMode,
+  showSuccessIndicator,
 }: {
   asset: Asset;
   isSelected: boolean;
@@ -34,6 +37,7 @@ const PhotoTile = React.memo(({
   onLongPress?: (asset: Asset) => void;
   isAutoTagging?: boolean;
   isMultiSelectMode: boolean;
+  showSuccessIndicator?: boolean;
 }) => {
   const handlePress = () => {
     if (isMultiSelectMode) {
@@ -51,6 +55,92 @@ const PhotoTile = React.memo(({
       onToggleSelect(asset);
     }
   };
+
+  // Animate success indicator with Apple-style spring physics
+  const successOpacity = useRef(new Animated.Value(0)).current;
+  const successScale = useRef(new Animated.Value(0.5)).current; // Start smaller for more dramatic pop
+  const checkmarkScale = useRef(new Animated.Value(0)).current; // Separate animation for checkmark
+
+  // Use refs to track timeouts for proper cleanup
+  const checkmarkTimeoutRef = useRef<number | null>(null);
+  const fadeOutTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    // Cleanup any pending timeouts
+    if (checkmarkTimeoutRef.current) {
+      clearTimeout(checkmarkTimeoutRef.current);
+      checkmarkTimeoutRef.current = null;
+    }
+    if (fadeOutTimeoutRef.current) {
+      clearTimeout(fadeOutTimeoutRef.current);
+      fadeOutTimeoutRef.current = null;
+    }
+
+    if (showSuccessIndicator) {
+      // Haptic feedback for success (Apple-style)
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      
+      // Staggered animation: badge appears first, then checkmark pops in
+      // Badge animation - smooth spring with slight overshoot (Apple-style)
+      Animated.parallel([
+        Animated.spring(successScale, {
+          toValue: 1,
+          tension: 200, // Higher tension for snappier feel
+          friction: 7, // Lower friction for more bounce
+          useNativeDriver: true,
+        }),
+        Animated.timing(successOpacity, {
+          toValue: 1,
+          duration: 200, // Reduced from 250ms for snappier feel
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      // Checkmark animation - delayed pop for delightful detail
+      checkmarkTimeoutRef.current = setTimeout(() => {
+        Animated.spring(checkmarkScale, {
+          toValue: 1,
+          tension: 300,
+          friction: 5,
+          useNativeDriver: true,
+        }).start();
+      }, 100);
+
+      // Animate out after 4 seconds (balanced visibility without being intrusive)
+      fadeOutTimeoutRef.current = setTimeout(() => {
+        Animated.parallel([
+          Animated.timing(successOpacity, {
+            toValue: 0,
+            duration: 300, // Reduced from 400ms for snappier exit
+            easing: Easing.in(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(successScale, {
+            toValue: 0.9, // Slight scale down on exit
+            duration: 300,
+            easing: Easing.in(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }, 4000);
+    } else {
+      // Reset when indicator is hidden
+      successOpacity.setValue(0);
+      successScale.setValue(0.5);
+      checkmarkScale.setValue(0);
+    }
+
+    // Cleanup function
+    return () => {
+      if (checkmarkTimeoutRef.current) {
+        clearTimeout(checkmarkTimeoutRef.current);
+      }
+      if (fadeOutTimeoutRef.current) {
+        clearTimeout(fadeOutTimeoutRef.current);
+      }
+    };
+  }, [showSuccessIndicator, successOpacity, successScale, checkmarkScale]);
 
   return (
     <View
@@ -76,7 +166,7 @@ const PhotoTile = React.memo(({
             source={{ uri: asset.publicUrl }} 
             className="h-full w-full rounded-2xl" 
             contentFit="cover"
-            transition={150}
+            transition={100}
             cachePolicy="memory-disk"
             priority="low"
             recyclingKey={asset.id}
@@ -85,6 +175,9 @@ const PhotoTile = React.memo(({
             style={{
               backgroundColor: '#f5f5f5',
             }}
+            // Performance optimizations
+            contentPosition="center"
+            enableLiveTextInteraction={false}
           />
         ) : (
           <View className="h-full w-full items-center justify-center rounded-2xl bg-gray-100">
@@ -105,7 +198,7 @@ const PhotoTile = React.memo(({
         )}
 
         {/* Auto-tagging indicator */}
-        {isAutoTagging && (
+        {isAutoTagging && !showSuccessIndicator && (
           <View 
             className="absolute left-2 top-2 z-10"
             style={{
@@ -138,6 +231,81 @@ const PhotoTile = React.memo(({
           </View>
         )}
 
+        {/* Success indicator - Apple-style design: subtle, delightful, clear */}
+        {showSuccessIndicator && (
+          <Animated.View 
+            className="absolute right-2 top-2 z-10"
+            style={{
+              opacity: successOpacity,
+              transform: [{ scale: successScale }],
+              shadowColor: '#22c55e',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.25,
+              shadowRadius: 6,
+              elevation: 4,
+            }}
+          >
+            {/* Circular badge with blur backdrop for depth (Apple-style) */}
+            <View 
+              className="h-6 w-6 items-center justify-center rounded-full"
+              style={{
+                backgroundColor: '#22c55e', // iOS system green
+                // Subtle inner shadow for depth
+                borderWidth: 0.5,
+                borderColor: 'rgba(255, 255, 255, 0.3)',
+              }}
+            >
+              {/* Animated checkmark with pop effect */}
+              <Animated.View
+                style={{
+                  transform: [{ scale: checkmarkScale }],
+                }}
+              >
+                <MaterialCommunityIcons 
+                  name="check" 
+                  size={14} 
+                  color="#ffffff" 
+                  style={{ fontWeight: '700' }}
+                />
+              </Animated.View>
+            </View>
+          </Animated.View>
+        )}
+
+        {/* No Tags Applied indicator - Show for any photo with no tags that's not currently being tagged */}
+        {/* Hide when success indicator is showing to avoid flicker */}
+        {!isAutoTagging && !showSuccessIndicator && asset.tags.length === 0 && (
+          <View 
+            className="absolute right-2 top-2 z-10"
+            style={{
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 1 },
+              shadowOpacity: 0.12,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
+          >
+            <View 
+              className="rounded-full px-2.5 py-1"
+              style={{
+                backgroundColor: asset.auto_tag_status === 'failed' 
+                  ? 'rgba(254, 243, 199, 0.95)' // Light orange/amber for failed
+                  : 'rgba(243, 244, 246, 0.95)', // Light gray for pending/null
+              }}
+            >
+              <Text 
+                className="text-[9px] font-semibold" 
+                style={{ 
+                  letterSpacing: -0.1,
+                  color: asset.auto_tag_status === 'failed' ? '#92400e' : '#6b7280',
+                }}
+              >
+                No Tags Applied
+              </Text>
+            </View>
+          </View>
+        )}
+
         {/* Selection checkmark */}
         {isMultiSelectMode && (
           <View 
@@ -163,7 +331,10 @@ const PhotoTile = React.memo(({
     prevProps.asset.id === nextProps.asset.id &&
     prevProps.isSelected === nextProps.isSelected &&
     prevProps.isAutoTagging === nextProps.isAutoTagging &&
-    prevProps.isMultiSelectMode === nextProps.isMultiSelectMode
+    prevProps.isMultiSelectMode === nextProps.isMultiSelectMode &&
+    prevProps.asset.tags.length === nextProps.asset.tags.length &&
+    prevProps.asset.auto_tag_status === nextProps.asset.auto_tag_status &&
+    prevProps.showSuccessIndicator === nextProps.showSuccessIndicator
   );
 });
 
@@ -179,66 +350,52 @@ export function PhotoGrid({
   refreshing,
   onRefresh,
   autoTaggingAssets = new Set(),
+  recentlyTaggedAssets = new Set(),
 }: PhotoGridProps) {
   const insets = useSafeAreaInsets();
   const screenWidth = Dimensions.get('window').width;
   
-  // Calculate item size for 3-column grid
-  const itemSize = useMemo(() => {
-    const padding = 6; // 3px on each side
-    const gaps = 3; // 1.5px margin on each side of 3 items = 3 gaps
-    return (screenWidth - padding - gaps) / 3;
-  }, [screenWidth]);
-
-  // Convert assets array into rows of 3 items each
-  const rows = useMemo(() => {
-    const rowsArray: Asset[][] = [];
-    for (let i = 0; i < assets.length; i += 3) {
-      rowsArray.push(assets.slice(i, i + 3));
-    }
-    return rowsArray;
-  }, [assets]);
-
   // Create selected assets Set for O(1) lookup
   const selectedAssetsSet = useMemo(() => {
     return new Set(selectedAssets.map(asset => asset.id));
   }, [selectedAssets]);
 
-  const renderRow = useCallback((row: Asset[], rowIndex: number) => {
+  // Memoized render function for each photo tile
+  // Optimized: Pre-compute all props to avoid repeated lookups
+  const renderItem = useCallback(({ item: asset }: { item: Asset }) => {
+    const isSelected = selectedAssetsSet.has(asset.id);
+    const isAutoTagging = autoTaggingAssets?.has(asset.id) ?? false;
+    // Also show loading if status is pending (for background retries)
+    const isPendingAutoTag = isAutoTagging || asset.auto_tag_status === 'pending';
+    const showSuccessIndicator = recentlyTaggedAssets?.has(asset.id) ?? false;
+    
     return (
-      <View
-        key={`row-${rowIndex}`}
-        style={{
-          flexDirection: 'row',
-          paddingHorizontal: 1.5,
-          marginBottom: 0, // Margin handled by PhotoTile
-        }}
-      >
-        {row.map((asset) => {
-          const isSelected = selectedAssetsSet.has(asset.id);
-          const isAutoTagging = autoTaggingAssets.has(asset.id);
-          return (
-            <PhotoTile
-              key={asset.id}
-              asset={asset}
-              isSelected={isSelected}
-              onToggleSelect={onToggleSelect}
-              onOpenTagModal={onOpenTagModal}
-              onLongPress={onLongPress}
-              isAutoTagging={isAutoTagging}
-              isMultiSelectMode={isSelectionMode}
-            />
-          );
-        })}
-        {/* Fill remaining columns if row has less than 3 items */}
-        {row.length < 3 && (
-          Array.from({ length: 3 - row.length }).map((_, idx) => (
-            <View key={`spacer-${idx}`} style={{ flex: 1, margin: 1.5 }} />
-          ))
-        )}
-      </View>
+      <PhotoTile
+        asset={asset}
+        isSelected={isSelected}
+        onToggleSelect={onToggleSelect}
+        onOpenTagModal={onOpenTagModal}
+        onLongPress={onLongPress}
+        isAutoTagging={isPendingAutoTag}
+        isMultiSelectMode={isSelectionMode}
+        showSuccessIndicator={showSuccessIndicator}
+      />
     );
-  }, [selectedAssetsSet, autoTaggingAssets, isSelectionMode, onToggleSelect, onOpenTagModal, onLongPress]);
+  }, [selectedAssetsSet, autoTaggingAssets, recentlyTaggedAssets, isSelectionMode, onToggleSelect, onOpenTagModal, onLongPress]);
+
+  // Key extractor for FlatList
+  const keyExtractor = useCallback((item: Asset) => item.id, []);
+
+  // Extra data for FlatList - tells it to re-render when these change
+  // Critical for auto-tagging indicators to update properly
+  const extraData = useMemo(() => {
+    return {
+      autoTaggingCount: autoTaggingAssets.size,
+      recentlyTaggedCount: recentlyTaggedAssets.size,
+      isSelectionMode,
+      selectedCount: selectedAssets.length,
+    };
+  }, [autoTaggingAssets.size, recentlyTaggedAssets.size, isSelectionMode, selectedAssets.length]);
 
   const bottomPadding = useMemo(() => {
     return Math.max(insets.bottom + 100, 120) + 80; // Extra padding for tab bar
@@ -281,7 +438,12 @@ export function PhotoGrid({
   }
 
   return (
-    <ScrollView
+    <FlatList
+      data={assets}
+      renderItem={renderItem}
+      keyExtractor={keyExtractor}
+      extraData={extraData}
+      numColumns={3}
       contentContainerStyle={{
         padding: 3,
         paddingBottom: bottomPadding,
@@ -302,14 +464,16 @@ export function PhotoGrid({
       scrollIndicatorInsets={{ right: 1 }}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="on-drag"
-      // Optimize scroll performance
-      decelerationRate="normal"
-      // Remove momentum scrolling issues
-      bounces={true}
+      // Performance optimizations for Instagram-level smoothness
+      removeClippedSubviews={true}
+      maxToRenderPerBatch={10}
+      updateCellsBatchingPeriod={50}
+      initialNumToRender={15}
+      windowSize={10}
       // Smooth scrolling
+      decelerationRate="normal"
+      bounces={true}
       scrollEventThrottle={16}
-    >
-      {rows.map((row, index) => renderRow(row, index))}
-    </ScrollView>
+    />
   );
 }

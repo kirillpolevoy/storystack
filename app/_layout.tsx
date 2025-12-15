@@ -7,6 +7,8 @@ import { useRouter, useSegments } from 'expo-router';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { DelightfulLoadingScreen } from '@/components/DelightfulLoadingScreen';
 import { hasCompletedOnboarding } from '@/utils/onboarding';
+import { PostHogProvider } from 'posthog-react-native';
+import { initializeBatchPolling, stopBatchPolling } from '@/utils/pollBatchStatus';
 
 // Keep splash screen visible while we load
 SplashScreen.preventAutoHideAsync();
@@ -82,6 +84,14 @@ function RootLayoutNav() {
 
     return () => clearTimeout(safetyTimer);
   }, [hasNavigated, showContent]);
+
+  // Initialize batch polling when app loads
+  useEffect(() => {
+    initializeBatchPolling();
+    return () => {
+      stopBatchPolling();
+    };
+  }, []);
 
   useEffect(() => {
     // Optimized: Hide splash as soon as loading screen is ready, proceed immediately after
@@ -377,9 +387,14 @@ function LoadingFallback() {
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <RootLayoutNav />
-    </AuthProvider>
+    <PostHogProvider
+      apiKey="phc_QqDag34ZeHH7lCMnB3KFZIoPkUczd2Q3YmWK109NUVw"
+      options={{ host: 'https://us.i.posthog.com', enableSessionReplay: true }}
+      autocapture
+    >
+      <AuthProvider>
+        <RootLayoutNav />
+      </AuthProvider>
+    </PostHogProvider>
   );
 }
-

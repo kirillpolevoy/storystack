@@ -39,7 +39,9 @@ type ImportLoadingOverlayProps = {
   totalPhotos: number;
   importedCount: number;
   autoTaggingCount: number;
+  successfullyAutoTaggedCount?: number;
   currentPhoto?: number;
+  onDismiss?: () => void; // Callback when overlay should dismiss (after import completes)
 };
 
 export function ImportLoadingOverlay({
@@ -47,15 +49,18 @@ export function ImportLoadingOverlay({
   totalPhotos,
   importedCount,
   autoTaggingCount,
+  successfullyAutoTaggedCount = 0,
+  onDismiss,
 }: ImportLoadingOverlayProps) {
   const insets = useSafeAreaInsets();
   
-  // Simple animation values - consumer-grade approach
+  // Separate animation values for smoother, more controlled animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.96)).current;
   const progressAnim = useRef(new Animated.Value(0)).current;
   const checkmarkScale = useRef(new Animated.Value(0)).current;
   const checkmarkOpacity = useRef(new Animated.Value(0)).current;
+  const checkmarkIconScale = useRef(new Animated.Value(0)).current; // Subtle icon animation
   const shimmerAnim = useRef(new Animated.Value(0)).current;
   const titleOpacity = useRef(new Animated.Value(0)).current;
   const subtitleOpacity = useRef(new Animated.Value(0)).current;
@@ -66,23 +71,23 @@ export function ImportLoadingOverlay({
   const [shouldHide, setShouldHide] = useState(false);
   const [lastTotalPhotos, setLastTotalPhotos] = useState(totalPhotos);
   
-  // Animation refs
+  // Animation refs - optimized timeout types for React Native
   const shimmerAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
-  const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hideTimeoutRef = useRef<number | null>(null);
+  const checkmarkTimeoutRef = useRef<number | null>(null);
+  const spinnerFadeAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
+  const checkmarkAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
 
-  // Determine phase: importing -> tagging -> complete
+  // Determine phase: importing -> complete (dismiss immediately after import)
   const phase = useMemo(() => {
     const isImportComplete = importedCount === totalPhotos && totalPhotos > 0;
-    const isTaggingComplete = autoTaggingCount === 0;
     
-    if (isImportComplete && isTaggingComplete) {
+    if (isImportComplete) {
       return 'complete';
-    } else if (isImportComplete && autoTaggingCount > 0) {
-      return 'tagging';
     } else {
       return 'importing';
     }
-  }, [importedCount, totalPhotos, autoTaggingCount]);
+  }, [importedCount, totalPhotos]);
 
   // Calculate progress: 0 to 1
   const progress = useMemo(() => {
@@ -90,28 +95,175 @@ export function ImportLoadingOverlay({
     
     if (phase === 'importing') {
       return importedCount / totalPhotos;
-    } else if (phase === 'tagging') {
-      return 1.0; // Keep at 100% during tagging
     } else {
-      return 1;
+      return 1; // Complete
     }
-  }, [phase, importedCount, totalPhotos, autoTaggingCount]);
+  }, [phase, importedCount, totalPhotos]);
 
   // Spinner color - consistent across all phases (gold to match app)
   const spinnerColor = COLORS.accent;
 
-  // Haptic feedback on phase changes
+  // Auto-dismiss when import completes - consumer-grade animation with proper cleanup
   useEffect(() => {
-    if (phase === 'tagging') {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } else if (phase === 'complete') {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    // Cleanup any pending timeouts and animations
+    if (checkmarkTimeoutRef.current) {
+      clearTimeout(checkmarkTimeoutRef.current);
+      checkmarkTimeoutRef.current = null;
     }
-  }, [phase]);
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current);
+      hideTimeoutRef.current = null;
+    }
+    if (spinnerFadeAnimationRef.current) {
+      spinnerFadeAnimationRef.current.stop();
+      spinnerFadeAnimationRef.current = null;
+    }
+    if (checkmarkAnimationRef.current) {
+      checkmarkAnimationRef.current.stop();
+      checkmarkAnimationRef.current = null;
+    }
 
-  // Simple spinner entrance animation
+    // Reset checkmark state when not complete
+    if (phase !== 'complete') {
+      setShowCheckmark(false);
+      checkmarkScale.setValue(0);
+      checkmarkOpacity.setValue(0);
+      checkmarkIconScale.setValue(0);
+      return;
+    }
+
+    if (phase === 'complete' && visible && onDismiss) {
+      // If there are photos queued for tagging, show longer to display the message
+      const hasQueuedTagging = autoTaggingCount > 0;
+      const displayDuration = hasQueuedTagging ? 2000 : 1500;
+      
+      // Consumer-grade smooth transition: fade out spinner, then show checkmark
+      // Use a small delay to ensure state is ready, then start spinner fade
+      checkmarkTimeoutRef.current = setTimeout(() => {
+        // Stop any running spinner animations first
+        if (spinnerFadeAnimationRef.current) {
+          spinnerFadeAnimationRef.current.stop();
+        }
+        
+        // Fade out spinner smoothly (250ms for polished feel)
+        spinnerFadeAnimationRef.current = Animated.timing(spinnerOpacity, {
+          toValue: 0,
+          duration: 250,
+          easing: Easing.out(Easing.cubic), // Smooth fade out
+          useNativeDriver: true,
+        });
+        
+        spinnerFadeAnimationRef.current.start((finished) => {
+          // Always show checkmark, even if spinner animation was interrupted
+          if (!finished) {
+            spinnerOpacity.setValue(0); // Ensure spinner is hidden
+          }
+          
+          // Set checkmark visible state FIRST (before animation)
+          // This ensures React re-renders and the checkmark container exists
+          setShowCheckmark(true);
+          
+          // Small delay to ensure DOM update, then start animation
+          // Use requestAnimationFrame equivalent for React Native
+          setTimeout(() => {
+            // Reset checkmark animation values
+            checkmarkScale.setValue(0);
+            checkmarkOpacity.setValue(0);
+            checkmarkIconScale.setValue(0);
+            
+            // Consumer-grade checkmark entrance: smooth scale + fade with delightful bounce
+            checkmarkAnimationRef.current = Animated.sequence([
+              // Phase 1: Scale up with spring bounce + fade in (parallel)
+              Animated.parallel([
+                Animated.spring(checkmarkScale, {
+                  toValue: 1.12, // Subtle overshoot for premium feel
+                  tension: 120,
+                  friction: 8,
+                  useNativeDriver: true,
+                }),
+                Animated.timing(checkmarkOpacity, {
+                  toValue: 1,
+                  duration: 350,
+                  delay: 50, // Slight delay for smoother appearance
+                  easing: Easing.out(Easing.cubic),
+                  useNativeDriver: true,
+                }),
+                // Icon scales in slightly delayed for polished feel
+                Animated.spring(checkmarkIconScale, {
+                  toValue: 1,
+                  tension: 150,
+                  friction: 10,
+                  delay: 100,
+                  useNativeDriver: true,
+                }),
+              ]),
+              // Phase 2: Settle to final size with smooth spring
+              Animated.parallel([
+                Animated.spring(checkmarkScale, {
+                  toValue: 1,
+                  tension: 100,
+                  friction: 12,
+                  useNativeDriver: true,
+                }),
+                Animated.spring(checkmarkIconScale, {
+                  toValue: 1,
+                  tension: 100,
+                  friction: 12,
+                  useNativeDriver: true,
+                }),
+              ]),
+            ]);
+            
+            checkmarkAnimationRef.current.start((animFinished) => {
+              if (animFinished) {
+                // Haptic feedback when checkmark fully appears (premium feel)
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              }
+            });
+
+            // Dismiss after showing checkmark
+            hideTimeoutRef.current = setTimeout(() => {
+              setShouldHide(true);
+              // Call onDismiss after exit animation completes
+              setTimeout(() => {
+                onDismiss();
+              }, 300);
+            }, displayDuration);
+          }, 16); // ~1 frame delay for smooth state update
+        });
+      }, 100); // Small delay to ensure phase transition is complete
+    }
+
+    return () => {
+      // Cleanup all timeouts
+      if (checkmarkTimeoutRef.current) {
+        clearTimeout(checkmarkTimeoutRef.current);
+        checkmarkTimeoutRef.current = null;
+      }
+      if (hideTimeoutRef.current) {
+        clearTimeout(hideTimeoutRef.current);
+        hideTimeoutRef.current = null;
+      }
+      // Cleanup all animations
+      if (spinnerFadeAnimationRef.current) {
+        spinnerFadeAnimationRef.current.stop();
+        spinnerFadeAnimationRef.current = null;
+      }
+      if (checkmarkAnimationRef.current) {
+        checkmarkAnimationRef.current.stop();
+        checkmarkAnimationRef.current = null;
+      }
+    };
+  }, [phase, visible, onDismiss, checkmarkScale, checkmarkOpacity, checkmarkIconScale, spinnerOpacity, autoTaggingCount]);
+
+  // Spinner entrance animation - separate for smoother control
   useEffect(() => {
-    if (visible && (phase === 'importing' || phase === 'tagging')) {
+    // Don't animate spinner if checkmark is showing or should be showing
+    if (showCheckmark || phase === 'complete') {
+      return;
+    }
+    
+    if (visible && phase === 'importing') {
       spinnerScale.setValue(0);
       spinnerOpacity.setValue(0);
       
@@ -129,15 +281,16 @@ export function ImportLoadingOverlay({
           useNativeDriver: true,
         }),
       ]).start();
-    } else {
+    } else if (!visible) {
+      // Reset when not visible
       spinnerScale.setValue(0);
       spinnerOpacity.setValue(0);
     }
-  }, [visible, phase]);
+  }, [visible, phase, spinnerScale, spinnerOpacity, showCheckmark]);
 
-  // Shimmer animation on progress bar
+  // Shimmer animation on progress bar - only when importing and visible
   useEffect(() => {
-    if (!visible) {
+    if (!visible || phase !== 'importing') {
       if (shimmerAnimationRef.current) {
         shimmerAnimationRef.current.stop();
         shimmerAnimationRef.current = null;
@@ -145,48 +298,45 @@ export function ImportLoadingOverlay({
       return;
     }
 
-    if (phase === 'importing' || phase === 'tagging') {
-      if (!shimmerAnimationRef.current) {
-        shimmerAnimationRef.current = Animated.loop(
-          Animated.timing(shimmerAnim, {
-            toValue: 1,
-            duration: 2000,
-            easing: Easing.linear,
-            useNativeDriver: true,
-          })
-        );
-        shimmerAnimationRef.current.start();
-      }
-    } else {
+    // Only start shimmer if not already running
+    if (!shimmerAnimationRef.current) {
+      shimmerAnimationRef.current = Animated.loop(
+        Animated.timing(shimmerAnim, {
+          toValue: 1,
+          duration: 2000,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        })
+      );
+      shimmerAnimationRef.current.start();
+    }
+
+    return () => {
       if (shimmerAnimationRef.current) {
         shimmerAnimationRef.current.stop();
         shimmerAnimationRef.current = null;
       }
-    }
-
-    return () => {
-      if (shimmerAnimationRef.current && !visible) {
-        shimmerAnimationRef.current.stop();
-        shimmerAnimationRef.current = null;
-      }
     };
-  }, [visible, phase]);
+  }, [visible, phase, shimmerAnim]);
 
-  // Progress bar animation - smooth spring
+  // Progress bar animation - smooth timing (not spring) to prevent choppiness
+  // Spring animations can be choppy when progress updates frequently
   useEffect(() => {
     if (!visible || phase === 'complete') {
       return;
     }
 
-    Animated.spring(progressAnim, {
+    // Use timing with easing for smooth, predictable updates
+    // This prevents choppiness when progress changes rapidly
+    Animated.timing(progressAnim, {
       toValue: progress,
-      tension: 65,
-      friction: 10,
-      useNativeDriver: true, // Uses scaleX transform
+      duration: 250, // Smooth transition duration
+      easing: Easing.out(Easing.ease), // Smooth easing curve
+      useNativeDriver: true, // Uses scaleX transform for performance
     }).start();
-  }, [visible, phase, progress]);
+  }, [visible, phase, progress, progressAnim]);
 
-  // Entrance animation - refined Apple-style
+  // Entrance animation - staggered for smoother appearance (production approach)
   useEffect(() => {
     if (visible && !shouldHide) {
       // Reset values
@@ -197,17 +347,20 @@ export function ImportLoadingOverlay({
       progressAnim.setValue(0);
       checkmarkScale.setValue(0);
       checkmarkOpacity.setValue(0);
+      checkmarkIconScale.setValue(0);
+      spinnerScale.setValue(0);
+      spinnerOpacity.setValue(0);
       
-      // Staggered entrance
+      // Staggered entrance - background first, then content (smoother than parallel)
       Animated.sequence([
-        // Background fade in
+        // Background fade in first
         Animated.timing(fadeAnim, {
           toValue: 1,
           duration: 250,
           easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }),
-        // Content scale in with spring
+        // Content scale in with spring, text fades in parallel
         Animated.parallel([
           Animated.spring(scaleAnim, {
             toValue: 1,
@@ -215,7 +368,7 @@ export function ImportLoadingOverlay({
             friction: 16,
             useNativeDriver: true,
           }),
-          // Text fade in
+          // Text fade in with staggered delays
           Animated.parallel([
             Animated.timing(titleOpacity, {
               toValue: 1,
@@ -235,7 +388,7 @@ export function ImportLoadingOverlay({
         ]),
       ]).start();
     } else if (shouldHide) {
-      // Exit animation
+      // Exit animation - parallel for faster dismissal
       Animated.parallel([
         Animated.timing(fadeAnim, {
           toValue: 0,
@@ -265,7 +418,7 @@ export function ImportLoadingOverlay({
         setShouldHide(false);
       });
     }
-  }, [visible, shouldHide]);
+  }, [visible, shouldHide, fadeAnim, scaleAnim, titleOpacity, subtitleOpacity]);
 
   // Store last known totalPhotos when complete
   useEffect(() => {
@@ -274,63 +427,7 @@ export function ImportLoadingOverlay({
     }
   }, [totalPhotos]);
 
-  // Checkmark animation when complete
-  useEffect(() => {
-    if (phase === 'complete' && visible && !shouldHide) {
-      if (hideTimeoutRef.current) {
-        clearTimeout(hideTimeoutRef.current);
-      }
-
-      setTimeout(() => {
-        setShowCheckmark(true);
-        Animated.parallel([
-          Animated.spring(checkmarkScale, {
-            toValue: 1.1,
-            tension: 100,
-            friction: 6,
-            useNativeDriver: true,
-          }),
-          Animated.timing(checkmarkOpacity, {
-            toValue: 1,
-            duration: 400,
-            delay: 100,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
-          }),
-        ]).start(() => {
-          // Settle to final size
-          Animated.spring(checkmarkScale, {
-            toValue: 1,
-            tension: 80,
-            friction: 8,
-            useNativeDriver: true,
-          }).start();
-        });
-
-        // After showing checkmark for 2 seconds, trigger hide
-        hideTimeoutRef.current = setTimeout(() => {
-          setShouldHide(true);
-        }, 2000);
-      }, 150);
-    } else {
-      if (hideTimeoutRef.current) {
-        clearTimeout(hideTimeoutRef.current);
-        hideTimeoutRef.current = null;
-      }
-      if (!shouldHide) {
-        checkmarkScale.setValue(0);
-        checkmarkOpacity.setValue(0);
-        setShowCheckmark(false);
-      }
-    }
-
-    return () => {
-      if (hideTimeoutRef.current) {
-        clearTimeout(hideTimeoutRef.current);
-        hideTimeoutRef.current = null;
-      }
-    };
-  }, [phase, visible, shouldHide]);
+  // Checkmark is now handled in the auto-dismiss effect above
 
   // Interpolated values
   const progressScaleX = useMemo(
@@ -351,28 +448,33 @@ export function ImportLoadingOverlay({
     [shimmerAnim]
   );
 
-  // Text content
-  const displayTotalPhotos = shouldHide || phase === 'complete' ? lastTotalPhotos : totalPhotos;
+  // Memoized text content - prevents unnecessary string calculations
+  const displayTotalPhotos = useMemo(() => {
+    return shouldHide || phase === 'complete' ? lastTotalPhotos : totalPhotos;
+  }, [shouldHide, phase, lastTotalPhotos, totalPhotos]);
   
-  const titleText =
-    shouldHide || phase === 'complete'
-      ? 'Complete'
-      : phase === 'tagging'
-      ? 'Tagging Photos'
-      : displayTotalPhotos > 0
-      ? 'Importing Photos'
-      : 'Preparing...';
+  const titleText = useMemo(() => {
+    if (shouldHide || phase === 'complete') {
+      return 'Import Complete';
+    }
+    return displayTotalPhotos > 0 ? 'Importing Photos' : 'Preparing...';
+  }, [shouldHide, phase, displayTotalPhotos]);
 
-  const subtitleText =
-    shouldHide || phase === 'complete'
-      ? displayTotalPhotos > 0
-        ? `${displayTotalPhotos} photo${displayTotalPhotos !== 1 ? 's' : ''} imported and tagged`
-        : ''
-      : displayTotalPhotos > 0
-      ? phase === 'tagging'
-        ? `${autoTaggingCount} remaining`
-        : `${importedCount} of ${displayTotalPhotos}`
-      : '';
+  const subtitleText = useMemo(() => {
+    if (shouldHide || phase === 'complete') {
+      if (displayTotalPhotos > 0) {
+        const photoText = importedCount !== 1 ? 'photos' : 'photo';
+        const taggingText = autoTaggingCount > 0 ? ' • Auto-tagging in background' : '';
+        return `${importedCount} ${photoText} imported${taggingText}`;
+      }
+      return '';
+    }
+    if (displayTotalPhotos > 0) {
+      const taggingText = autoTaggingCount > 0 ? ` • ${autoTaggingCount} queued for tagging` : '';
+      return `${importedCount} of ${displayTotalPhotos} imported${taggingText}`;
+    }
+    return '';
+  }, [shouldHide, phase, displayTotalPhotos, importedCount, autoTaggingCount]);
 
   if (!visible && !shouldHide) {
     return null;
@@ -411,7 +513,27 @@ export function ImportLoadingOverlay({
         >
           {/* Spinner/Checkmark Container */}
           <View style={styles.iconContainer}>
-            {showCheckmark && phase === 'complete' ? (
+            {/* Spinner - fades out when complete */}
+            {phase !== 'complete' && (
+              <Animated.View
+                style={[
+                  styles.spinnerContainer,
+                  {
+                    transform: [{ scale: spinnerScale }],
+                    opacity: spinnerOpacity,
+                  },
+                ]}
+              >
+                <ActivityIndicator 
+                  size="large" 
+                  color={spinnerColor}
+                  style={styles.spinner}
+                />
+              </Animated.View>
+            )}
+            
+            {/* Checkmark - appears smoothly after spinner fades */}
+            {showCheckmark && phase === 'complete' && (
               <Animated.View
                 style={[
                   styles.checkmarkContainer,
@@ -422,25 +544,14 @@ export function ImportLoadingOverlay({
                 ]}
               >
                 <View style={styles.checkmarkCircle}>
-                  <MaterialCommunityIcons name="check" size={48} color="#FFFFFF" />
+                  <Animated.View
+                    style={{
+                      transform: [{ scale: checkmarkIconScale }],
+                    }}
+                  >
+                    <MaterialCommunityIcons name="check" size={48} color="#FFFFFF" />
+                  </Animated.View>
                 </View>
-              </Animated.View>
-            ) : (
-              <Animated.View
-                style={[
-                  styles.spinnerContainer,
-                  {
-                    transform: [{ scale: spinnerScale }],
-                    opacity: spinnerOpacity,
-                  },
-                ]}
-              >
-                {/* Consumer-grade: Use native ActivityIndicator */}
-                <ActivityIndicator 
-                  size="large" 
-                  color={spinnerColor}
-                  style={styles.spinner}
-                />
               </Animated.View>
             )}
           </View>
@@ -458,8 +569,8 @@ export function ImportLoadingOverlay({
           )}
 
           {/* Progress Bar */}
-          {(phase === 'importing' || phase === 'tagging') && (
-            <Animated.View style={[styles.progressContainer, { opacity: subtitleOpacity }]}>
+          {phase === 'importing' && (
+            <Animated.View style={[styles.progressContainer, { opacity: titleOpacity }]}>
               <View style={styles.progressTrack}>
                 <Animated.View
                   style={[
@@ -533,6 +644,7 @@ const styles = StyleSheet.create({
     height: 120,
     justifyContent: 'center',
     alignItems: 'center',
+    position: 'absolute', // Allow checkmark to overlay smoothly
   },
   spinner: {
     // Native ActivityIndicator - simple and reliable
@@ -542,6 +654,7 @@ const styles = StyleSheet.create({
     height: 120,
     justifyContent: 'center',
     alignItems: 'center',
+    position: 'absolute', // Overlay on spinner for smooth transition
   },
   checkmarkCircle: {
     width: 120,

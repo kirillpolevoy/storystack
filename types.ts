@@ -18,6 +18,7 @@ export type Asset = {
   publicUrl?: string;
   auto_tag_status?: 'pending' | 'failed' | 'completed' | null;
   openai_batch_id?: string | null; // OpenAI Batch API batch_id for async processing (20+ images)
+  location?: string | null; // City name where photo was taken (from EXIF or manually entered)
 };
 
 export type Sequence = {

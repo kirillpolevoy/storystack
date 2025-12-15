@@ -37,6 +37,7 @@ import { compressImageForAI } from '@/utils/compressImageForAI';
 import { ImportLoadingOverlay } from '@/components/ImportLoadingOverlay';
 import { computeImageHash, checkForDuplicates } from '@/utils/duplicateDetection';
 import { DuplicateDetectionDialog } from '@/components/DuplicateDetectionDialog';
+import { extractLocationFromEXIF } from '@/utils/extractLocationFromEXIF';
 
 export default function LibraryScreen() {
   const router = useRouter();
@@ -72,12 +73,14 @@ export default function LibraryScreen() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [hasStartedAutoTagging, setHasStartedAutoTagging] = useState(false);
   const hasSeenAutoTaggingActive = useRef(false); // Track if we've seen autoTaggingAssets.size > 0
+  const optimisticTagUpdatesRef = useRef<Map<string, { tags: TagVocabulary[], timestamp: number }>>(new Map()); // Track optimistic tag updates
   const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
   const [pendingImportData, setPendingImportData] = useState<{
     assets: ImagePicker.ImagePickerAsset[];
     hashes: string[];
     compressedImages: Array<{ uri: string; width: number; height: number; size: number }>;
     duplicateIndices: number[];
+    locations: (string | null)[];
   } | null>(null);
   const [showRetryNotification, setShowRetryNotification] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
@@ -107,7 +110,7 @@ export default function LibraryScreen() {
     // Check database for the specific assets we just imported
     const { data: importedAssets, error: importedError } = await supabase
       .from('assets')
-      .select('id, tags, auto_tag_status')
+      .select('id, tags, location, auto_tag_status')
       .in('id', importedIdsArray);
     
     if (importedError) {
@@ -375,7 +378,7 @@ export default function LibraryScreen() {
     // Optimized: Batch URL generation and use efficient mapping
     const { data: assetData, error: assetError } = await supabase
       .from('assets')
-      .select('id, campaign_id, storage_path, source, tags, created_at, auto_tag_status')
+      .select('id, campaign_id, storage_path, source, tags, location, created_at, auto_tag_status')
       .eq('campaign_id', campaignId)
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
@@ -388,7 +391,21 @@ export default function LibraryScreen() {
       const mapped = (assetData as Asset[]).map((asset) => {
         const { data } = supabase?.storage.from('assets').getPublicUrl(asset.storage_path) || { data: { publicUrl: '' } };
         const tags = Array.isArray(asset.tags) ? (asset.tags as string[]) : [];
-        return { ...asset, publicUrl: data.publicUrl, tags } as Asset;
+        
+        // Check if we have a recent optimistic update for this asset
+        // If so, use optimistic tags instead of DB tags (they're more recent)
+        const optimisticUpdate = optimisticTagUpdatesRef.current.get(asset.id);
+        const isRecentOptimisticUpdate = optimisticUpdate && (Date.now() - optimisticUpdate.timestamp < 10000);
+        const finalTags = isRecentOptimisticUpdate ? optimisticUpdate.tags : tags;
+        
+        if (isRecentOptimisticUpdate && JSON.stringify(tags.sort()) !== JSON.stringify(optimisticUpdate.tags.sort())) {
+          console.log(`[Library] loadAssets: Using optimistic tags for asset ${asset.id}`, {
+            dbTags: tags,
+            optimisticTags: optimisticUpdate.tags
+          });
+        }
+        
+        return { ...asset, publicUrl: data.publicUrl, tags: finalTags } as Asset;
       });
       
       // Batch state update - set assets and autoTaggingAssets together
@@ -455,6 +472,58 @@ export default function LibraryScreen() {
       loadAssets();
     }
   }, [campaignId, loadAssets]);
+
+  // Sync activeAsset with filteredAssets when it updates (for background refreshes)
+  // This ensures TagModal shows the latest tags even after background refresh
+  // BUT: Don't overwrite if we just made an optimistic tag update
+  useEffect(() => {
+    if (activeAsset && isTagModalOpen) {
+      // Find updated asset in filteredAssets
+      const updatedAsset = filteredAssets.find(a => a.id === activeAsset.id);
+      if (updatedAsset) {
+        // Check if we have a recent optimistic update for this asset
+        const optimisticUpdate = optimisticTagUpdatesRef.current.get(activeAsset.id);
+        const isRecentOptimisticUpdate = optimisticUpdate && (Date.now() - optimisticUpdate.timestamp < 10000);
+        
+        // Check if tags or other properties changed
+        const currentTagsStr = JSON.stringify(activeAsset.tags ?? []);
+        const updatedTagsStr = JSON.stringify(updatedAsset.tags ?? []);
+        const currentStatus = activeAsset.auto_tag_status;
+        const updatedStatus = updatedAsset.auto_tag_status;
+        
+        // Only sync if tags/status changed AND we don't have a recent optimistic update
+        // If we have a recent optimistic update, only sync if the DB tags match our optimistic tags
+        // (meaning the DB update completed successfully)
+        if (currentTagsStr !== updatedTagsStr || currentStatus !== updatedStatus) {
+          if (isRecentOptimisticUpdate) {
+            // Check if DB tags match our optimistic tags (update succeeded)
+            const optimisticTagsStr = JSON.stringify(optimisticUpdate.tags.sort());
+            const dbTagsStr = JSON.stringify((updatedAsset.tags ?? []).sort());
+            console.log('[Library] Sync check - optimistic update exists', {
+              assetId: activeAsset.id,
+              optimisticTags: optimisticUpdate.tags,
+              dbTags: updatedAsset.tags,
+              match: optimisticTagsStr === dbTagsStr
+            });
+            if (optimisticTagsStr === dbTagsStr) {
+              // DB update completed successfully, safe to sync
+              console.log('[Library] ✅ Syncing activeAsset - DB update confirmed, tags match optimistic update');
+              setActiveAsset(updatedAsset);
+              // Clear optimistic tracking since DB is now in sync
+              optimisticTagUpdatesRef.current.delete(activeAsset.id);
+            } else {
+              // DB has different tags - might be stale data, don't overwrite optimistic update
+              console.log('[Library] ⚠️ Skipping sync - optimistic update in progress, DB tags differ. Keeping optimistic tags.');
+            }
+          } else {
+            // No recent optimistic update, safe to sync normally
+            console.log('[Library] Syncing activeAsset with updated data from filteredAssets (no optimistic update)');
+            setActiveAsset(updatedAsset);
+          }
+        }
+      }
+    }
+  }, [filteredAssets, isTagModalOpen]); // Removed activeAsset?.id to allow updates when tags change
 
   // Parse existing asset IDs from params (when adding to existing story)
   const existingAssetIds = useMemo(() => {
@@ -537,7 +606,8 @@ export default function LibraryScreen() {
     assetsToImport: ImagePicker.ImagePickerAsset[],
     compressedImages: Array<{ uri: string; width: number; height: number; size: number }>,
     imageHashes: string[],
-    skipDuplicates: boolean
+    skipDuplicates: boolean,
+    locations: (string | null)[] = []
   ) => {
     if (!campaignId || !supabase || !session?.user?.id) {
       return;
@@ -568,6 +638,15 @@ export default function LibraryScreen() {
       try {
         setImportProgress(prev => ({ ...prev, currentPhoto: i + 1 }));
         console.log(`[Library] Uploading photo ${i + 1}/${assetsToImport.length}...`);
+
+        // Use location extracted BEFORE compression (EXIF data is lost during compression)
+        const locationValue = locations[i] || null;
+        if (locationValue) {
+          console.log(`[Library] Using pre-extracted location for photo ${i + 1}: ${locationValue}`);
+        }
+
+        // Prepare initial tags array (location is now stored in separate column)
+        const initialTags: string[] = [];
 
         // Fetch compressed image data
         let arrayBuffer: ArrayBuffer;
@@ -605,13 +684,19 @@ export default function LibraryScreen() {
         }
 
         // Insert into database with user_id and file_hash
+        // Include location in separate column if extracted from EXIF
         const insertData: any = {
           user_id: userId,
           campaign_id: campaignId,
           storage_path: filePath,
           source: 'local',
-          tags: [],
+          tags: initialTags,
         };
+
+        // Add location if available (stored in separate column, not as tag)
+        if (locationValue) {
+          insertData.location = locationValue;
+        }
 
         // Add file_hash if available (column may not exist yet)
         const hash = imageHashes[i];
@@ -629,15 +714,19 @@ export default function LibraryScreen() {
           // If error is due to file_hash column not existing, try without it
           if (insertError.message?.includes('column') && insertError.message?.includes('file_hash')) {
             console.warn('[Library] file_hash column does not exist, inserting without hash');
+            const retryInsertData: any = {
+              user_id: userId,
+              campaign_id: campaignId,
+              storage_path: filePath,
+              source: 'local',
+              tags: initialTags,
+            };
+            if (locationValue) {
+              retryInsertData.location = locationValue;
+            }
             const { data: retryInserted, error: retryError } = await supabase
               .from('assets')
-              .insert({
-                user_id: userId,
-                campaign_id: campaignId,
-                storage_path: filePath,
-                source: 'local',
-                tags: [],
-              })
+              .insert(retryInsertData)
               .select('*')
               .single();
 
@@ -991,6 +1080,7 @@ export default function LibraryScreen() {
         allowsMultipleSelection: true,
         selectionLimit: 100,
         quality: 1,
+        exif: true, // Include EXIF data for location extraction
       });
 
       if (result.canceled || !result.assets?.length) {
@@ -1013,6 +1103,26 @@ export default function LibraryScreen() {
       const imageHashes: string[] = [];
 
       const BATCH_SIZE = 5; // Process 5 images at a time to avoid blocking UI
+
+      // Extract locations BEFORE compression (EXIF data is lost during compression)
+      const locations: (string | null)[] = [];
+      console.log('[Library] Extracting locations from EXIF before compression...');
+      for (let j = 0; j < result.assets.length; j++) {
+        try {
+          const locationTag = await extractLocationFromEXIF(result.assets[j]);
+          locations[j] = locationTag;
+          if (locationTag) {
+            console.log(`[Library] ✅ Extracted location for photo ${j + 1}: ${locationTag}`);
+          } else {
+            // Log EXIF data for debugging
+            const exif = result.assets[j].exif;
+            console.log(`[Library] ⚠️  No location found for photo ${j + 1}. EXIF data:`, exif ? JSON.stringify(exif).substring(0, 200) : 'No EXIF data');
+          }
+        } catch (locationError) {
+          console.warn(`[Library] Failed to extract location for photo ${j + 1}:`, locationError);
+          locations[j] = null;
+        }
+      }
 
       for (let i = 0; i < result.assets.length; i += BATCH_SIZE) {
         const batch = result.assets.slice(i, i + BATCH_SIZE);
@@ -1114,13 +1224,15 @@ export default function LibraryScreen() {
           hashes: imageHashes,
           compressedImages: validCompressedImages,
           duplicateIndices,
+          locations: locations.slice(0, validCompressedImages.length), // Include locations
         });
         setShowDuplicateDialog(true);
         return;
       }
 
       // No duplicates found, proceed with import
-      await processImport(result.assets.slice(0, validCompressedImages.length), validCompressedImages, imageHashes, false);
+      // Pass locations array (extracted before compression)
+      await processImport(result.assets.slice(0, validCompressedImages.length), validCompressedImages, imageHashes, false, locations.slice(0, validCompressedImages.length));
     } catch (error) {
       console.error('[Library] Import failed with unexpected error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
@@ -1312,6 +1424,40 @@ export default function LibraryScreen() {
 
   // Special constant for "no tags" filter
   const NO_TAGS_FILTER = '__NO_TAGS__' as TagVocabulary;
+  const LOCATION_PREFIX = '__LOCATION__' as TagVocabulary;
+
+  // Helper to check if a filter is a location filter
+  const isLocationFilter = (value: TagVocabulary): boolean => {
+    return typeof value === 'string' && value.startsWith(LOCATION_PREFIX);
+  };
+
+  // Extract location name from location filter
+  const getLocationName = (locationFilter: TagVocabulary): string => {
+    return locationFilter.replace(LOCATION_PREFIX, '');
+  };
+
+  // Extract unique locations from assets
+  const availableLocations = useMemo(() => {
+    const locations = new Set<string>();
+    assets.forEach((asset) => {
+      if (asset.location && asset.location.trim()) {
+        locations.add(asset.location.trim());
+      }
+    });
+    return Array.from(locations).sort();
+  }, [assets]);
+
+  // Calculate location counts (how many photos have each location)
+  const locationCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    assets.forEach((asset) => {
+      if (asset.location && asset.location.trim()) {
+        const location = asset.location.trim();
+        counts.set(location, (counts.get(location) || 0) + 1);
+      }
+    });
+    return counts;
+  }, [assets]);
 
   // Calculate tag counts (how many photos have each tag)
   const tagCounts = useMemo(() => {
@@ -1329,28 +1475,51 @@ export default function LibraryScreen() {
     return counts;
   }, [assets]);
 
-  // Filter assets using OR logic: show photos that have ANY of the selected tags
-  // Special handling for "no tags" filter
+  // Filter assets using OR logic: show photos that have ANY of the selected tags or locations
+  // Special handling for "no tags" filter and location filters
   const filteredAssets = useMemo(() => {
     if (!selectedTags.length) return assets;
     
     const hasNoTagsFilter = selectedTags.includes(NO_TAGS_FILTER);
-    const regularTags = selectedTags.filter((tag) => tag !== NO_TAGS_FILTER);
+    const locationFilters = selectedTags.filter((tag) => isLocationFilter(tag));
+    const regularTags = selectedTags.filter((tag) => tag !== NO_TAGS_FILTER && !isLocationFilter(tag));
     
-    if (hasNoTagsFilter && regularTags.length === 0) {
-      // Only "no tags" filter selected
+    const selectedLocations = locationFilters.map((filter) => getLocationName(filter));
+    
+    // If only "no tags" filter selected
+    if (hasNoTagsFilter && regularTags.length === 0 && selectedLocations.length === 0) {
       return assets.filter((asset) => !asset.tags || asset.tags.length === 0);
-    } else if (hasNoTagsFilter && regularTags.length > 0) {
-      // Both "no tags" and regular tags selected - show photos with no tags OR with any selected tag
-      return assets.filter((asset) => {
-        const hasNoTags = !asset.tags || asset.tags.length === 0;
-        const hasSelectedTag = regularTags.some((tag) => asset.tags.includes(tag));
-        return hasNoTags || hasSelectedTag;
-      });
-    } else {
-      // Only regular tags selected
-      return assets.filter((asset) => regularTags.some((tag) => asset.tags.includes(tag)));
     }
+    
+    // Filter assets that match any of the selected criteria (OR logic)
+    return assets.filter((asset) => {
+      // Check if asset matches location filter
+      const matchesLocation = selectedLocations.length > 0 && 
+        asset.location && 
+        selectedLocations.includes(asset.location.trim());
+      
+      // Check if asset matches tag filter
+      const hasNoTags = !asset.tags || asset.tags.length === 0;
+      const matchesNoTagsFilter = hasNoTagsFilter && hasNoTags;
+      const matchesRegularTags = regularTags.length > 0 && regularTags.some((tag) => asset.tags.includes(tag));
+      const matchesTags = matchesNoTagsFilter || matchesRegularTags;
+      
+      // OR logic: match location OR match tags
+      // If no filters of a type are selected, that type doesn't restrict results
+      const locationMatches = selectedLocations.length === 0 || matchesLocation;
+      const tagMatches = (hasNoTagsFilter && regularTags.length === 0) ? matchesNoTagsFilter : 
+                        (regularTags.length === 0 && !hasNoTagsFilter) ? true : 
+                        matchesTags;
+      
+      // Asset matches if it satisfies location filters OR tag filters
+      // If both types are selected, asset must match at least one type
+      if (selectedLocations.length > 0 && (hasNoTagsFilter || regularTags.length > 0)) {
+        return matchesLocation || matchesTags;
+      }
+      
+      // Only one type of filter selected
+      return locationMatches && tagMatches;
+    });
   }, [assets, selectedTags]);
 
   const toggleTagFilter = (tag: TagVocabulary) => {
@@ -1437,6 +1606,10 @@ export default function LibraryScreen() {
     setActiveAsset(null);
     setActiveAssetsForTagging([]);
     
+    // Clear selection when closing modal (especially important for multi-edit mode)
+    // Selection is also cleared in updateTags, but this ensures it's cleared even if modal is closed without saving
+    setSelectedAssets([]);
+    
     // Refresh assets in background (don't block UI)
     // This ensures manual auto-tagging triggered in TagModal is visible
     loadAssets().catch((error) => {
@@ -1465,7 +1638,7 @@ export default function LibraryScreen() {
     }, 5500);
   }, []);
 
-  const updateTags = async (newTags: TagVocabulary[]) => {
+  const updateTags = async (newTags: TagVocabulary[], location?: string | null) => {
     if (!activeAssetsForTagging.length || !supabase) {
       return;
     }
@@ -1474,27 +1647,117 @@ export default function LibraryScreen() {
       const assetIds = activeAssetsForTagging.map((a) => a.id);
       
       if (activeAssetsForTagging.length === 1) {
-        // Single asset: replace tags (normal behavior)
-        const { error } = await supabase
+        // Single asset: replace tags and location (normal behavior)
+        const assetId = assetIds[0];
+        console.log(`[Library] Updating tags for asset ${assetId}:`, newTags);
+        if (location !== undefined) {
+          console.log(`[Library] Updating location for asset ${assetId}:`, location);
+        }
+        
+        const updateData: any = { tags: newTags };
+        if (location !== undefined) {
+          updateData.location = location;
+        }
+        
+        const { data, error } = await supabase
           .from('assets')
-          .update({ tags: newTags })
-          .eq('id', assetIds[0]);
+          .update(updateData)
+          .eq('id', assetId)
+          .select('id, tags, location')
+          .single();
 
         if (error) {
-          console.error('[Library] update tags failed', error);
+          console.error('[Library] ❌ update tags failed', error);
           Alert.alert('Update failed', 'Unable to update tags.');
-        } else {
-          // Refresh in background (don't block UI)
-          loadAssets().catch((err) => {
-            console.error('[Library] Failed to refresh after tag update:', err);
-          });
+          return;
         }
+        
+        // Verify the update actually persisted
+        if (!data || JSON.stringify(data.tags?.sort()) !== JSON.stringify(newTags.sort())) {
+          console.error('[Library] ❌ Database update verification failed!', {
+            expected: newTags,
+            received: data?.tags
+          });
+          Alert.alert('Update failed', 'Tags were not saved correctly. Please try again.');
+          return;
+        }
+        
+        // Verify location was saved correctly
+        if (location !== undefined && data.location !== location) {
+          console.error('[Library] ❌ Location update verification failed!', {
+            expected: location,
+            received: data?.location
+          });
+          Alert.alert('Update failed', 'Location was not saved correctly. Please try again.');
+          return;
+        }
+        
+        console.log(`[Library] ✅ Tags successfully saved to database for asset ${assetId}:`, data.tags);
+        if (location !== undefined) {
+          console.log(`[Library] ✅ Location successfully saved to database for asset ${assetId}:`, data.location);
+        }
+        
+        // Track this optimistic update - prevent sync useEffect from overwriting for 10 seconds
+        optimisticTagUpdatesRef.current.set(assetId, {
+          tags: newTags,
+          timestamp: Date.now()
+        });
+        
+        // Optimistically update activeAsset immediately so TagModal shows new tags
+        if (activeAsset && activeAsset.id === assetId) {
+          console.log(`[Library] Optimistically updating activeAsset with tags:`, newTags);
+          const updatedAsset = { ...activeAsset, tags: newTags };
+          if (location !== undefined) {
+            updatedAsset.location = location;
+          }
+          setActiveAsset(updatedAsset);
+        }
+        // Also update activeAssetsForTagging
+        setActiveAssetsForTagging((prev) => 
+          prev.map(a => {
+            if (a.id === assetId) {
+              const updated = { ...a, tags: newTags };
+              if (location !== undefined) {
+                updated.location = location;
+              }
+              return updated;
+            }
+            return a;
+          })
+        );
+        
+        // Optimistically update assets array so filteredAssets has correct tags
+        // This prevents sync useEffect from overwriting with stale data
+        setAssets((prev) => {
+          const updated = prev.map(a => {
+            if (a.id === assetId) {
+              const updatedAsset = { ...a, tags: newTags };
+              if (location !== undefined) {
+                updatedAsset.location = location;
+              }
+              return updatedAsset;
+            }
+            return a;
+          });
+          console.log(`[Library] Optimistically updated assets array. Asset ${assetId} now has tags:`, 
+            updated.find(a => a.id === assetId)?.tags);
+          return updated;
+        });
+        
+        // Don't call loadAssets() immediately - it would overwrite our optimistic update
+        // The database update has already succeeded and been verified, so tags are persisted
+        // Natural refresh cycles (navigate away/back, pull-to-refresh) will sync eventually
+        // Clean up optimistic update tracking after 10 seconds
+        setTimeout(() => {
+          optimisticTagUpdatesRef.current.delete(assetId);
+          console.log(`[Library] Cleaned up optimistic update tracking for asset ${assetId}`);
+        }, 10000);
       } else {
         // Multiple assets: merge tags (add new tags to existing tags)
         // Fetch current tags for all assets
         const { data: currentAssets, error: fetchError } = await supabase
           .from('assets')
-          .select('id, tags')
+          .select('id, tags, location')
           .in('id', assetIds);
 
         if (fetchError) {
@@ -1503,15 +1766,30 @@ export default function LibraryScreen() {
           return;
         }
 
-        // Update each asset with merged tags
-        const updates = currentAssets.map((currentAsset) => {
+        // Calculate final tags for all updated assets BEFORE updating
+        const finalTagsMap = new Map<string, TagVocabulary[]>();
+        currentAssets.forEach((currentAsset) => {
           const existingTags = (currentAsset.tags ?? []) as TagVocabulary[];
           // Merge: combine existing tags with new tags, remove duplicates
           const finalTags = Array.from(new Set([...existingTags, ...newTags]));
-          
+          finalTagsMap.set(currentAsset.id, finalTags);
+        });
+        
+        console.log(`[Library] Updating tags for ${assetIds.length} assets (merge mode):`, newTags);
+        if (location !== undefined) {
+          console.log(`[Library] Updating location for ${assetIds.length} assets:`, location);
+        }
+        
+        // Update each asset with merged tags and location
+        const updates = currentAssets.map((currentAsset) => {
+          const finalTags = finalTagsMap.get(currentAsset.id)!;
+          const updateData: any = { tags: finalTags };
+          if (location !== undefined) {
+            updateData.location = location;
+          }
           return supabase
             .from('assets')
-            .update({ tags: finalTags })
+            .update(updateData)
             .eq('id', currentAsset.id);
         });
 
@@ -1519,15 +1797,103 @@ export default function LibraryScreen() {
         const hasError = results.some((result) => result.error);
 
         if (hasError) {
-          console.error('[Library] update tags failed', results.find((r) => r.error)?.error);
+          const errorResult = results.find((r) => r.error);
+          console.error('[Library] ❌ Bulk update tags failed', errorResult?.error);
           Alert.alert('Update failed', 'Unable to update tags for some photos.');
-        } else {
+          return;
+        }
+        
+        // Verify updates persisted by fetching updated assets
+        console.log(`[Library] Verifying bulk tag updates for ${assetIds.length} assets...`);
+        const { data: verifiedAssets, error: verifyError } = await supabase
+          .from('assets')
+          .select('id, tags, location')
+          .in('id', assetIds);
+          
+        if (verifyError) {
+          console.error('[Library] ❌ Failed to verify bulk tag updates', verifyError);
+          Alert.alert('Update failed', 'Tags may not have been saved correctly. Please try again.');
+          return;
+        }
+        
+        // Verify each asset was updated correctly
+        const verificationFailed: string[] = [];
+        verifiedAssets.forEach((verifiedAsset) => {
+          const expectedTags = finalTagsMap.get(verifiedAsset.id);
+          if (expectedTags) {
+            const expectedStr = JSON.stringify(expectedTags.sort());
+            const actualStr = JSON.stringify((verifiedAsset.tags ?? []).sort());
+            if (expectedStr !== actualStr) {
+              verificationFailed.push(verifiedAsset.id);
+              console.error(`[Library] ❌ Verification failed for asset ${verifiedAsset.id}`, {
+                expected: expectedTags,
+                received: verifiedAsset.tags
+              });
+            }
+          }
+        });
+        
+        if (verificationFailed.length > 0) {
+          console.error('[Library] ❌ Bulk update verification failed for assets:', verificationFailed);
+          Alert.alert('Update failed', 'Some tags were not saved correctly. Please try again.');
+          return;
+        }
+        
+        console.log(`[Library] ✅ Bulk tags successfully saved to database for ${assetIds.length} assets`);
+        
+        // All updates succeeded and verified
+        {
+          
+          // Optimistically update activeAsset and activeAssetsForTagging with merged tags
+          if (activeAsset && assetIds.includes(activeAsset.id)) {
+            const finalTags = finalTagsMap.get(activeAsset.id) ?? activeAsset.tags;
+            setActiveAsset({ ...activeAsset, tags: finalTags });
+          }
+          setActiveAssetsForTagging((prev) =>
+            prev.map(a => {
+              const finalTags = finalTagsMap.get(a.id);
+              if (finalTags) {
+                return { ...a, tags: finalTags };
+              }
+              return a;
+            })
+          );
+          
+          // Track optimistic updates for all assets - prevent sync useEffect from overwriting
+          assetIds.forEach(assetId => {
+            const finalTags = finalTagsMap.get(assetId);
+            if (finalTags) {
+              optimisticTagUpdatesRef.current.set(assetId, {
+                tags: finalTags,
+                timestamp: Date.now()
+              });
+            }
+          });
+          
+          // Optimistically update assets array so filteredAssets has correct tags
+          // This prevents sync useEffect from overwriting with stale data
+          setAssets((prev) =>
+            prev.map(a => {
+              const finalTags = finalTagsMap.get(a.id);
+              if (finalTags) {
+                return { ...a, tags: finalTags };
+              }
+              return a;
+            })
+          );
+          
           // Clear selection after bulk update
           setSelectedAssets([]);
-          // Refresh in background (don't block UI)
-          loadAssets().catch((err) => {
-            console.error('[Library] Failed to refresh after bulk tag update:', err);
-          });
+          
+          // Don't call loadAssets() immediately - it would overwrite our optimistic updates
+          // The database updates have already succeeded, so tags are persisted
+          // Natural refresh cycles (navigate away/back, pull-to-refresh) will sync eventually
+          // Clean up optimistic update tracking after 10 seconds
+          setTimeout(() => {
+            assetIds.forEach(assetId => {
+              optimisticTagUpdatesRef.current.delete(assetId);
+            });
+          }, 10000);
         }
       }
     } catch (error) {
@@ -2112,6 +2478,8 @@ export default function LibraryScreen() {
           availableTags={allAvailableTags || []}
           tagCounts={tagCounts}
           showNoTagsOption={true}
+          availableLocations={availableLocations}
+          locationCounts={locationCounts}
           noTagsLabel="No Tags"
         />
       </View>
@@ -2315,6 +2683,11 @@ export default function LibraryScreen() {
         multipleAssets={activeAssetsForTagging}
         onDelete={handleDeleteAsset}
         onAutoTagSuccess={handleManualAutoTagSuccess}
+        allAssets={filteredAssets}
+        onAssetChange={(newAsset) => {
+          setActiveAsset(newAsset);
+        }}
+        autoTaggingAssets={autoTaggingAssets}
       />
 
 
@@ -2359,7 +2732,8 @@ export default function LibraryScreen() {
               pendingImportData.assets,
               pendingImportData.compressedImages,
               pendingImportData.hashes,
-              false // Import all including duplicates
+              false, // Import all including duplicates
+              pendingImportData.locations
             );
             setPendingImportData(null);
           }}
@@ -2369,7 +2743,8 @@ export default function LibraryScreen() {
               pendingImportData.assets,
               pendingImportData.compressedImages,
               pendingImportData.hashes,
-              true // Skip duplicates
+              true, // Skip duplicates
+              pendingImportData.locations
             );
             setPendingImportData(null);
           }}

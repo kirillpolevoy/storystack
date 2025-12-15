@@ -802,15 +802,29 @@ export default function TagManagementScreen() {
       
       // Then try to save to Supabase
       if (supabase && userId) {
-        const { error, data } = await supabase
-          .from('tag_config')
-          .upsert({ user_id: userId, custom_tags: updatedCustomTags }, { onConflict: 'user_id' });
+        let error = null;
+        try {
+          const result = await supabase
+            .from('tag_config')
+            .upsert({ user_id: userId, custom_tags: updatedCustomTags }, { onConflict: 'user_id' });
+          error = result.error;
+        } catch (upsertError: any) {
+          // If upsert fails, try update as fallback
+          console.warn('[TagManagement] Upsert failed, trying update fallback:', upsertError);
+          const updateResult = await supabase
+            .from('tag_config')
+            .update({ custom_tags: updatedCustomTags })
+            .eq('user_id', userId);
+          error = updateResult.error;
+        }
         
         if (error) {
           if (error.code === 'PGRST204' || error.message?.includes("Could not find the 'custom_tags' column")) {
             console.warn('[TagManagement] custom_tags column not found in Supabase, using AsyncStorage only');
           } else {
             console.error('[TagManagement] Supabase save custom_tags failed:', error);
+            console.error('[TagManagement] Error code:', error.code);
+            console.error('[TagManagement] Error message:', error.message);
             // AsyncStorage already saved, so we're good
           }
         } else {
@@ -916,12 +930,47 @@ export default function TagManagementScreen() {
       
       // Save to Supabase if available
       if (supabase) {
-        const { data, error } = await supabase
-          .from('tag_config')
-          .upsert({ user_id: userId, auto_tags: autoTags }, { onConflict: 'user_id' });
+        // Try upsert first, fallback to insert/update if needed
+        let error = null;
+        let data = null;
+        
+        try {
+          const result = await supabase
+            .from('tag_config')
+            .upsert({ user_id: userId, auto_tags: autoTags }, { onConflict: 'user_id' });
+          error = result.error;
+          data = result.data;
+        } catch (upsertError: any) {
+          // If upsert fails (e.g., due to RLS policy issue), try insert then update
+          console.warn('[TagManagement] Upsert failed, trying insert/update fallback:', upsertError);
+          
+          // First try to insert
+          const insertResult = await supabase
+            .from('tag_config')
+            .insert({ user_id: userId, auto_tags: autoTags });
+          
+          if (insertResult.error) {
+            // If insert fails (row exists), try update
+            if (insertResult.error.code === '23505' || insertResult.error.message?.includes('duplicate')) {
+              const updateResult = await supabase
+                .from('tag_config')
+                .update({ auto_tags: autoTags })
+                .eq('user_id', userId);
+              error = updateResult.error;
+              data = updateResult.data;
+            } else {
+              error = insertResult.error;
+            }
+          } else {
+            error = null;
+            data = insertResult.data;
+          }
+        }
         
         if (error) {
           console.error('[TagManagement] ❌ Supabase save failed', error);
+          console.error('[TagManagement] Error code:', error.code);
+          console.error('[TagManagement] Error message:', error.message);
           console.error('[TagManagement] Error details:', JSON.stringify(error, null, 2));
           // Fallback to user-specific AsyncStorage
           const userSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${userId}`;
@@ -1011,15 +1060,28 @@ export default function TagManagementScreen() {
         
         // Save to Supabase if available
         if (supabase && userId) {
-          const { error } = await supabase
-            .from('tag_config')
-            .upsert({ user_id: userId, custom_tags: updatedCustomTags }, { onConflict: 'user_id' });
+          let error = null;
+          try {
+            const result = await supabase
+              .from('tag_config')
+              .upsert({ user_id: userId, custom_tags: updatedCustomTags }, { onConflict: 'user_id' });
+            error = result.error;
+          } catch (upsertError: any) {
+            // If upsert fails, try update as fallback
+            console.warn('[TagManagement] Upsert failed, trying update fallback:', upsertError);
+            const updateResult = await supabase
+              .from('tag_config')
+              .update({ custom_tags: updatedCustomTags })
+              .eq('user_id', userId);
+            error = updateResult.error;
+          }
           
           if (error) {
             if (error.code === 'PGRST204' || error.message?.includes("Could not find the 'custom_tags' column")) {
               console.warn('[TagManagement] custom_tags column not found, using AsyncStorage');
             } else {
               console.error('[TagManagement] Supabase save custom_tags failed', error);
+              console.error('[TagManagement] Error code:', error.code);
             }
             const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
             await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
@@ -1088,15 +1150,28 @@ export default function TagManagementScreen() {
       
       // Save to Supabase if available
       if (supabase && userId) {
-        const { error } = await supabase
-          .from('tag_config')
-          .upsert({ user_id: userId, custom_tags: updatedCustomTags }, { onConflict: 'user_id' });
+        let error = null;
+        try {
+          const result = await supabase
+            .from('tag_config')
+            .upsert({ user_id: userId, custom_tags: updatedCustomTags }, { onConflict: 'user_id' });
+          error = result.error;
+        } catch (upsertError: any) {
+          // If upsert fails, try update as fallback
+          console.warn('[TagManagement] Upsert failed, trying update fallback:', upsertError);
+          const updateResult = await supabase
+            .from('tag_config')
+            .update({ custom_tags: updatedCustomTags })
+            .eq('user_id', userId);
+          error = updateResult.error;
+        }
         
         if (error) {
           if (error.code === 'PGRST204' || error.message?.includes("Could not find the 'custom_tags' column")) {
             console.warn('[TagManagement] custom_tags column not found, using AsyncStorage');
           } else {
             console.error('[TagManagement] Supabase save custom_tags failed', error);
+            console.error('[TagManagement] Error code:', error.code);
           }
           const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
           await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
@@ -1128,9 +1203,21 @@ export default function TagManagementScreen() {
       
       // Save to Supabase if available
       if (supabase && userId) {
-        const { error } = await supabase
-          .from('tag_config')
-          .upsert({ user_id: userId, deleted_tags: deletedTags }, { onConflict: 'user_id' });
+        let error = null;
+        try {
+          const result = await supabase
+            .from('tag_config')
+            .upsert({ user_id: userId, deleted_tags: deletedTags }, { onConflict: 'user_id' });
+          error = result.error;
+        } catch (upsertError: any) {
+          // If upsert fails, try update as fallback
+          console.warn('[TagManagement] Upsert failed, trying update fallback:', upsertError);
+          const updateResult = await supabase
+            .from('tag_config')
+            .update({ deleted_tags: deletedTags })
+            .eq('user_id', userId);
+          error = updateResult.error;
+        }
         
         if (error) {
           // Check if error is due to missing column (PGRST204)
@@ -1138,6 +1225,8 @@ export default function TagManagementScreen() {
             console.warn('[TagManagement] deleted_tags column not found in tag_config table, using AsyncStorage fallback');
           } else {
             console.error('[TagManagement] Supabase save deleted tags failed', error);
+            console.error('[TagManagement] Error code:', error.code);
+            console.error('[TagManagement] Error message:', error.message);
           }
           // Always fallback to AsyncStorage if Supabase fails
           await AsyncStorage.setItem(DELETED_TAGS_STORAGE_KEY, JSON.stringify(deletedTags));

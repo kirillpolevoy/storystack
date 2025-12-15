@@ -9,13 +9,24 @@ type TagSearchBarProps = {
   onToggleTag: (tag: TagVocabulary) => void;
   availableTags: TagVocabulary[];
   tagCounts?: Map<TagVocabulary, number>;
+  showNoTagsOption?: boolean;
+  noTagsLabel?: string;
+  availableLocations?: string[]; // Unique locations from assets
+  locationCounts?: Map<string, number>; // Count of photos per location
 };
+
+const NO_TAGS_FILTER = '__NO_TAGS__' as TagVocabulary;
+const LOCATION_PREFIX = '__LOCATION__' as TagVocabulary; // Prefix to distinguish locations from tags
 
 export function TagSearchBar({ 
   selectedTags, 
   onToggleTag, 
   availableTags,
   tagCounts = new Map(),
+  showNoTagsOption = false,
+  noTagsLabel = 'No Tags',
+  availableLocations = [],
+  locationCounts = new Map(),
 }: TagSearchBarProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [isFocused, setIsFocused] = useState(false);
@@ -39,47 +50,129 @@ export function TagSearchBar({
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Unified tag list: show all tags when empty, filtered when typing
-  const displayTags = useMemo(() => {
-    if (!availableTags || !Array.isArray(availableTags)) {
-      return [];
-    }
+  // Helper to check if a value is a location filter
+  const isLocationFilter = (value: TagVocabulary): boolean => {
+    return typeof value === 'string' && value.startsWith(LOCATION_PREFIX);
+  };
 
+  // Extract location name from location filter
+  const getLocationName = (locationFilter: TagVocabulary): string => {
+    return locationFilter.replace(LOCATION_PREFIX, '');
+  };
+
+  // Create location filter identifier
+  const createLocationFilter = (location: string): TagVocabulary => {
+    return `${LOCATION_PREFIX}${location}` as TagVocabulary;
+  };
+
+  // Unified tag and location list: show all when empty, filtered when typing
+  const displayItems = useMemo(() => {
     const selectedSet = new Set(selectedTags || []);
-    const unselectedTags = availableTags.filter((tag) => !selectedSet.has(tag));
+    const isNoTagsSelected = selectedSet.has(NO_TAGS_FILTER);
+    
+    // Build list of regular tags (excluding NO_TAGS_FILTER and location filters)
+    const regularTags = (availableTags || []).filter((tag) => 
+      tag !== NO_TAGS_FILTER && 
+      !selectedSet.has(tag) &&
+      !isLocationFilter(tag)
+    );
+
+    // Build list of locations (excluding already selected ones)
+    const regularLocations = (availableLocations || [])
+      .filter((location) => location && location.trim())
+      .filter((location) => !selectedSet.has(createLocationFilter(location)))
+      .map((location) => ({
+        type: 'location' as const,
+        value: createLocationFilter(location),
+        displayName: location,
+        count: locationCounts?.get(location) || 0,
+      }));
+
+    // Build list of tags
+    const tagItems = regularTags.map((tag) => ({
+      type: 'tag' as const,
+      value: tag,
+      displayName: tag,
+      count: tagCounts?.get(tag) || 0,
+    }));
 
     // If user is typing, filter and sort by relevance
     if (debouncedQuery.trim()) {
       const query = debouncedQuery.toLowerCase().trim();
-      return unselectedTags
-        .filter((tag) => {
-          if (!tag || typeof tag !== 'string') return false;
-          return tag.toLowerCase().includes(query);
-        })
-        .sort((a, b) => {
-          const aLower = a.toLowerCase();
-          const bLower = b.toLowerCase();
-          
-          if (aLower === query) return -1;
-          if (bLower === query) return 1;
-          
-          if (aLower.startsWith(query)) return -1;
-          if (bLower.startsWith(query)) return 1;
-          
-          return a.localeCompare(b);
-        });
+      
+      // Filter tags
+      const filteredTags = tagItems.filter((item) => {
+        return item.displayName.toLowerCase().includes(query);
+      }).sort((a, b) => {
+        const aLower = a.displayName.toLowerCase();
+        const bLower = b.displayName.toLowerCase();
+        
+        if (aLower === query) return -1;
+        if (bLower === query) return 1;
+        
+        if (aLower.startsWith(query)) return -1;
+        if (bLower.startsWith(query)) return 1;
+        
+        return a.displayName.localeCompare(b.displayName);
+      });
+
+      // Filter locations
+      const filteredLocations = regularLocations.filter((item) => {
+        return item.displayName.toLowerCase().includes(query);
+      }).sort((a, b) => {
+        const aLower = a.displayName.toLowerCase();
+        const bLower = b.displayName.toLowerCase();
+        
+        if (aLower === query) return -1;
+        if (bLower === query) return 1;
+        
+        if (aLower.startsWith(query)) return -1;
+        if (bLower.startsWith(query)) return 1;
+        
+        return a.displayName.localeCompare(b.displayName);
+      });
+
+      const results: Array<{ type: 'tag' | 'location' | 'no-tags'; value: TagVocabulary; displayName: string; count: number }> = [];
+      
+      // Add "No Tags" option if it matches search query and not already selected
+      if (showNoTagsOption && !isNoTagsSelected && noTagsLabel.toLowerCase().includes(query)) {
+        results.push({ type: 'no-tags', value: NO_TAGS_FILTER, displayName: noTagsLabel, count: 0 });
+      }
+      
+      // Add locations first (they're more specific), then tags
+      results.push(...filteredLocations, ...filteredTags);
+      
+      return results;
     }
 
-    // If empty, show all tags sorted by usage (most popular first)
-    return unselectedTags.sort((a, b) => {
-      const countA = tagCounts?.get(a) || 0;
-      const countB = tagCounts?.get(b) || 0;
-      if (countB !== countA) {
-        return countB - countA; // Higher count first
+    // If empty, show all items sorted by usage (most popular first)
+    // Locations first, then tags
+    const sortedLocations = regularLocations.sort((a, b) => {
+      if (b.count !== a.count) {
+        return b.count - a.count; // Higher count first
       }
-      return a.localeCompare(b); // Alphabetical tiebreaker
+      return a.displayName.localeCompare(b.displayName); // Alphabetical tiebreaker
     });
-  }, [debouncedQuery, availableTags, selectedTags, tagCounts]);
+
+    const sortedTags = tagItems.sort((a, b) => {
+      if (b.count !== a.count) {
+        return b.count - a.count; // Higher count first
+      }
+      return a.displayName.localeCompare(b.displayName); // Alphabetical tiebreaker
+    });
+
+    const results: Array<{ type: 'tag' | 'location' | 'no-tags'; value: TagVocabulary; displayName: string; count: number }> = [];
+    
+    // Add "No Tags" option at the beginning if enabled and not selected
+    if (showNoTagsOption && !isNoTagsSelected) {
+      results.push({ type: 'no-tags', value: NO_TAGS_FILTER, displayName: noTagsLabel, count: 0 });
+    }
+    
+    // Add locations first, then tags
+    results.push(...sortedLocations, ...sortedTags);
+    
+    return results;
+  }, [debouncedQuery, availableTags, availableLocations, selectedTags, tagCounts, locationCounts, showNoTagsOption, noTagsLabel]);
 
   // Animate search bar on focus
   useEffect(() => {
@@ -120,8 +213,8 @@ export function TagSearchBar({
 
   // Animate dropdown when it appears/disappears
   useEffect(() => {
-    const hasDisplayTags = displayTags && Array.isArray(displayTags) && displayTags.length > 0;
-    if (isFocused && hasDisplayTags) {
+    const hasDisplayItems = displayItems && Array.isArray(displayItems) && displayItems.length > 0;
+    if (isFocused && hasDisplayItems) {
       Animated.parallel([
         Animated.timing(dropdownOpacity, {
           toValue: 1,
@@ -164,7 +257,7 @@ export function TagSearchBar({
         }),
       ]).start();
     }
-  }, [isFocused, displayTags]);
+  }, [isFocused, displayItems]);
 
   const selectedTagsSet = useMemo(() => new Set(selectedTags || []), [selectedTags]);
 
@@ -234,48 +327,75 @@ export function TagSearchBar({
     }
   }, [isFocused]);
 
-  const renderTagSuggestion = useCallback(({ item: tag, index }: { item: TagVocabulary; index: number }) => {
-    if (!tag) return null;
-    const count = tagCounts?.get(tag) || 0;
-    const isSelected = selectedTagsSet.has(tag);
+  const renderSuggestion = useCallback(({ item, index }: { item: { type: 'tag' | 'location' | 'no-tags'; value: TagVocabulary; displayName: string; count: number }; index: number }) => {
+    if (!item) return null;
+    const isSelected = selectedTagsSet.has(item.value);
+    const isLocation = item.type === 'location';
+    const isNoTagsFilter = item.type === 'no-tags';
 
     return (
       <Pressable
-        onPress={() => handleTagSelect(tag)}
+        onPress={() => handleTagSelect(item.value)}
         style={({ pressed }) => ({
           paddingHorizontal: 20,
           paddingVertical: 14,
-          borderBottomWidth: index < displayTags.length - 1 ? 0.5 : 0,
+          borderBottomWidth: index < displayItems.length - 1 ? 0.5 : 0,
           borderBottomColor: '#f0f0f0',
           backgroundColor: pressed ? '#f8f8f8' : isSelected ? '#fafafa' : '#ffffff',
         })}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <View style={{ flex: 1 }}>
-            <Text 
-              style={{ 
-                fontSize: 17,
-                fontWeight: '500',
-                color: '#1d1d1f',
-                letterSpacing: -0.4,
-                lineHeight: 22,
-              }}
-            >
-              {tag}
-            </Text>
-            {count > 0 && (
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
+            {isLocation && (
+              <MaterialCommunityIcons
+                name="map-marker"
+                size={18}
+                color="#86868b"
+                style={{ marginRight: 8 }}
+              />
+            )}
+            {isNoTagsFilter && (
+              <MaterialCommunityIcons
+                name="tag-off"
+                size={18}
+                color="#86868b"
+                style={{ marginRight: 8 }}
+              />
+            )}
+            {!isLocation && !isNoTagsFilter && (
+              <MaterialCommunityIcons
+                name="tag"
+                size={18}
+                color="#86868b"
+                style={{ marginRight: 8 }}
+              />
+            )}
+            <View style={{ flex: 1 }}>
               <Text 
                 style={{ 
-                  fontSize: 14,
-                  fontWeight: '400',
-                  color: '#86868b',
-                  marginTop: 2,
-                  letterSpacing: -0.2,
+                  fontSize: 17,
+                  fontWeight: '500',
+                  color: '#1d1d1f',
+                  letterSpacing: -0.4,
+                  lineHeight: 22,
                 }}
               >
-                {count} {count === 1 ? 'photo' : 'photos'}
+                {item.displayName}
               </Text>
-            )}
+              {item.count > 0 && (
+                <Text 
+                  style={{ 
+                    fontSize: 14,
+                    fontWeight: '400',
+                    color: '#86868b',
+                    marginTop: 2,
+                    letterSpacing: -0.2,
+                  }}
+                >
+                  {item.count} {item.count === 1 ? 'photo' : 'photos'}
+                </Text>
+              )}
+            </View>
           </View>
           {isSelected && (
             <View style={{ marginLeft: 12 }}>
@@ -289,9 +409,9 @@ export function TagSearchBar({
         </View>
       </Pressable>
     );
-  }, [handleTagSelect, tagCounts, selectedTagsSet, displayTags.length]);
+  }, [handleTagSelect, selectedTagsSet, displayItems.length]);
 
-  const showDropdown = isFocused && displayTags.length > 0;
+  const showDropdown = isFocused && displayItems.length > 0;
 
   return (
     <View style={{ position: 'relative', zIndex: 1 }}>
@@ -346,7 +466,7 @@ export function TagSearchBar({
                 handleBlur();
               }
             }}
-            placeholder="Search tags..."
+            placeholder="Search tags and locations..."
             placeholderTextColor="#86868b"
             style={{ 
               flex: 1,
@@ -440,7 +560,7 @@ export function TagSearchBar({
                 letterSpacing: -0.1,
               }}
             >
-              {displayTags.length} {displayTags.length === 1 ? 'tag' : 'tags'}
+              {displayItems.length} {displayItems.length === 1 ? 'result' : 'results'}
             </Text>
             <Pressable
               onPress={handleDismiss}
@@ -459,9 +579,9 @@ export function TagSearchBar({
             </Pressable>
           </View>
           <FlatList
-            data={displayTags}
-            renderItem={renderTagSuggestion}
-            keyExtractor={(item, index) => `${item}-${index}`}
+            data={displayItems}
+            renderItem={renderSuggestion}
+            keyExtractor={(item, index) => `${item.value}-${index}`}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
             showsVerticalScrollIndicator={true}
@@ -489,12 +609,21 @@ export function TagSearchBar({
         </Animated.View>
       )}
 
-      {/* Selected Tags Chips - Refined Apple-style */}
+      {/* Selected Tags and Locations Chips - Refined Apple-style */}
       {selectedTags && selectedTags.length > 0 && (
         <View style={{ marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {selectedTags.map((tag, index) => {
             if (!tag) return null;
-            const count = tagCounts?.get(tag) || 0;
+            const isNoTagsFilter = tag === NO_TAGS_FILTER;
+            const isLocation = isLocationFilter(tag);
+            const displayName = isNoTagsFilter 
+              ? noTagsLabel 
+              : isLocation 
+              ? getLocationName(tag)
+              : tag;
+            const count = isLocation 
+              ? locationCounts?.get(getLocationName(tag)) || 0
+              : tagCounts?.get(tag) || 0;
             return (
               <Pressable
                 key={`${tag}-${index}`}
@@ -514,6 +643,22 @@ export function TagSearchBar({
                   elevation: 2,
                 })}
               >
+                {isLocation && (
+                  <MaterialCommunityIcons
+                    name="map-marker"
+                    size={14}
+                    color="rgba(255, 255, 255, 0.9)"
+                    style={{ marginRight: 4 }}
+                  />
+                )}
+                {isNoTagsFilter && (
+                  <MaterialCommunityIcons
+                    name="tag-off"
+                    size={14}
+                    color="rgba(255, 255, 255, 0.9)"
+                    style={{ marginRight: 4 }}
+                  />
+                )}
                 <Text
                   style={{
                     fontSize: 15,
@@ -522,7 +667,7 @@ export function TagSearchBar({
                     letterSpacing: -0.3,
                   }}
                 >
-                  {tag}
+                  {displayName}
                 </Text>
                 {count > 0 && (
                   <Text

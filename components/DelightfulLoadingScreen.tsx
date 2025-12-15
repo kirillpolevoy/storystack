@@ -253,71 +253,41 @@ export function DelightfulLoadingScreen({ splashHidden = false, isExiting = fals
           zIndex: 10,
         }}
       >
-        {/* Logo/Icon Container - Delightful and warm */}
+        {/* Logo/Icon Container - Matching login screen exactly */}
         <Animated.View
           style={{
-            width: 92,
-            height: 92,
-            borderRadius: 23,
+            width: 96,
+            height: 96,
+            borderRadius: 24,
             justifyContent: 'center',
             alignItems: 'center',
             marginBottom: 30,
             backgroundColor: COLORS.accent,
             shadowColor: COLORS.accent,
-            shadowOffset: { width: 0, height: 10 },
-            shadowOpacity: 0.3,
-            shadowRadius: 20,
-            elevation: 10,
+            shadowOffset: { width: 0, height: 12 },
+            shadowOpacity: 0.35,
+            shadowRadius: 24,
+            elevation: 12,
             transform: [{ scale: pulseAnim }, { translateY: floatY }],
           }}
         >
-          {/* Animated glow overlay - uses native driver */}
-          <Animated.View
-            style={{
-              position: 'absolute',
-              width: 92,
-              height: 92,
-              borderRadius: 23,
-              backgroundColor: COLORS.accentLight,
-              opacity: glowOverlayOpacity,
-            }}
-          />
-          {/* Beautiful inner highlight - Apple's signature detail */}
+          {/* Inner glow effect - matching login screen exactly */}
           <View
             style={{
               position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              height: '48%',
+              width: 96,
+              height: 96,
+              borderRadius: 24,
               backgroundColor: 'rgba(255, 255, 255, 0.2)',
-              borderTopLeftRadius: 23,
-              borderTopRightRadius: 23,
-            }}
-          />
-          {/* Subtle inner shadow for depth */}
-          <View
-            style={{
-              position: 'absolute',
-              bottom: 0,
-              left: 0,
-              right: 0,
-              height: '30%',
-              backgroundColor: 'rgba(0, 0, 0, 0.08)',
-              borderBottomLeftRadius: 23,
-              borderBottomRightRadius: 23,
             }}
           />
           <Text
             style={{
-              fontSize: 46,
-              fontWeight: '600',
+              fontSize: 48,
+              fontWeight: '800',
               color: '#ffffff',
-              letterSpacing: -1.3,
+              letterSpacing: -1.5,
               zIndex: 1,
-              textShadowColor: 'rgba(0, 0, 0, 0.1)',
-              textShadowOffset: { width: 0, height: 1 },
-              textShadowRadius: 2,
             }}
           >
             S
