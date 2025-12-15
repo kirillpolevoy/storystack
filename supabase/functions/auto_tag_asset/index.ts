@@ -411,11 +411,24 @@ async function convertToBase64(imageUrl: string): Promise<string> {
   console.log('[auto_tag_asset] Image size before base64 conversion:', originalSizeMB.toFixed(2), 'MB');
   
   // Convert to base64 efficiently
-  // Use TextDecoder with latin1 encoding to convert bytes to string efficiently
-  // This is much faster than character-by-character conversion
-  const base64 = btoa(
-    new TextDecoder('latin1').decode(imageBytes)
-  );
+  // For binary data (images), we need to convert bytes to base64 safely
+  // Use chunk-based conversion to avoid Latin1 encoding issues with binary data
+  const chunkSize = 8192; // Process 8KB at a time
+  let base64 = '';
+  
+  for (let i = 0; i < imageBytes.length; i += chunkSize) {
+    const chunk = imageBytes.slice(i, i + chunkSize);
+    // Convert chunk to string using Latin1 (which maps 1:1 with bytes 0-255)
+    // Build string safely to avoid encoding issues
+    let chunkString = '';
+    for (let j = 0; j < chunk.length; j++) {
+      // Ensure byte value is in valid Latin1 range (0-255)
+      const byte = chunk[j];
+      chunkString += String.fromCharCode(byte);
+    }
+    base64 += btoa(chunkString);
+  }
+  
   const dataUrl = `data:image/jpeg;base64,${base64}`;
   const base64SizeMB = dataUrl.length / (1024 * 1024);
   console.log('[auto_tag_asset] ✅ Converted to base64 data URL (size:', base64SizeMB.toFixed(2), 'MB)');
@@ -467,6 +480,14 @@ async function ensureSupportedImageFormat(
           // Verify A2 image is accessible and check its size
           try {
             const headResponse = await fetch(a2Url, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+            
+            // Check if A2 file actually exists
+            if (!headResponse.ok) {
+              console.error(`[auto_tag_asset] ❌ A2 file does not exist (status ${headResponse.status}) for path: ${storagePath}`);
+              console.error(`[auto_tag_asset] ❌ A2 URL: ${a2Url}`);
+              throw new Error(`A2 file not found: Storage path indicates A2 but file does not exist (status ${headResponse.status})`);
+            }
+            
             const contentType = headResponse.headers.get('content-type');
             const contentLength = headResponse.headers.get('content-length');
             const fileSizeKB = contentLength ? parseInt(contentLength) / 1024 : null;
@@ -516,8 +537,20 @@ async function ensureSupportedImageFormat(
               return await convertToBase64(a2Url);
             }
           } catch (headError) {
-            console.warn('[auto_tag_asset] HEAD request failed, converting to base64:', headError);
-            return await convertToBase64(a2Url);
+            // If HEAD fails, try to fetch the actual file to see if it exists
+            console.error(`[auto_tag_asset] ❌ HEAD request failed for A2:`, headError);
+            try {
+              const fetchResponse = await fetch(a2Url, { method: 'GET', signal: AbortSignal.timeout(5000) });
+              if (!fetchResponse.ok) {
+                throw new Error(`A2 file does not exist: ${fetchResponse.status} ${fetchResponse.statusText}`);
+              }
+              // File exists but HEAD failed, try base64 conversion
+              console.warn('[auto_tag_asset] HEAD failed but file exists, converting to base64:', headError);
+              return await convertToBase64(a2Url);
+            } catch (fetchError) {
+              console.error(`[auto_tag_asset] ❌ A2 file does not exist or is inaccessible:`, fetchError);
+              throw new Error(`A2 file not found or inaccessible: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`);
+            }
           }
         } else {
           // A1 path (old assets) - get or create A2 version as fallback
@@ -530,8 +563,25 @@ async function ensureSupportedImageFormat(
             
             // Check if we got A2 or fell back to A1
             if (a2Url === originalUrl) {
-              console.warn('[auto_tag_asset] ⚠️  getOrCreateA2Version returned A1 URL (fallback), A2 creation may have failed');
-              console.warn('[auto_tag_asset] ⚠️  This means A2 compression is NOT being used - performance will be slower');
+              console.error('[auto_tag_asset] ❌ getOrCreateA2Version returned A1 URL (fallback), A2 creation failed');
+              console.error('[auto_tag_asset] ❌ This means A2 compression is NOT being used - checking if A1 is acceptable...');
+              
+              // Check A1 size before falling back - if too large, throw error
+              try {
+                const a1HeadResponse = await fetch(originalUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+                const a1SizeMB = a1HeadResponse.headers.get('content-length') 
+                  ? parseInt(a1HeadResponse.headers.get('content-length')!) / (1024 * 1024) 
+                  : null;
+                
+                if (a1SizeMB && a1SizeMB > 20) {
+                  console.error(`[auto_tag_asset] ❌ A1 image is ${a1SizeMB.toFixed(2)} MB - too large for OpenAI (max 20MB base64)`);
+                  throw new Error(`A2 creation failed and A1 image (${a1SizeMB.toFixed(2)}MB) exceeds OpenAI limit (20MB)`);
+                }
+                console.warn(`[auto_tag_asset] ⚠️  A1 size (${a1SizeMB ? a1SizeMB.toFixed(2) : 'unknown'} MB) is acceptable, will use A1`);
+              } catch (a1CheckError) {
+                console.error('[auto_tag_asset] ❌ Failed to check A1 size:', a1CheckError);
+                throw new Error(`A2 creation failed and cannot verify A1 size: ${a1CheckError instanceof Error ? a1CheckError.message : String(a1CheckError)}`);
+              }
             } else {
               console.log(`[auto_tag_asset] ✅ Got A2 URL from getOrCreateA2Version (took ${a2Time}ms)`);
             }
@@ -1774,12 +1824,68 @@ async function processBatchResults(
   // Step 4: Update assets in database
   console.log(`[auto_tag_asset] 💾 Updating ${resultsMap.size} assets with tags...`);
   
-  for (const [assetId, tags] of resultsMap.entries()) {
+  for (const [assetId, aiTags] of resultsMap.entries()) {
+    // Fetch existing tags to preserve location (reserved tag)
+    // Retry up to 3 times with exponential backoff to handle race conditions
+    let existingTags: string[] = [];
+    let locationTag: string | undefined = undefined;
+    let fetchAttempts = 0;
+    const maxFetchAttempts = 3;
+    
+    while (fetchAttempts < maxFetchAttempts) {
+      const { data: existingAsset, error: fetchError } = await supabaseClient
+        .from('assets')
+        .select('tags')
+        .eq('id', assetId)
+        .single();
+      
+      if (fetchError) {
+        fetchAttempts++;
+        if (fetchAttempts < maxFetchAttempts) {
+          const delay = Math.pow(2, fetchAttempts) * 100; // 100ms, 200ms, 400ms
+          console.warn(`[auto_tag_asset] ⚠️  Failed to fetch existing tags for asset ${assetId} (attempt ${fetchAttempts}/${maxFetchAttempts}), retrying in ${delay}ms...`, fetchError);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        } else {
+          console.error(`[auto_tag_asset] ❌ Failed to fetch existing tags for asset ${assetId} after ${maxFetchAttempts} attempts:`, fetchError);
+          break;
+        }
+      }
+      
+      existingTags = (existingAsset?.tags || []) as string[];
+      console.log(`[auto_tag_asset] Existing tags for asset ${assetId}:`, JSON.stringify(existingTags));
+      
+      // Extract location tag (prefixed format "Location: City" or legacy "location")
+      locationTag = existingTags.find(tag => tag.startsWith('Location: '));
+      if (!locationTag) {
+        // Fallback to legacy format
+        locationTag = existingTags.find(tag => tag.toLowerCase() === 'location');
+      }
+      break; // Success, exit retry loop
+    }
+    
+    console.log(`[auto_tag_asset] Found location tag for asset ${assetId}:`, locationTag || 'none');
+    
+    // Merge AI tags with location tag (if exists)
+    const finalTags = [...aiTags];
+    if (locationTag) {
+      // Remove any location tag from AI tags (prefixed or legacy)
+      const aiTagsWithoutLocation = finalTags.filter(tag => 
+        !tag.startsWith('Location: ') && tag.toLowerCase() !== 'location'
+      );
+      finalTags.length = 0;
+      finalTags.push(...aiTagsWithoutLocation, locationTag);
+      console.log(`[auto_tag_asset] ✅ Preserving location tag "${locationTag}" for asset ${assetId}`);
+      console.log(`[auto_tag_asset] Final tags (${finalTags.length}):`, JSON.stringify(finalTags));
+    } else {
+      console.log(`[auto_tag_asset] ⚠️  No location tag found for asset ${assetId}, using AI tags only`);
+    }
+    
     const { error } = await supabaseClient
       .from('assets')
       .update({
-        tags,
-        auto_tag_status: tags.length > 0 ? 'completed' : 'failed',
+        tags: finalTags,
+        auto_tag_status: finalTags.length > 0 ? 'completed' : 'failed',
         openai_batch_id: null, // Clear batch_id after processing
       })
       .eq('id', assetId);
@@ -1787,7 +1893,7 @@ async function processBatchResults(
     if (error) {
       console.error(`[auto_tag_asset] ❌ Failed to update asset ${assetId}:`, error);
     } else {
-      console.log(`[auto_tag_asset] ✅ Updated asset ${assetId} with ${tags.length} tags`);
+      console.log(`[auto_tag_asset] ✅ Updated asset ${assetId} with ${finalTags.length} tags (${aiTags.length} AI tags${locationTag ? ` + location "${locationTag}"` : ''})`);
     }
   }
   
@@ -2737,14 +2843,70 @@ Deno.serve(async (req) => {
         }
       }
 
+      // Fetch existing tags to preserve location (reserved tag)
+      // Retry up to 3 times with exponential backoff to handle race conditions
+      let existingTags: string[] = [];
+      let locationTag: string | undefined = undefined;
+      let fetchAttempts = 0;
+      const maxFetchAttempts = 3;
+      
+      while (fetchAttempts < maxFetchAttempts) {
+        const { data: existingAsset, error: fetchError } = await supabaseClient
+          .from('assets')
+          .select('tags')
+          .eq('id', singleBody.assetId)
+          .single();
+        
+        if (fetchError) {
+          fetchAttempts++;
+          if (fetchAttempts < maxFetchAttempts) {
+            const delay = Math.pow(2, fetchAttempts) * 100; // 100ms, 200ms, 400ms
+            console.warn(`[auto_tag_asset] ⚠️  Failed to fetch existing tags for asset ${singleBody.assetId} (attempt ${fetchAttempts}/${maxFetchAttempts}), retrying in ${delay}ms...`, fetchError);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          } else {
+            console.error(`[auto_tag_asset] ❌ Failed to fetch existing tags for asset ${singleBody.assetId} after ${maxFetchAttempts} attempts:`, fetchError);
+            break;
+          }
+        }
+        
+        existingTags = (existingAsset?.tags || []) as string[];
+        console.log(`[auto_tag_asset] Existing tags for asset ${singleBody.assetId}:`, JSON.stringify(existingTags));
+        
+        // Extract location tag (prefixed format "Location: City" or legacy "location")
+        locationTag = existingTags.find(tag => tag.startsWith('Location: '));
+        if (!locationTag) {
+          // Fallback to legacy format
+          locationTag = existingTags.find(tag => tag.toLowerCase() === 'location');
+        }
+        break; // Success, exit retry loop
+      }
+      
+      console.log(`[auto_tag_asset] Found location tag for asset ${singleBody.assetId}:`, locationTag || 'none');
+      
+      // Merge AI tags with location tag (if exists)
+      const finalTags = [...tags];
+      if (locationTag) {
+        // Remove any location tag from AI tags (prefixed or legacy)
+        const aiTagsWithoutLocation = finalTags.filter(tag => 
+          !tag.startsWith('Location: ') && tag.toLowerCase() !== 'location'
+        );
+        finalTags.length = 0;
+        finalTags.push(...aiTagsWithoutLocation, locationTag);
+        console.log(`[auto_tag_asset] ✅ Preserving location tag "${locationTag}" for asset ${singleBody.assetId}`);
+        console.log(`[auto_tag_asset] Final tags (${finalTags.length}):`, JSON.stringify(finalTags));
+      } else {
+        console.log(`[auto_tag_asset] ⚠️  No location tag found for asset ${singleBody.assetId}, using AI tags only`);
+      }
+      
       // Update with tags and status (empty array if tagging failed - user can tag manually)
-      console.log('[auto_tag_asset] Updating asset with tags:', tags);
+      console.log('[auto_tag_asset] Updating asset with tags:', finalTags);
       console.log('[auto_tag_asset] Asset ID:', singleBody.assetId);
       const { data: updatedAsset, error } = await supabaseClient
         .from('assets')
         .update({ 
-          tags,
-          auto_tag_status: tags.length > 0 ? 'completed' : 'failed'
+          tags: finalTags,
+          auto_tag_status: finalTags.length > 0 ? 'completed' : 'failed'
         })
         .eq('id', singleBody.assetId)
         .select('id, tags')

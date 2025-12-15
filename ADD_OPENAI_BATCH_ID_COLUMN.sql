@@ -8,3 +8,7 @@ WHERE openai_batch_id IS NOT NULL;
 
 -- Add comment
 COMMENT ON COLUMN assets.openai_batch_id IS 'OpenAI Batch API batch_id for tracking async batch processing (20+ images)';
+
+
+
+

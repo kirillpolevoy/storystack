@@ -121,3 +121,7 @@ supabase functions logs auto_tag_asset --tail
 - Import 20+ images → Should use Batch API
 - Import < 20 images → Should use regular API
 - Wait for batch completion → Tags should appear
+
+
+
+

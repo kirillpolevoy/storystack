@@ -197,3 +197,7 @@ export function initializeBatchPolling(): void {
   // Check for pending batches and start polling
   startBatchPolling();
 }
+
+
+
+

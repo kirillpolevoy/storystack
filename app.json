@@ -2,14 +2,14 @@
   "expo": {
     "name": "StoryStack",
     "slug": "storystack",
-    "version": "1.1.4",
+    "version": "1.1.6",
     "scheme": "storystack",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#fafafa"
+      "backgroundColor": "#ffffff"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -17,15 +17,21 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.storystackstudio.app",
-      "buildNumber": "10",
+      "buildNumber": "11",
       "icon": "./assets/icon.png",
+      "splash": {
+        "image": "./assets/splash.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#ffffff"
+      },
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to import photos for tagging.",
-        "NSPhotoLibraryAddUsageDescription": "This app needs access to save photos to your library."
+        "NSPhotoLibraryAddUsageDescription": "This app needs access to save photos to your library.",
+        "NSLocationWhenInUseUsageDescription": "This app needs location access to extract location data from your photos."
       }
     },
     "android": {
-      "versionCode": 10,
+      "versionCode": 11,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -52,7 +58,8 @@
         {
           "isAccessMediaLocationEnabled": false
         }
-      ]
+      ],
+      "expo-localization"
     ],
     "experiments": {
       "tsconfigPaths": true,

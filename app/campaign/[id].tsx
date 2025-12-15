@@ -74,6 +74,7 @@ export default function CampaignDetailScreen() {
   const [retryCount, setRetryCount] = useState(0);
   const retryNotificationOpacity = useRef(new Animated.Value(0)).current;
   const retryNotificationTranslateY = useRef(new Animated.Value(-60)).current;
+  const optimisticTagUpdatesRef = useRef<Map<string, { tags: TagVocabulary[], timestamp: number }>>(new Map()); // Track optimistic tag updates
   const [newlyImportedAssetIds, setNewlyImportedAssetIds] = useState<Set<string>>(new Set());
 
   const loadCampaign = useCallback(async () => {
@@ -114,7 +115,21 @@ export default function CampaignDetailScreen() {
       const mapped = (assetData as Asset[]).map((asset) => {
         const { data } = supabase.storage.from('assets').getPublicUrl(asset.storage_path);
         const tags = Array.isArray(asset.tags) ? (asset.tags as string[]) : [];
-        return { ...asset, publicUrl: data.publicUrl, tags } as Asset;
+        
+        // Check if we have a recent optimistic update for this asset
+        // If so, use optimistic tags instead of DB tags (they're more recent)
+        const optimisticUpdate = optimisticTagUpdatesRef.current.get(asset.id);
+        const isRecentOptimisticUpdate = optimisticUpdate && (Date.now() - optimisticUpdate.timestamp < 10000);
+        const finalTags = isRecentOptimisticUpdate ? optimisticUpdate.tags : tags;
+        
+        if (isRecentOptimisticUpdate && JSON.stringify(tags.sort()) !== JSON.stringify(optimisticUpdate.tags.sort())) {
+          console.log(`[CampaignDetail] loadCampaign: Using optimistic tags for asset ${asset.id}`, {
+            dbTags: tags,
+            optimisticTags: optimisticUpdate.tags
+          });
+        }
+        
+        return { ...asset, publicUrl: data.publicUrl, tags: finalTags } as Asset;
       });
       setAssets(mapped);
       
@@ -834,6 +849,58 @@ export default function CampaignDetailScreen() {
     setSelectedTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
   };
 
+  // Sync activeAsset with assets when it updates (for background refreshes)
+  // This ensures TagModal shows the latest tags even after background refresh
+  // BUT: Don't overwrite if we just made an optimistic tag update
+  useEffect(() => {
+    if (activeAsset && isTagModalOpen) {
+      // Find updated asset in assets array
+      const updatedAsset = assets.find(a => a.id === activeAsset.id);
+      if (updatedAsset) {
+        // Check if we have a recent optimistic update for this asset
+        const optimisticUpdate = optimisticTagUpdatesRef.current.get(activeAsset.id);
+        const isRecentOptimisticUpdate = optimisticUpdate && (Date.now() - optimisticUpdate.timestamp < 10000);
+        
+        // Check if tags or other properties changed
+        const currentTagsStr = JSON.stringify(activeAsset.tags ?? []);
+        const updatedTagsStr = JSON.stringify(updatedAsset.tags ?? []);
+        const currentStatus = activeAsset.auto_tag_status;
+        const updatedStatus = updatedAsset.auto_tag_status;
+        
+        // Only sync if tags/status changed AND we don't have a recent optimistic update
+        // If we have a recent optimistic update, only sync if the DB tags match our optimistic tags
+        // (meaning the DB update completed successfully)
+        if (currentTagsStr !== updatedTagsStr || currentStatus !== updatedStatus) {
+          if (isRecentOptimisticUpdate) {
+            // Check if DB tags match our optimistic tags (update succeeded)
+            const optimisticTagsStr = JSON.stringify(optimisticUpdate.tags.sort());
+            const dbTagsStr = JSON.stringify((updatedAsset.tags ?? []).sort());
+            console.log('[CampaignDetail] Sync check - optimistic update exists', {
+              assetId: activeAsset.id,
+              optimisticTags: optimisticUpdate.tags,
+              dbTags: updatedAsset.tags,
+              match: optimisticTagsStr === dbTagsStr
+            });
+            if (optimisticTagsStr === dbTagsStr) {
+              // DB update completed successfully, safe to sync
+              console.log('[CampaignDetail] ✅ Syncing activeAsset - DB update confirmed, tags match optimistic update');
+              setActiveAsset(updatedAsset);
+              // Clear optimistic tracking since DB is now in sync
+              optimisticTagUpdatesRef.current.delete(activeAsset.id);
+            } else {
+              // DB has different tags - might be stale data, don't overwrite optimistic update
+              console.log('[CampaignDetail] ⚠️ Skipping sync - optimistic update in progress, DB tags differ. Keeping optimistic tags.');
+            }
+          } else {
+            // No recent optimistic update, safe to sync normally
+            console.log('[CampaignDetail] Syncing activeAsset with updated data from assets (no optimistic update)');
+            setActiveAsset(updatedAsset);
+          }
+        }
+      }
+    }
+  }, [assets, isTagModalOpen]); // Removed activeAsset?.id to allow updates when tags change
+
   const openTagModal = (asset: Asset) => {
     setActiveAsset(asset);
     setIsTagModalOpen(true);
@@ -906,16 +973,61 @@ export default function CampaignDetailScreen() {
     if (!activeAsset || !supabase) {
       return;
     }
-    const { error } = await supabase
+    
+    console.log(`[CampaignDetail] Updating tags for asset ${activeAsset.id}:`, newTags);
+    
+    const { data, error } = await supabase
       .from('assets')
       .update({ tags: newTags })
-      .eq('id', activeAsset.id);
+      .eq('id', activeAsset.id)
+      .select('id, tags')
+      .single();
+      
     if (error) {
-      console.error('[CampaignDetail] update tags failed', error);
+      console.error('[CampaignDetail] ❌ update tags failed', error);
       Alert.alert('Update failed', 'Unable to update tags.');
-    } else {
-      await loadCampaign();
+      return;
     }
+    
+    // Verify the update actually persisted
+    if (!data || JSON.stringify(data.tags?.sort()) !== JSON.stringify(newTags.sort())) {
+      console.error('[CampaignDetail] ❌ Database update verification failed!', {
+        expected: newTags,
+        received: data?.tags
+      });
+      Alert.alert('Update failed', 'Tags were not saved correctly. Please try again.');
+      return;
+    }
+    
+    console.log(`[CampaignDetail] ✅ Tags successfully saved to database for asset ${activeAsset.id}:`, data.tags);
+    
+    // Track this optimistic update - prevent sync useEffect from overwriting for 10 seconds
+    optimisticTagUpdatesRef.current.set(activeAsset.id, {
+      tags: newTags,
+      timestamp: Date.now()
+    });
+    
+    // Optimistically update activeAsset immediately so TagModal shows new tags
+    console.log(`[CampaignDetail] Optimistically updating activeAsset with tags:`, newTags);
+    setActiveAsset({ ...activeAsset, tags: newTags });
+    
+    // Optimistically update assets array so filteredAssets has correct tags
+    // This prevents sync useEffect from overwriting with stale data
+    setAssets((prev) => {
+      const updated = prev.map(a => a.id === activeAsset.id ? { ...a, tags: newTags } : a);
+      console.log(`[CampaignDetail] Optimistically updated assets array. Asset ${activeAsset.id} now has tags:`, 
+        updated.find(a => a.id === activeAsset.id)?.tags);
+      return updated;
+    });
+    
+    // Don't call loadCampaign() immediately - it would overwrite our optimistic update
+    // The database update has already succeeded and been verified, so tags are persisted
+    // Natural refresh cycles (navigate away/back, pull-to-refresh) will sync eventually
+    // Clean up optimistic update tracking after 10 seconds
+    setTimeout(() => {
+      optimisticTagUpdatesRef.current.delete(activeAsset.id);
+      console.log(`[CampaignDetail] Cleaned up optimistic update tracking for asset ${activeAsset.id}`);
+    }, 10000);
   };
 
   return (
@@ -1112,6 +1224,7 @@ export default function CampaignDetailScreen() {
         onAssetChange={(newAsset) => {
           setActiveAsset(newAsset);
         }}
+        autoTaggingAssets={autoTaggingAssets}
       />
 
       {/* Import Loading Overlay */}
