@@ -3,6 +3,8 @@ import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   FlatList,
   Image,
   RefreshControl,
@@ -30,8 +32,8 @@ import { getAllAvailableTags } from '@/utils/getAllAvailableTags';
 import { useAuth } from '@/contexts/AuthContext';
 import { MenuDrawer } from '@/components/MenuDrawer';
 import { BottomTabBar } from '@/components/BottomTabBar';
-import { queueAutoTag } from '@/utils/autoTagQueue';
-import { compressImageForUpload } from '@/utils/compressImage';
+import { queueAutoTag, queueBulkAutoTag } from '@/utils/autoTagQueue';
+import { compressImageForAI } from '@/utils/compressImageForAI';
 import { ImportLoadingOverlay } from '@/components/ImportLoadingOverlay';
 import { computeImageHash, checkForDuplicates } from '@/utils/duplicateDetection';
 import { DuplicateDetectionDialog } from '@/components/DuplicateDetectionDialog';
@@ -65,6 +67,7 @@ export default function LibraryScreen() {
   const [activeAssetsForTagging, setActiveAssetsForTagging] = useState<Asset[]>([]);
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
   const [autoTaggingAssets, setAutoTaggingAssets] = useState<Set<string>>(new Set());
+  const [successfullyAutoTaggedCount, setSuccessfullyAutoTaggedCount] = useState(0);
   const [allAvailableTags, setAllAvailableTags] = useState<TagVocabulary[]>([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [hasStartedAutoTagging, setHasStartedAutoTagging] = useState(false);
@@ -76,6 +79,108 @@ export default function LibraryScreen() {
     compressedImages: Array<{ uri: string; width: number; height: number; size: number }>;
     duplicateIndices: number[];
   } | null>(null);
+  const [showRetryNotification, setShowRetryNotification] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+  const [failedCount, setFailedCount] = useState(0); // Track failed count separately
+  const retryNotificationOpacity = useRef(new Animated.Value(0)).current;
+  const retryNotificationTranslateY = useRef(new Animated.Value(-60)).current;
+  const [newlyImportedAssetIds, setNewlyImportedAssetIds] = useState<Set<string>>(new Set());
+  const [recentlyTaggedAssets, setRecentlyTaggedAssets] = useState<Set<string>>(new Set()); // Track recently successfully tagged assets
+
+  // Function to check for retries when overlay is dismissed
+  const checkForRetriesOnOverlayDismiss = useCallback(async () => {
+    if (!supabase || newlyImportedAssetIds.size === 0) {
+      console.log('[Library] ⚠️  Cannot check for retries on overlay dismiss:', {
+        hasSupabase: !!supabase,
+        newlyImportedAssetIdsSize: newlyImportedAssetIds.size,
+      });
+      return;
+    }
+    
+    const importedIdsArray = Array.from(newlyImportedAssetIds);
+    console.log('[Library] 🔍 Checking for pending/failed assets when overlay dismissed...');
+    console.log('[Library] Newly imported asset IDs:', importedIdsArray);
+    
+    // Small delay to ensure database state is up to date
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Check database for the specific assets we just imported
+    const { data: importedAssets, error: importedError } = await supabase
+      .from('assets')
+      .select('id, tags, auto_tag_status')
+      .in('id', importedIdsArray);
+    
+    if (importedError) {
+      console.error('[Library] Error fetching imported assets:', importedError);
+      return;
+    }
+    
+        // Count pending assets + failed assets with no tags from THIS import session
+        const pendingCount = (importedAssets || []).filter((asset: any) => asset.auto_tag_status === 'pending').length;
+        const failedCountForNotification = (importedAssets || []).filter((asset: any) => 
+          asset.auto_tag_status === 'failed' && (!asset.tags || asset.tags.length === 0)
+        ).length;
+        const retryCount = pendingCount + failedCountForNotification;
+        
+        console.log('[Library] 📊 Retry check results (on overlay dismiss):', {
+          pendingCount,
+          failedCount: failedCountForNotification,
+          retryCount,
+          importedAssets: importedAssets?.map((a: any) => ({ 
+            id: a.id, 
+            tags: a.tags?.length || 0, 
+            status: a.auto_tag_status 
+          })),
+        });
+        
+        if (retryCount > 0) {
+          console.log(`[Library] ✅ Showing retry notification for ${retryCount} asset(s) when overlay dismissed`);
+          // Show notification directly with failed count
+          setRetryCount(retryCount);
+          setFailedCount(failedCountForNotification); // Track failed count
+          setShowRetryNotification(true);
+      retryNotificationOpacity.setValue(0);
+      retryNotificationTranslateY.setValue(-60);
+      
+      setTimeout(() => {
+        Animated.parallel([
+          Animated.spring(retryNotificationTranslateY, {
+            toValue: 0,
+            tension: 100,
+            friction: 8,
+            useNativeDriver: true,
+          }),
+          Animated.timing(retryNotificationOpacity, {
+            toValue: 1,
+            duration: 250,
+            easing: Easing.out(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]).start();
+        
+        setTimeout(() => {
+          Animated.parallel([
+            Animated.timing(retryNotificationTranslateY, {
+              toValue: -60,
+              duration: 300,
+              easing: Easing.in(Easing.ease),
+              useNativeDriver: true,
+            }),
+            Animated.timing(retryNotificationOpacity, {
+              toValue: 0,
+              duration: 300,
+              easing: Easing.in(Easing.ease),
+              useNativeDriver: true,
+            }),
+          ]).start(() => {
+            setShowRetryNotification(false);
+          });
+        }, 5000); // Show for 5 seconds instead of 3 to give users time to read
+      }, 50);
+    } else {
+      console.log('[Library] ❌ No assets need retry when overlay dismissed');
+    }
+  }, [supabase, newlyImportedAssetIds, retryNotificationOpacity, retryNotificationTranslateY]);
 
   // Hide overlay when all auto-tagging is complete
   // This effect handles BOTH success and error cases consistently
@@ -116,11 +221,14 @@ export default function LibraryScreen() {
       // If auto-tagging has started and we've seen it active, and now it's complete, hide overlay
       if (hasStartedAutoTagging && hasSeenAutoTaggingActive.current && autoTaggingAssets.size === 0) {
         console.log('[Library] All import and auto-tagging complete, hiding overlay in 1.5s');
-        const timer = setTimeout(() => {
+        const timer = setTimeout(async () => {
           setIsImporting(false);
           setImportProgress({ total: 0, imported: 0, currentPhoto: 0 });
           setHasStartedAutoTagging(false);
           hasSeenAutoTaggingActive.current = false;
+          
+          // Check for pending/failed assets when overlay is dismissed
+          await checkForRetriesOnOverlayDismiss();
         }, 1500); // Show success state for 1.5 seconds
         return () => clearTimeout(timer);
       }
@@ -142,9 +250,12 @@ export default function LibraryScreen() {
           // (maybe edgeBase is not set, no assets were inserted, or all imports failed)
           if (!hasStartedAutoTagging && autoTaggingAssets.size === 0) {
             console.log('[Library] No auto-tagging needed, hiding overlay in 1.5s');
-            hideTimer = setTimeout(() => {
+            hideTimer = setTimeout(async () => {
               setIsImporting(false);
               setImportProgress({ total: 0, imported: 0, currentPhoto: 0 });
+              
+              // Check for pending/failed assets when overlay is dismissed
+              await checkForRetriesOnOverlayDismiss();
             }, 1500);
           }
         }, 1000); // Wait 1 second for auto-tagging to start
@@ -156,7 +267,7 @@ export default function LibraryScreen() {
         };
       }
     }
-  }, [isImporting, autoTaggingAssets.size, importProgress.imported, importProgress.total, hasStartedAutoTagging]);
+  }, [isImporting, autoTaggingAssets.size, importProgress.imported, importProgress.total, hasStartedAutoTagging, checkForRetriesOnOverlayDismiss]);
 
   // Initialize default campaign and tags in parallel - wait for auth to be ready
   useEffect(() => {
@@ -261,49 +372,71 @@ export default function LibraryScreen() {
     // Load assets from the campaign, but also filter by user_id for security
     // This ensures RLS policies work correctly and we only see user's own assets
     // Only select needed columns for better performance
+    // Optimized: Batch URL generation and use efficient mapping
     const { data: assetData, error: assetError } = await supabase
       .from('assets')
-      .select('id, campaign_id, storage_path, source, tags, created_at')
+      .select('id, campaign_id, storage_path, source, tags, created_at, auto_tag_status')
       .eq('campaign_id', campaignId)
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
-      .limit(1000); // Limit to prevent loading too many at once
+      .limit(500); // Reduced initial limit for faster load, FlatList handles scrolling
 
     if (assetError) {
       console.error('[Library] asset fetch failed', assetError);
     } else if (assetData) {
+      // Batch process URLs and tags for better performance
       const mapped = (assetData as Asset[]).map((asset) => {
         const { data } = supabase?.storage.from('assets').getPublicUrl(asset.storage_path) || { data: { publicUrl: '' } };
         const tags = Array.isArray(asset.tags) ? (asset.tags as string[]) : [];
         return { ...asset, publicUrl: data.publicUrl, tags } as Asset;
       });
+      
+      // Batch state update - set assets and autoTaggingAssets together
       setAssets(mapped);
-
-      // Extract tags from loaded assets and merge with existing tags (non-blocking)
-      // This populates tags incrementally as assets load, improving perceived performance
-      const extractedTags = new Set<string>();
-      mapped.forEach((asset) => {
-        if (Array.isArray(asset.tags)) {
-          asset.tags.forEach((tag: string) => {
-            if (tag && tag.trim()) {
-              extractedTags.add(tag.trim());
-            }
-          });
-        }
+      
+      // Sync pending assets with autoTaggingAssets Set to show loading indicators
+      setAutoTaggingAssets((prev) => {
+        const next = new Set(prev);
+        mapped.forEach(asset => {
+          if (asset.auto_tag_status === 'pending') {
+            next.add(asset.id);
+          } else if (asset.auto_tag_status === 'completed' || asset.auto_tag_status === 'failed') {
+            next.delete(asset.id);
+          }
+        });
+        return next;
       });
 
-      // Merge with existing tags (update state only if new tags found)
-      if (extractedTags.size > 0) {
-        setAllAvailableTags((prevTags) => {
-          const existingTagsSet = new Set(prevTags);
-          extractedTags.forEach((tag) => existingTagsSet.add(tag));
-          const mergedTags = Array.from(existingTagsSet).sort();
-          // Only update if tags actually changed (avoid unnecessary re-renders)
-          if (mergedTags.length !== prevTags.length || mergedTags.some((tag, i) => tag !== prevTags[i])) {
-            return mergedTags;
+      // Extract tags efficiently using flatMap and Set (faster than nested loops)
+      // Defer tag extraction to avoid blocking UI update
+      if (mapped.length > 0) {
+        // Use requestIdleCallback-like approach - defer non-critical work
+        setTimeout(() => {
+          const extractedTags = new Set<string>();
+          for (const asset of mapped) {
+            if (Array.isArray(asset.tags) && asset.tags.length > 0) {
+              for (const tag of asset.tags) {
+                if (tag?.trim()) {
+                  extractedTags.add(tag.trim());
+                }
+              }
+            }
           }
-          return prevTags;
-        });
+
+          // Merge with existing tags (update state only if new tags found)
+          if (extractedTags.size > 0) {
+            setAllAvailableTags((prevTags) => {
+              const existingTagsSet = new Set(prevTags);
+              extractedTags.forEach((tag) => existingTagsSet.add(tag));
+              const mergedTags = Array.from(existingTagsSet).sort();
+              // Only update if tags actually changed (avoid unnecessary re-renders)
+              if (mergedTags.length !== prevTags.length || mergedTags.some((tag, i) => tag !== prevTags[i])) {
+                return mergedTags;
+              }
+              return prevTags;
+            });
+          }
+        }, 0); // Defer to next tick
       }
     }
 
@@ -333,6 +466,14 @@ export default function LibraryScreen() {
   }, [params.existingAssetIds]);
 
   const isAddingToStory = existingAssetIds.length > 0;
+  const isStoryMode = isAddingToStory || (params.storyName !== undefined && params.storyName !== null);
+
+  // Auto-enable selection mode when navigating from story builder (creating new or adding to existing)
+  useEffect(() => {
+    if (isStoryMode) {
+      setIsSelectionMode(true);
+    }
+  }, [isStoryMode]);
 
   // Pre-select existing assets when adding to story (but allow user to deselect)
   useEffect(() => {
@@ -405,6 +546,10 @@ export default function LibraryScreen() {
     const userId = session.user.id;
     setIsImporting(true);
     setImportProgress({ total: assetsToImport.length, imported: 0, currentPhoto: 0 });
+    setSuccessfullyAutoTaggedCount(0); // Reset count for new import session
+
+    // Track newly imported asset IDs for this import session
+    const importedIds = new Set<string>();
 
     const errors: string[] = [];
     let successCount = 0;
@@ -442,7 +587,8 @@ export default function LibraryScreen() {
 
         const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const fileName = `${uniqueSuffix}.jpg`;
-        const filePath = `users/${userId}/campaigns/${campaignId}/${fileName}`;
+        // Store directly in A2 path (ai/ folder) - A2 is now the only version
+        const filePath = `users/${userId}/campaigns/${campaignId}/ai/${fileName}`;
 
         // Upload compressed image to storage
         const { error: uploadError } = await supabase.storage.from('assets').upload(filePath, arrayBuffer, {
@@ -513,11 +659,31 @@ export default function LibraryScreen() {
             // Success without hash
             successCount++;
             setImportProgress(prev => ({ ...prev, imported: successCount }));
+            importedIds.add(retryInserted.id);
             console.log(`[Library] ✅ Successfully imported photo ${i + 1} (without hash)`);
+            
+            // Refresh assets incrementally
+            if (successCount % 3 === 0 || successCount === assetsToImport.length) {
+              await loadAssets();
+            }
             
             // Trigger auto-tagging
             const edgeBase = process.env.EXPO_PUBLIC_EDGE_BASE_URL;
             if (edgeBase && retryInserted) {
+              // Verify asset exists in database before queuing (avoid race condition)
+              await new Promise(resolve => setTimeout(resolve, 100));
+              
+              const { data: verifyAsset } = await supabase
+                .from('assets')
+                .select('id')
+                .eq('id', retryInserted.id)
+                .single();
+              
+              if (!verifyAsset) {
+                console.warn(`[Library] Asset ${retryInserted.id} not found after insert, skipping auto-tag`);
+                continue;
+              }
+              
               const publicUrl = supabase.storage.from('assets').getPublicUrl(filePath).data.publicUrl;
               const assetId = retryInserted.id;
               setAutoTaggingAssets((prev) => new Set(prev).add(assetId));
@@ -529,6 +695,7 @@ export default function LibraryScreen() {
                     next.delete(assetId);
                     return next;
                   });
+                  setSuccessfullyAutoTaggedCount((prev) => prev + 1);
                   setTimeout(async () => {
                     await loadAssets();
                   }, 1000);
@@ -560,12 +727,33 @@ export default function LibraryScreen() {
         }
 
         successCount++;
+        importedIds.add(inserted.id);
         console.log(`[Library] ✅ Successfully imported photo ${i + 1}`);
         setImportProgress(prev => ({ ...prev, imported: successCount }));
+        
+        // Refresh assets incrementally to show photos as they're imported
+        // Only refresh every 3 photos or on last photo to avoid too many updates
+        if (successCount % 3 === 0 || successCount === assetsToImport.length) {
+          await loadAssets();
+        }
 
         // Trigger auto-tagging
         const edgeBase = process.env.EXPO_PUBLIC_EDGE_BASE_URL;
         if (edgeBase && inserted) {
+          // Verify asset exists in database before queuing (avoid race condition)
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          const { data: verifyAsset } = await supabase
+            .from('assets')
+            .select('id')
+            .eq('id', inserted.id)
+            .single();
+          
+          if (!verifyAsset) {
+            console.warn(`[Library] Asset ${inserted.id} not found after insert, skipping auto-tag`);
+            continue;
+          }
+          
           const publicUrl = supabase.storage.from('assets').getPublicUrl(filePath).data.publicUrl;
           const assetId = inserted.id;
           setAutoTaggingAssets((prev) => new Set(prev).add(assetId));
@@ -577,6 +765,25 @@ export default function LibraryScreen() {
                 next.delete(assetId);
                 return next;
               });
+              setSuccessfullyAutoTaggedCount((prev) => prev + 1);
+              // Show temporary success indicator (only if not already showing)
+              setRecentlyTaggedAssets((prev) => {
+                if (prev.has(assetId)) {
+                  // Already showing, don't add again (prevents double flash)
+                  return prev;
+                }
+                const next = new Set(prev);
+                next.add(assetId);
+                return next;
+              });
+              // Remove success indicator after 5.5 seconds (slightly longer than animation to ensure cleanup)
+              setTimeout(() => {
+                setRecentlyTaggedAssets((prev) => {
+                  const next = new Set(prev);
+                  next.delete(assetId);
+                  return next;
+                });
+              }, 5500);
               setTimeout(async () => {
                 await loadAssets();
               }, 1000);
@@ -588,6 +795,18 @@ export default function LibraryScreen() {
                 return next;
               });
             },
+            onRetryStart: (retryAssetId) => {
+              // Show notification when background retry starts
+              setAutoTaggingAssets((prev) => {
+                const next = new Set(prev);
+                next.add(retryAssetId);
+                return next;
+              });
+              // Check if this asset was failed before retrying
+              const retryAsset = assets.find(a => a.id === retryAssetId);
+              const wasFailed = retryAsset?.auto_tag_status === 'failed';
+              showRetryNotificationBanner(1, wasFailed ? 1 : 0);
+            },
           });
         }
       } catch (error) {
@@ -598,8 +817,103 @@ export default function LibraryScreen() {
       }
     }
 
-    // Refresh assets to show newly imported photos
+    // Final refresh to ensure all photos are shown
     await loadAssets();
+    
+    // Store the newly imported asset IDs for retry notification
+    const importedIdsArray = Array.from(importedIds);
+    setNewlyImportedAssetIds(importedIds);
+    
+    // Overlay will auto-dismiss via onDismiss callback
+    // Don't manually set isImporting to false - let overlay handle it
+    
+    // Check for pending/failed assets from THIS import session and show notification when overlay is dismissed
+    const checkForRetries = async () => {
+      if (campaignId && supabase && importedIdsArray.length > 0) {
+        console.log('[Library] Checking for pending/failed assets from current import session...');
+        console.log('[Library] Newly imported asset IDs:', importedIdsArray);
+        
+        // Check database for the specific assets we just imported
+        const { data: importedAssets, error: importedError } = await supabase
+          .from('assets')
+          .select('id, tags, auto_tag_status')
+          .in('id', importedIdsArray);
+        
+        if (importedError) {
+          console.error('[Library] Error fetching imported assets:', importedError);
+        }
+        
+        // Count pending assets + failed assets with no tags from THIS import session
+        const pendingCount = (importedAssets || []).filter((asset: any) => asset.auto_tag_status === 'pending').length;
+        const failedCount = (importedAssets || []).filter((asset: any) => 
+          asset.auto_tag_status === 'failed' && (!asset.tags || asset.tags.length === 0)
+        ).length;
+        const retryCount = pendingCount + failedCount;
+        
+        console.log('[Library] Retry check results (current import only):', {
+          pendingCount,
+          failedCount,
+          retryCount,
+        });
+        
+        if (retryCount > 0) {
+          console.log(`[Library] ✅ Showing retry notification for ${retryCount} asset(s) from current import`);
+          // Show notification directly (inline to avoid dependency on function defined later)
+          setRetryCount(retryCount);
+          setFailedCount(failedCount); // Track failed count
+          setShowRetryNotification(true);
+          retryNotificationOpacity.setValue(0);
+          retryNotificationTranslateY.setValue(-60);
+          
+          setTimeout(() => {
+            Animated.parallel([
+              Animated.spring(retryNotificationTranslateY, {
+                toValue: 0,
+                tension: 100,
+                friction: 8,
+                useNativeDriver: true,
+              }),
+              Animated.timing(retryNotificationOpacity, {
+                toValue: 1,
+                duration: 250,
+                easing: Easing.out(Easing.ease),
+                useNativeDriver: true,
+              }),
+            ]).start();
+            
+            setTimeout(() => {
+              Animated.parallel([
+                Animated.timing(retryNotificationTranslateY, {
+                  toValue: -60,
+                  duration: 300,
+                  easing: Easing.in(Easing.ease),
+                  useNativeDriver: true,
+                }),
+                Animated.timing(retryNotificationOpacity, {
+                  toValue: 0,
+                  duration: 300,
+                  easing: Easing.in(Easing.ease),
+                  useNativeDriver: true,
+                }),
+              ]).start(() => {
+                setShowRetryNotification(false);
+              });
+            }, 3000);
+          }, 50);
+        } else {
+          console.log('[Library] ❌ No assets from current import need retry, skipping notification');
+        }
+      } else {
+        console.log('[Library] ⚠️  Cannot check for retries:', {
+          hasCampaignId: !!campaignId,
+          hasSupabase: !!supabase,
+          importedIdsArrayLength: importedIdsArray.length,
+        });
+      }
+    };
+    
+    // Delay the check to ensure overlay is dismissed and database is consistent
+    setTimeout(checkForRetries, 1500);
 
     // Show results
     if (failCount > 0 && successCount > 0) {
@@ -689,6 +1003,10 @@ export default function LibraryScreen() {
       }
       const userId = session.user.id;
 
+      // Show import overlay IMMEDIATELY when photos are selected
+      setIsImporting(true);
+      setImportProgress({ total: result.assets.length, imported: 0, currentPhoto: 0 });
+
       // Step 1: Process and compress all images in batches
       console.log('[Library] Processing and compressing images for duplicate detection...');
       const compressedImages: Array<{ uri: string; width: number; height: number; size: number }> = [];
@@ -734,22 +1052,30 @@ export default function LibraryScreen() {
               }
             }
 
-            // Compress image
+            // Compute hash from ORIGINAL image (before compression)
+            // This ensures consistent hashing even if compression parameters differ
+            // or if compression algorithm changes (A1 vs A2)
+            let hash = '';
             try {
-              const compressed = await compressImageForUpload(imageUri);
-              
-              // Compute hash for duplicate detection
-              let hash = '';
-              try {
-                hash = await computeImageHash(compressed.uri);
-              } catch (hashError) {
-                console.warn(`[Library] Failed to compute hash for photo ${index + 1}:`, hashError);
-              }
-              
+              hash = await computeImageHash(imageUri);
+              console.log(`[Library] Computed hash from original image for photo ${index + 1}`);
+            } catch (hashError) {
+              console.warn(`[Library] Failed to compute hash for photo ${index + 1}:`, hashError);
+            }
+            
+            // Compress image to A2 format (1024px long edge for AI tagging) AFTER computing hash
+            try {
+              const compressed = await compressImageForAI(imageUri);
               return { compressed, hash, index };
             } catch (compressError) {
               console.error(`[Library] Failed to compress photo ${index + 1}:`, compressError);
-              return null; // Will be filtered out
+              // If compression fails but we have a hash, we can still proceed
+              // (though upload might fail if file is too large)
+              if (!hash) {
+                return null; // Skip if both hash and compression failed
+              }
+              // Return with empty compressed object if hash exists (will fail gracefully later)
+              return { compressed: { uri: imageUri, width: 0, height: 0, size: 0 }, hash, index };
             }
           })
         );
@@ -772,6 +1098,8 @@ export default function LibraryScreen() {
 
       if (validCompressedImages.length === 0) {
         Alert.alert('Error', 'No photos could be processed for import.');
+        setIsImporting(false);
+        setImportProgress({ total: 0, imported: 0, currentPhoto: 0 });
         return;
       }
 
@@ -797,6 +1125,7 @@ export default function LibraryScreen() {
       console.error('[Library] Import failed with unexpected error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       Alert.alert('Import Failed', `An unexpected error occurred: ${errorMessage}`);
+      setIsImporting(false);
       setImportProgress(prev => {
         if (prev.imported === 0 && prev.total > 0) {
           return { ...prev, imported: prev.total };
@@ -804,7 +1133,169 @@ export default function LibraryScreen() {
         return prev;
       });
     }
-  }, [campaignId, loadAssets, session, processImport]);
+  }, [campaignId, loadAssets, session, processImport, showRetryNotificationBanner]);
+
+  // Periodic check for pending/failed assets (every 30 seconds) to retry background processing
+  // Only retry assets from the most recent import session
+  useEffect(() => {
+    if (!supabase) return;
+
+    const interval = setInterval(async () => {
+      // Only check newly imported assets, not all assets in the campaign
+      if (newlyImportedAssetIds.size === 0) {
+        return; // No recent imports to retry
+      }
+      
+      const importedIdsArray = Array.from(newlyImportedAssetIds);
+      
+      // Check for pending/failed assets from the recent import session
+      const { data: importedAssets, error: importedError } = await supabase
+        .from('assets')
+        .select('*')
+        .in('id', importedIdsArray);
+      
+      if (importedError) {
+        console.error('[Library] Error fetching imported assets for periodic retry check:', importedError);
+        return;
+      }
+      
+      if (!importedAssets || importedAssets.length === 0) {
+        return;
+      }
+      
+      // Filter assets that need retry (pending or failed with no tags)
+      const assetsNeedingRetry = importedAssets.filter((asset: any) => {
+        const hasNoTags = !asset.tags || asset.tags.length === 0;
+        const isPendingOrFailed = asset.auto_tag_status === 'pending' || asset.auto_tag_status === 'failed';
+        const notCurrentlyProcessing = !autoTaggingAssets.has(asset.id);
+        return hasNoTags && isPendingOrFailed && notCurrentlyProcessing;
+      });
+
+      // Count failed vs pending separately
+      const failedAssets = assetsNeedingRetry.filter((asset: any) => asset.auto_tag_status === 'failed');
+      const failedCount = failedAssets.length;
+
+      if (assetsNeedingRetry.length > 0) {
+        console.log(`[Library] Found ${assetsNeedingRetry.length} assets from recent import needing retry (${failedCount} failed), re-queuing...`);
+        
+        // Show notification to user with failed count
+        showRetryNotificationBanner(assetsNeedingRetry.length, failedCount);
+        
+        assetsNeedingRetry.forEach((asset: any) => {
+          const publicUrl = supabase.storage.from('assets').getPublicUrl(asset.storage_path).data.publicUrl;
+          if (publicUrl) {
+            // Mark as pending before retrying
+            supabase
+              .from('assets')
+              .update({ auto_tag_status: 'pending' })
+              .eq('id', asset.id)
+              .then(() => {
+                setAutoTaggingAssets((prev) => {
+                  const next = new Set(prev);
+                  next.add(asset.id);
+                  return next;
+                });
+                queueAutoTag(asset.id, publicUrl, {
+                  onSuccess: async (result) => {
+                    setAutoTaggingAssets((prev) => {
+                      const next = new Set(prev);
+                      next.delete(asset.id);
+                      return next;
+                    });
+                    // Show temporary success indicator (only if not already showing)
+                    setRecentlyTaggedAssets((prev) => {
+                      if (prev.has(asset.id)) {
+                        // Already showing, don't add again (prevents double flash)
+                        return prev;
+                      }
+                      const next = new Set(prev);
+                      next.add(asset.id);
+                      return next;
+                    });
+                    // Remove success indicator after 5.5 seconds (consistent with other success indicators)
+                    setTimeout(() => {
+                      setRecentlyTaggedAssets((prev) => {
+                        const next = new Set(prev);
+                        next.delete(asset.id);
+                        return next;
+                      });
+                    }, 5500);
+                    await loadAssets();
+                  },
+                  onError: async (error) => {
+                    // Reload to check current status
+                    const { data: currentAsset } = await supabase
+                      .from('assets')
+                      .select('auto_tag_status')
+                      .eq('id', asset.id)
+                      .single();
+                    
+                    if (currentAsset?.auto_tag_status !== 'pending') {
+                      setAutoTaggingAssets((prev) => {
+                        const next = new Set(prev);
+                        next.delete(asset.id);
+                        return next;
+                      });
+                    }
+                    await loadAssets();
+                  },
+                onRetryStart: (assetId) => {
+                  setAutoTaggingAssets((prev) => {
+                    const next = new Set(prev);
+                    next.add(assetId);
+                    return next;
+                  });
+                  // Check if this asset was failed before retrying
+                  const asset = assets.find(a => a.id === assetId);
+                  const wasFailed = asset?.auto_tag_status === 'failed';
+                  showRetryNotificationBanner(1, wasFailed ? 1 : 0);
+                  loadAssets();
+                },
+                });
+              });
+          }
+        });
+      }
+    }, 30000); // Check every 30 seconds
+
+    return () => clearInterval(interval);
+  }, [supabase, autoTaggingAssets, loadAssets, newlyImportedAssetIds, showRetryNotificationBanner]);
+
+  // Check for failed/pending assets when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (!supabase || newlyImportedAssetIds.size === 0) return;
+
+      const checkForRetries = async () => {
+        const importedIdsArray = Array.from(newlyImportedAssetIds);
+        
+        const { data: importedAssets, error } = await supabase
+          .from('assets')
+          .select('id, tags, auto_tag_status')
+          .in('id', importedIdsArray);
+        
+        if (error || !importedAssets) return;
+        
+        // Filter assets that need retry (pending or failed with no tags)
+        const assetsNeedingRetry = importedAssets.filter((asset: any) => {
+          const hasNoTags = !asset.tags || asset.tags.length === 0;
+          const isPendingOrFailed = asset.auto_tag_status === 'pending' || asset.auto_tag_status === 'failed';
+          const notCurrentlyProcessing = !autoTaggingAssets.has(asset.id);
+          return hasNoTags && isPendingOrFailed && notCurrentlyProcessing;
+        });
+
+        if (assetsNeedingRetry.length > 0) {
+          const failedCount = assetsNeedingRetry.filter((asset: any) => asset.auto_tag_status === 'failed').length;
+          console.log(`[Library] Screen focused: Found ${assetsNeedingRetry.length} assets needing retry (${failedCount} failed)`);
+          showRetryNotificationBanner(assetsNeedingRetry.length, failedCount);
+        }
+      };
+
+      // Small delay to avoid checking immediately on focus
+      const timeoutId = setTimeout(checkForRetries, 500);
+      return () => clearTimeout(timeoutId);
+    }, [supabase, newlyImportedAssetIds, autoTaggingAssets, showRetryNotificationBanner])
+  );
 
   // Collect all unique tags from all assets in the library
   const allLibraryTags = useMemo(() => {
@@ -819,6 +1310,9 @@ export default function LibraryScreen() {
     return Array.from(allTags).sort();
   }, [assets]);
 
+  // Special constant for "no tags" filter
+  const NO_TAGS_FILTER = '__NO_TAGS__' as TagVocabulary;
+
   // Calculate tag counts (how many photos have each tag)
   const tagCounts = useMemo(() => {
     const counts = new Map<TagVocabulary, number>();
@@ -829,13 +1323,34 @@ export default function LibraryScreen() {
         }
       });
     });
+    // Add count for "no tags" filter
+    const noTagsCount = assets.filter((asset) => !asset.tags || asset.tags.length === 0).length;
+    counts.set(NO_TAGS_FILTER, noTagsCount);
     return counts;
   }, [assets]);
 
   // Filter assets using OR logic: show photos that have ANY of the selected tags
+  // Special handling for "no tags" filter
   const filteredAssets = useMemo(() => {
     if (!selectedTags.length) return assets;
-    return assets.filter((asset) => selectedTags.some((tag) => asset.tags.includes(tag)));
+    
+    const hasNoTagsFilter = selectedTags.includes(NO_TAGS_FILTER);
+    const regularTags = selectedTags.filter((tag) => tag !== NO_TAGS_FILTER);
+    
+    if (hasNoTagsFilter && regularTags.length === 0) {
+      // Only "no tags" filter selected
+      return assets.filter((asset) => !asset.tags || asset.tags.length === 0);
+    } else if (hasNoTagsFilter && regularTags.length > 0) {
+      // Both "no tags" and regular tags selected - show photos with no tags OR with any selected tag
+      return assets.filter((asset) => {
+        const hasNoTags = !asset.tags || asset.tags.length === 0;
+        const hasSelectedTag = regularTags.some((tag) => asset.tags.includes(tag));
+        return hasNoTags || hasSelectedTag;
+      });
+    } else {
+      // Only regular tags selected
+      return assets.filter((asset) => regularTags.some((tag) => asset.tags.includes(tag)));
+    }
   }, [assets, selectedTags]);
 
   const toggleTagFilter = (tag: TagVocabulary) => {
@@ -884,6 +1399,13 @@ export default function LibraryScreen() {
   const handleCancelSelection = () => {
     // Smooth exit with haptic feedback
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    
+    // If we're in story selection mode, navigate back to story builder
+    if (isStoryMode) {
+      router.back();
+      return;
+    }
+    
     // Clear selection and exit mode simultaneously
     setSelectedAssets([]);
     setIsSelectionMode(false);
@@ -914,7 +1436,34 @@ export default function LibraryScreen() {
     setIsTagModalOpen(false);
     setActiveAsset(null);
     setActiveAssetsForTagging([]);
+    
+    // Refresh assets in background (don't block UI)
+    // This ensures manual auto-tagging triggered in TagModal is visible
+    loadAssets().catch((error) => {
+      console.error('[Library] Failed to refresh assets after modal close:', error);
+    });
   };
+
+  // Callback for manual retagging success - show green checkmark
+  const handleManualAutoTagSuccess = useCallback((assetId: string) => {
+    setRecentlyTaggedAssets((prev) => {
+      if (prev.has(assetId)) {
+        // Already showing, don't add again (prevents double flash)
+        return prev;
+      }
+      const next = new Set(prev);
+      next.add(assetId);
+      return next;
+    });
+    // Remove success indicator after 5.5 seconds
+    setTimeout(() => {
+      setRecentlyTaggedAssets((prev) => {
+        const next = new Set(prev);
+        next.delete(assetId);
+        return next;
+      });
+    }, 5500);
+  }, []);
 
   const updateTags = async (newTags: TagVocabulary[]) => {
     if (!activeAssetsForTagging.length || !supabase) {
@@ -935,7 +1484,10 @@ export default function LibraryScreen() {
           console.error('[Library] update tags failed', error);
           Alert.alert('Update failed', 'Unable to update tags.');
         } else {
-          await loadAssets();
+          // Refresh in background (don't block UI)
+          loadAssets().catch((err) => {
+            console.error('[Library] Failed to refresh after tag update:', err);
+          });
         }
       } else {
         // Multiple assets: merge tags (add new tags to existing tags)
@@ -972,7 +1524,10 @@ export default function LibraryScreen() {
         } else {
           // Clear selection after bulk update
           setSelectedAssets([]);
-          await loadAssets();
+          // Refresh in background (don't block UI)
+          loadAssets().catch((err) => {
+            console.error('[Library] Failed to refresh after bulk tag update:', err);
+          });
         }
       }
     } catch (error) {
@@ -1112,8 +1667,430 @@ export default function LibraryScreen() {
     });
   };
 
+  const handleDoneSelection = () => {
+    if (selectedAssets.length === 0) {
+      Alert.alert('No photos selected', 'Please select at least one photo.');
+      return;
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    // Navigate back to story builder with selected assets
+    const newAssetIds = selectedAssets.map((a) => a.id).join(',');
+    router.push({
+      pathname: '/story-builder',
+      params: {
+        assetIds: newAssetIds,
+        existingAssetIds: isAddingToStory ? existingAssetIds.join(',') : undefined,
+        mode: isAddingToStory ? 'add' : 'new',
+        storyName: params.storyName,
+      },
+    });
+  };
+
+  const handleRerunAutotagging = useCallback(async () => {
+    if (selectedAssets.length === 0) {
+      Alert.alert('No photos selected', 'Please select at least one photo to rerun autotagging.');
+      return;
+    }
+
+    if (!supabase) {
+      Alert.alert('Error', 'Unable to connect to database.');
+      return;
+    }
+
+    if (!session?.user?.id) {
+      Alert.alert('Error', 'You must be logged in to rerun autotagging.');
+      return;
+    }
+
+    // Check if user has tags enabled for autotagging
+    const { data: tagConfig, error: configError } = await supabase
+      .from('tag_config')
+      .select('auto_tags')
+      .eq('user_id', session.user.id)
+      .single();
+    
+    if (configError) {
+      console.error('[Library] Failed to check tag config:', configError);
+      if (configError.code === 'PGRST116') {
+        // No row found - user hasn't set up tag config
+        Alert.alert(
+          'No Tags Configured',
+          'You need to enable at least one tag for autotagging to work. Please go to Tag Management and enable some tags.',
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert(
+          'Configuration Error',
+          'Unable to check your tag configuration. Please ensure you have tags enabled in tag management.',
+          [{ text: 'OK' }]
+        );
+      }
+      return;
+    }
+    
+    const enabledTags = tagConfig?.auto_tags || [];
+    if (!Array.isArray(enabledTags) || enabledTags.length === 0) {
+      Alert.alert(
+        'No Tags Enabled',
+        'You need to enable at least one tag for autotagging to work. Please go to Tag Management and enable some tags.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    
+    console.log(`[Library] ✅ User has ${enabledTags.length} tags enabled for autotagging:`, enabledTags);
+    console.log(`[Library] Tag config full object:`, JSON.stringify(tagConfig, null, 2));
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    // Update all selected assets to pending status and queue for autotagging
+    const assetsToRetag = selectedAssets.filter((asset) => asset.publicUrl);
+    
+    if (assetsToRetag.length === 0) {
+      Alert.alert('Error', 'Selected photos do not have valid URLs.');
+      return;
+    }
+
+    // Show loading state for all assets being retagged
+    setAutoTaggingAssets((prev) => {
+      const next = new Set(prev);
+      assetsToRetag.forEach((asset) => {
+        next.add(asset.id);
+      });
+      return next;
+    });
+
+    // Update database status and queue for autotagging
+    console.log(`[Library] 🔄 Retagging ${assetsToRetag.length} assets...`);
+    console.log(`[Library] Asset IDs:`, assetsToRetag.map(a => a.id));
+    console.log(`[Library] Asset URLs:`, assetsToRetag.map(a => a.publicUrl?.substring(0, 100)));
+    
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1755',message:'Starting bulk retagging',data:{assetsCount:assetsToRetag.length,isBulkOperation:assetsToRetag.length>=15,assetIds:assetsToRetag.map(a=>a.id)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    
+    // Update all assets to pending status first
+    const updatePromises = assetsToRetag.map(async (asset) => {
+      try {
+        const updateResult = await supabase
+          .from('assets')
+          .update({ auto_tag_status: 'pending' })
+          .eq('id', asset.id);
+        
+        if (updateResult.error) {
+          console.error(`[Library] Failed to update status for asset ${asset.id}:`, updateResult.error);
+        }
+      } catch (error) {
+        console.error(`[Library] Error updating asset ${asset.id}:`, error);
+      }
+    });
+    
+    await Promise.all(updatePromises);
+    
+    // For bulk operations (20+), use bulk queue method to send all in one Batch API call
+    if (assetsToRetag.length >= 20) {
+      console.log(`[Library] 🚀 Using BULK queue for ${assetsToRetag.length} assets (OpenAI Batch API - 50% cost savings)`);
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1775',message:'Using bulk queue method',data:{assetsCount:assetsToRetag.length,assetIds:assetsToRetag.map(a=>a.id)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      
+      queueBulkAutoTag(assetsToRetag
+        .filter(asset => asset.publicUrl)
+        .map(asset => ({
+          assetId: asset.id,
+          imageUrl: asset.publicUrl!,
+          onSuccess: async (result) => {
+            console.log(`[Library] ✅✅✅ Autotagging success for asset ${asset.id} ✅✅✅`);
+            console.log(`[Library] Tags returned:`, result.tags);
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1779',message:'onSuccess callback fired',data:{assetId:asset.id,tagsCount:result.tags?.length||0,tags:result.tags},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+            // #endregion
+            setAutoTaggingAssets((prev) => {
+              const next = new Set(prev);
+              next.delete(asset.id);
+              return next;
+            });
+            setRecentlyTaggedAssets((prev) => {
+              if (prev.has(asset.id)) {
+                return prev;
+              }
+              const next = new Set(prev);
+              next.add(asset.id);
+              return next;
+            });
+            setTimeout(() => {
+              setRecentlyTaggedAssets((prev) => {
+                const next = new Set(prev);
+                next.delete(asset.id);
+                return next;
+              });
+            }, 5500);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await loadAssets();
+            if (result.tags && result.tags.length > 0) {
+              const { data: updatedAsset } = await supabase
+                .from('assets')
+                .select('tags, auto_tag_status')
+                .eq('id', asset.id)
+                .single();
+              console.log(`[Library] Verified asset ${asset.id} tags after reload:`, updatedAsset?.tags);
+              if (!updatedAsset?.tags || updatedAsset.tags.length === 0) {
+                console.error(`[Library] ⚠️  Tags not saved for asset ${asset.id}! Expected:`, result.tags);
+              }
+            }
+          },
+          onError: async (error) => {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1820',message:'onError callback fired',data:{assetId:asset.id,errorMessage:error.message,errorType:error.constructor.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+            // #endregion
+            const { data: currentAsset } = await supabase
+              .from('assets')
+              .select('auto_tag_status')
+              .eq('id', asset.id)
+              .single();
+            
+            if (currentAsset?.auto_tag_status !== 'pending') {
+              setAutoTaggingAssets((prev) => {
+                const next = new Set(prev);
+                next.delete(asset.id);
+                return next;
+              });
+            }
+            await loadAssets();
+          },
+          onRetryStart: (assetId) => {
+            setAutoTaggingAssets((prev) => {
+              const next = new Set(prev);
+              next.add(assetId);
+              return next;
+            });
+          },
+        }))
+      );
+    } else {
+      // For smaller operations, queue individually (normal batching)
+      assetsToRetag.forEach((asset, idx) => {
+        console.log(`[Library] Processing asset ${idx + 1}/${assetsToRetag.length}: ${asset.id}`);
+        
+        // Queue for autotagging
+        if (asset.publicUrl) {
+          console.log(`[Library] 📤 Enqueuing asset ${asset.id} for autotagging...`);
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1775',message:'Enqueuing asset for autotagging',data:{assetId:asset.id,hasPublicUrl:!!asset.publicUrl,urlPreview:asset.publicUrl?.substring(0,100)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+          // #endregion
+          queueAutoTag(asset.id, asset.publicUrl, {
+            onSuccess: async (result) => {
+              console.log(`[Library] ✅✅✅ Autotagging success for asset ${asset.id} ✅✅✅`);
+              console.log(`[Library] Tags returned:`, result.tags);
+              console.log(`[Library] Tags length:`, result.tags?.length || 0);
+              // #region agent log
+              fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1779',message:'onSuccess callback fired',data:{assetId:asset.id,tagsCount:result.tags?.length||0,tags:result.tags},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+              // #endregion
+              setAutoTaggingAssets((prev) => {
+                const next = new Set(prev);
+                next.delete(asset.id);
+                return next;
+              });
+              // Show temporary success indicator
+              setRecentlyTaggedAssets((prev) => {
+                if (prev.has(asset.id)) {
+                  return prev;
+                }
+                const next = new Set(prev);
+                next.add(asset.id);
+                return next;
+              });
+              // Remove success indicator after 5.5 seconds
+              setTimeout(() => {
+                setRecentlyTaggedAssets((prev) => {
+                  const next = new Set(prev);
+                  next.delete(asset.id);
+                  return next;
+                });
+              }, 5500);
+              // Wait a bit for database update to complete before reloading
+              await new Promise(resolve => setTimeout(resolve, 500));
+              await loadAssets();
+              // Verify tags were saved
+              if (result.tags && result.tags.length > 0) {
+                const { data: updatedAsset } = await supabase
+                  .from('assets')
+                  .select('tags, auto_tag_status')
+                  .eq('id', asset.id)
+                  .single();
+                console.log(`[Library] Verified asset ${asset.id} tags after reload:`, updatedAsset?.tags);
+                if (!updatedAsset?.tags || updatedAsset.tags.length === 0) {
+                  console.error(`[Library] ⚠️  Tags not saved for asset ${asset.id}! Expected:`, result.tags);
+                }
+              }
+            },
+            onError: async (error) => {
+              // #region agent log
+              fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1820',message:'onError callback fired',data:{assetId:asset.id,errorMessage:error.message,errorType:error.constructor.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+              // #endregion
+              // Reload to check current status
+              const { data: currentAsset } = await supabase
+                .from('assets')
+                .select('auto_tag_status')
+                .eq('id', asset.id)
+                .single();
+              
+              if (currentAsset?.auto_tag_status !== 'pending') {
+                setAutoTaggingAssets((prev) => {
+                  const next = new Set(prev);
+                  next.delete(asset.id);
+                  return next;
+                });
+              }
+              await loadAssets();
+            },
+            onRetryStart: (assetId) => {
+              setAutoTaggingAssets((prev) => {
+                const next = new Set(prev);
+                next.add(assetId);
+                return next;
+              });
+            },
+          });
+        }
+      });
+    }
+    
+    // Reload assets to reflect updated statuses
+    await loadAssets();
+  }, [selectedAssets, supabase, loadAssets, session]);
+
+  // Helper function to show retry notification
+  const showRetryNotificationBanner = useCallback((count: number, failed: number = 0) => {
+    console.log(`[Library] 🎯 showRetryNotificationBanner called with count: ${count}, failed: ${failed}`);
+    
+    // Set state first
+    setRetryCount(count);
+    setFailedCount(failed); // Track failed count
+    setShowRetryNotification(true);
+    
+    console.log(`[Library] ✅ Set showRetryNotification to true, retryCount: ${count}`);
+    
+    // Reset animation values
+    retryNotificationOpacity.setValue(0);
+    retryNotificationTranslateY.setValue(-60);
+    
+    // Start animation after a tiny delay to ensure state is set
+    setTimeout(() => {
+      console.log(`[Library] 🎬 Starting notification animation...`);
+      Animated.parallel([
+        Animated.spring(retryNotificationTranslateY, {
+          toValue: 0,
+          tension: 100,
+          friction: 8,
+          useNativeDriver: true,
+        }),
+        Animated.timing(retryNotificationOpacity, {
+          toValue: 1,
+          duration: 250,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]).start((finished) => {
+        console.log(`[Library] ✅ Notification animation started, finished: ${finished}`);
+      });
+      
+      // Auto-dismiss after 5 seconds (longer to give users time to read)
+      setTimeout(() => {
+        console.log(`[Library] 🕐 Auto-dismissing notification...`);
+        Animated.parallel([
+          Animated.timing(retryNotificationTranslateY, {
+            toValue: -60,
+            duration: 300,
+            easing: Easing.in(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(retryNotificationOpacity, {
+            toValue: 0,
+            duration: 300,
+            easing: Easing.in(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]).start(() => {
+          console.log(`[Library] ✅ Notification dismissed`);
+          setShowRetryNotification(false);
+        });
+      }, 5000); // Increased from 3000 to 5000
+    }, 50); // Small delay to ensure state update is processed
+  }, [retryNotificationOpacity, retryNotificationTranslateY]);
+
   return (
     <View className="flex-1 bg-background">
+      {/* Background Retry Notification */}
+      {showRetryNotification && (
+        <Animated.View
+          style={{
+            position: 'absolute',
+            top: Math.max(insets.top, 16) + 56,
+            left: 0,
+            right: 0,
+            zIndex: 10000, // Increased z-index to ensure it's on top
+            opacity: retryNotificationOpacity,
+            transform: [{ translateY: retryNotificationTranslateY }],
+            alignItems: 'center',
+            pointerEvents: 'box-none', // Allow touches to pass through
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: 12,
+              paddingVertical: 10,
+              paddingHorizontal: 18,
+              flexDirection: 'row',
+              alignItems: 'center',
+              marginHorizontal: 20,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.1,
+              shadowRadius: 8,
+              elevation: 5,
+              borderWidth: 1,
+              borderColor: '#e5e7eb',
+            }}
+          >
+            <MaterialCommunityIcons 
+              name={failedCount > 0 ? "alert-circle" : "refresh"} 
+              size={18} 
+              color={failedCount > 0 ? "#ef4444" : "#b38f5b"} 
+              style={{ marginRight: 10 }} 
+            />
+            <View style={{ flex: 1 }}>
+              <Text
+                style={{
+                  color: failedCount > 0 ? '#dc2626' : '#111827',
+                  fontSize: 14,
+                  fontWeight: '600',
+                  letterSpacing: -0.2,
+                  marginBottom: 2,
+                }}
+              >
+                {failedCount > 0 
+                  ? `Auto-tagging failed for ${failedCount} ${failedCount === 1 ? 'photo' : 'photos'}`
+                  : 'Auto-tagging in progress'}
+              </Text>
+              <Text
+                style={{
+                  color: '#6b7280',
+                  fontSize: 12,
+                  fontWeight: '400',
+                  letterSpacing: -0.1,
+                }}
+              >
+                {failedCount > 0
+                  ? `Retrying shortly in background`
+                  : `Retrying ${retryCount} ${retryCount === 1 ? 'photo' : 'photos'} in background`}
+              </Text>
+            </View>
+          </View>
+        </Animated.View>
+      )}
+
       {/* Header - Apple-style compact with integrated selection state */}
       <View className="bg-background border-b border-gray-100">
         <LibraryHeader
@@ -1131,9 +2108,11 @@ export default function LibraryScreen() {
       <View className="bg-white px-5 py-3 border-b border-gray-100" style={{ zIndex: 1 }}>
         <TagSearchBar 
           selectedTags={selectedTags || []} 
-          onToggleTag={toggleTagFilter} 
+          onToggleTag={toggleTagFilter}
           availableTags={allAvailableTags || []}
           tagCounts={tagCounts}
+          showNoTagsOption={true}
+          noTagsLabel="No Tags"
         />
       </View>
 
@@ -1229,6 +2208,7 @@ export default function LibraryScreen() {
             refreshing={isRefreshing}
             onRefresh={handleRefresh}
             autoTaggingAssets={autoTaggingAssets}
+            recentlyTaggedAssets={recentlyTaggedAssets}
           />
         </View>
       )}
@@ -1249,7 +2229,7 @@ export default function LibraryScreen() {
           {/* Primary Action - Compact */}
           <View className="px-5 pt-3">
             <TouchableOpacity
-              onPress={handleAddToStory}
+              onPress={isStoryMode ? handleDoneSelection : handleAddToStory}
               activeOpacity={0.85}
               className="w-full rounded-xl py-3"
               style={{
@@ -1262,7 +2242,7 @@ export default function LibraryScreen() {
               }}
             >
               <Text className="text-center text-[16px] font-semibold text-white" style={{ letterSpacing: -0.2 }}>
-                Add to Story
+                {isStoryMode ? 'Done' : 'Add to Story'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -1284,6 +2264,24 @@ export default function LibraryScreen() {
               </View>
               <Text className="text-[12px] font-medium text-gray-600" style={{ letterSpacing: -0.1 }}>
                 Tags
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleRerunAutotagging}
+              activeOpacity={0.6}
+              className="flex-1 items-center py-2.5"
+            >
+              <View 
+                className="h-9 w-9 items-center justify-center rounded-full mb-1"
+                style={{
+                  backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                }}
+              >
+                <MaterialCommunityIcons name="refresh" size={18} color="#3b82f6" />
+              </View>
+              <Text className="text-[12px] font-medium text-blue-600" style={{ letterSpacing: -0.1 }}>
+                Retag
               </Text>
             </TouchableOpacity>
 
@@ -1316,6 +2314,7 @@ export default function LibraryScreen() {
         allAvailableTags={allAvailableTags}
         multipleAssets={activeAssetsForTagging}
         onDelete={handleDeleteAsset}
+        onAutoTagSuccess={handleManualAutoTagSuccess}
       />
 
 
@@ -1325,7 +2324,14 @@ export default function LibraryScreen() {
         totalPhotos={importProgress.total}
         importedCount={importProgress.imported}
         autoTaggingCount={autoTaggingAssets.size}
+        successfullyAutoTaggedCount={successfullyAutoTaggedCount}
         currentPhoto={importProgress.currentPhoto}
+        onDismiss={() => {
+          // Overlay auto-dismisses after import completes
+          setIsImporting(false);
+          // Check for retries when overlay is dismissed
+          checkForRetriesOnOverlayDismiss();
+        }}
       />
 
       {/* Menu Drawer */}
@@ -1370,6 +2376,8 @@ export default function LibraryScreen() {
           onCancel={() => {
             setShowDuplicateDialog(false);
             setPendingImportData(null);
+            setIsImporting(false);
+            setImportProgress({ total: 0, imported: 0, currentPhoto: 0 });
           }}
         />
       )}

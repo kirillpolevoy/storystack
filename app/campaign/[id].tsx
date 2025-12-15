@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   ActivityIndicator,
@@ -8,6 +8,8 @@ import {
   TouchableOpacity,
   View,
   Alert,
+  Animated,
+  Easing,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
@@ -16,7 +18,7 @@ import dayjs from 'dayjs';
 import { supabase } from '@/lib/supabase';
 import { Asset, Campaign, TagVocabulary, BASE_TAGS, BRAND_TAGS } from '@/types';
 import { queueAutoTag } from '@/utils/autoTagQueue';
-import { compressImageForUpload } from '@/utils/compressImage';
+import { compressImageForAI } from '@/utils/compressImageForAI';
 import { TagFilterBar } from '@/components/TagFilterBar';
 import { ImportLoadingOverlay } from '@/components/ImportLoadingOverlay';
 import { TagModal } from '@/components/TagModal';
@@ -56,6 +58,7 @@ export default function CampaignDetailScreen() {
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState({ total: 0, imported: 0, currentPhoto: 0 });
   const [autoTaggingAssets, setAutoTaggingAssets] = useState<Set<string>>(new Set());
+  const [successfullyAutoTaggedCount, setSuccessfullyAutoTaggedCount] = useState(0);
   const [selectedTags, setSelectedTags] = useState<TagVocabulary[]>([]);
   const [activeAsset, setActiveAsset] = useState<Asset | null>(null);
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
@@ -67,6 +70,11 @@ export default function CampaignDetailScreen() {
     compressedImages: Array<{ uri: string; width: number; height: number; size: number }>;
     duplicateIndices: number[];
   } | null>(null);
+  const [showRetryNotification, setShowRetryNotification] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+  const retryNotificationOpacity = useRef(new Animated.Value(0)).current;
+  const retryNotificationTranslateY = useRef(new Animated.Value(-60)).current;
+  const [newlyImportedAssetIds, setNewlyImportedAssetIds] = useState<Set<string>>(new Set());
 
   const loadCampaign = useCallback(async () => {
     if (!campaignId) {
@@ -102,13 +110,68 @@ export default function CampaignDetailScreen() {
 
     if (assetError) {
       console.error('[CampaignDetail] asset fetch failed', assetError);
-    } else if (assetData) {
+    } else     if (assetData) {
       const mapped = (assetData as Asset[]).map((asset) => {
         const { data } = supabase.storage.from('assets').getPublicUrl(asset.storage_path);
         const tags = Array.isArray(asset.tags) ? (asset.tags as string[]) : [];
         return { ...asset, publicUrl: data.publicUrl, tags } as Asset;
       });
       setAssets(mapped);
+      
+      // Sync pending assets with autoTaggingAssets Set and re-queue them for processing
+      setAutoTaggingAssets((prev) => {
+        const next = new Set(prev);
+        mapped.forEach(asset => {
+          if (asset.auto_tag_status === 'pending') {
+            next.add(asset.id);
+            // Re-queue pending assets for background retry
+            // Add small delay to ensure asset is fully committed before queuing
+            if (asset.publicUrl) {
+              console.log(`[CampaignDetail] Re-queuing pending asset: ${asset.id}`);
+              // Delay to avoid race conditions
+              setTimeout(() => {
+                queueAutoTag(asset.id, asset.publicUrl, {
+                onSuccess: async (result) => {
+                  setAutoTaggingAssets((prev) => {
+                    const next = new Set(prev);
+                    next.delete(asset.id);
+                    return next;
+                  });
+                  setSuccessfullyAutoTaggedCount((prev) => prev + 1);
+                  // Show temporary success indicator (if PhotoGrid is used in campaign screen)
+                  // Note: Campaign screen may not use PhotoGrid, so this is optional
+                  await loadCampaign();
+                },
+                onError: async (error) => {
+                  // Only remove from Set if it's a final failure (not a retry)
+                  const currentAsset = assets.find(a => a.id === asset.id);
+                  if (currentAsset?.auto_tag_status !== 'pending') {
+                    setAutoTaggingAssets((prev) => {
+                      const next = new Set(prev);
+                      next.delete(asset.id);
+                      return next;
+                    });
+                  }
+                  await loadCampaign();
+                },
+                onRetryStart: (assetId) => {
+                  setAutoTaggingAssets((prev) => {
+                    const next = new Set(prev);
+                    next.add(assetId);
+                    return next;
+                  });
+                  showRetryNotificationBanner(1);
+                  loadCampaign();
+                },
+              });
+              }, 200); // 200ms delay to ensure asset is committed
+            }
+          } else if (asset.auto_tag_status === 'completed' || asset.auto_tag_status === 'failed') {
+            next.delete(asset.id);
+          }
+        });
+        return next;
+      });
     }
 
     setIsLoading(false);
@@ -117,6 +180,103 @@ export default function CampaignDetailScreen() {
   useEffect(() => {
     loadCampaign();
   }, [loadCampaign]);
+
+  // Periodic check for pending/failed assets (every 30 seconds) to retry background processing
+  // Only retry assets from the most recent import session
+  useEffect(() => {
+    if (!campaignId || !supabase) return;
+
+    const interval = setInterval(async () => {
+      // Only check newly imported assets, not all assets in the campaign
+      if (newlyImportedAssetIds.size === 0) {
+        return; // No recent imports to retry
+      }
+      
+      const importedIdsArray = Array.from(newlyImportedAssetIds);
+      
+      // Check for pending/failed assets from the recent import session
+      const { data: importedAssets } = await supabase
+        .from('assets')
+        .select('*')
+        .in('id', importedIdsArray);
+      
+      if (!importedAssets || importedAssets.length === 0) {
+        return;
+      }
+      
+      // Filter assets that need retry (pending or failed with no tags)
+      const assetsNeedingRetry = importedAssets.filter((asset: any) => {
+        const hasNoTags = !asset.tags || asset.tags.length === 0;
+        const isPendingOrFailed = asset.auto_tag_status === 'pending' || asset.auto_tag_status === 'failed';
+        const notCurrentlyProcessing = !autoTaggingAssets.has(asset.id);
+        return hasNoTags && isPendingOrFailed && notCurrentlyProcessing;
+      });
+
+      if (assetsNeedingRetry.length > 0) {
+        console.log(`[CampaignDetail] Found ${assetsNeedingRetry.length} assets from recent import needing retry, re-queuing...`);
+        
+        // Show notification to user
+        showRetryNotificationBanner(assetsNeedingRetry.length);
+        
+        assetsNeedingRetry.forEach((asset: any) => {
+            const publicUrl = supabase.storage.from('assets').getPublicUrl(asset.storage_path).data.publicUrl;
+            if (publicUrl) {
+              // Mark as pending before retrying
+              supabase
+                .from('assets')
+                .update({ auto_tag_status: 'pending' })
+                .eq('id', asset.id)
+                .then(() => {
+                  setAutoTaggingAssets((prev) => {
+                    const next = new Set(prev);
+                    next.add(asset.id);
+                    return next;
+                  });
+                  queueAutoTag(asset.id, publicUrl, {
+                onSuccess: async (result) => {
+                  setAutoTaggingAssets((prev) => {
+                    const next = new Set(prev);
+                    next.delete(asset.id);
+                    return next;
+                  });
+                  setSuccessfullyAutoTaggedCount((prev) => prev + 1);
+                  await loadCampaign();
+                },
+                    onError: async (error) => {
+                      // Reload to check current status
+                      const { data: currentAsset } = await supabase
+                        .from('assets')
+                        .select('auto_tag_status')
+                        .eq('id', asset.id)
+                        .single();
+                      
+                      if (currentAsset?.auto_tag_status !== 'pending') {
+                        setAutoTaggingAssets((prev) => {
+                          const next = new Set(prev);
+                          next.delete(asset.id);
+                          return next;
+                        });
+                      }
+                      await loadCampaign();
+                    },
+                    onRetryStart: (assetId) => {
+                      setAutoTaggingAssets((prev) => {
+                        const next = new Set(prev);
+                        next.add(assetId);
+                        return next;
+                      });
+                      showRetryNotificationBanner(1);
+                      loadCampaign();
+                    },
+                  });
+                });
+            }
+          });
+        }
+    }, 30000); // Check every 30 seconds
+
+    return () => clearInterval(interval);
+  }, [campaignId, supabase, autoTaggingAssets, loadCampaign, newlyImportedAssetIds, showRetryNotificationBanner]);
 
   // Load all available tags from tag library
   useEffect(() => {
@@ -168,6 +328,7 @@ export default function CampaignDetailScreen() {
 
     setIsImporting(true);
     setImportProgress({ total: assetsToImport.length, imported: 0, currentPhoto: 0 });
+    setSuccessfullyAutoTaggedCount(0); // Reset count for new import session
 
     for (let i = 0; i < assetsToImport.length; i++) {
       // Skip duplicates if user chose to skip them
@@ -186,7 +347,8 @@ export default function CampaignDetailScreen() {
 
         const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const fileName = `${uniqueSuffix}.jpg`;
-        const filePath = `users/${userId}/campaigns/${campaignId}/${fileName}`;
+        // Store directly in A2 path (ai/ folder) - A2 is now the only version
+        const filePath = `users/${userId}/campaigns/${campaignId}/ai/${fileName}`;
 
         const { error: uploadError } = await supabase.storage.from('assets').upload(filePath, arrayBuffer, {
           contentType: 'image/jpeg',
@@ -202,6 +364,7 @@ export default function CampaignDetailScreen() {
           storage_path: filePath,
           source: 'local',
           tags: [],
+          auto_tag_status: 'pending',
         };
 
         // Add file_hash if available
@@ -227,6 +390,7 @@ export default function CampaignDetailScreen() {
                 storage_path: filePath,
                 source: 'local',
                 tags: [],
+                auto_tag_status: 'pending',
               })
               .select('*')
               .single();
@@ -236,9 +400,39 @@ export default function CampaignDetailScreen() {
             }
 
             setImportProgress(prev => ({ ...prev, imported: prev.imported + 1 }));
+            importedIds.add(retryInserted.id);
             
             const edgeBase = process.env.EXPO_PUBLIC_EDGE_BASE_URL;
             if (edgeBase && retryInserted) {
+              // Verify asset exists in database before queuing (avoid race condition)
+              // Increased delay to ensure database transaction is fully committed and replicated
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
+              // Double-check asset exists with retries
+              let verifyAsset = null;
+              for (let retry = 0; retry < 3; retry++) {
+                const { data, error } = await supabase
+                  .from('assets')
+                  .select('id')
+                  .eq('id', retryInserted.id)
+                  .single();
+                
+                if (data && !error) {
+                  verifyAsset = data;
+                  break;
+                }
+                
+                if (retry < 2) {
+                  console.log(`[CampaignDetail] Asset ${retryInserted.id} not found, retrying (${retry + 1}/3)...`);
+                  await new Promise(resolve => setTimeout(resolve, 300));
+                }
+              }
+              
+              if (!verifyAsset) {
+                console.warn(`[CampaignDetail] Asset ${retryInserted.id} not found after insert and retries, skipping auto-tag`);
+                continue;
+              }
+              
               const publicUrl = supabase.storage.from('assets').getPublicUrl(filePath).data.publicUrl;
               setAutoTaggingAssets((prev) => new Set(prev).add(retryInserted.id));
               queueAutoTag(retryInserted.id, publicUrl, {
@@ -248,14 +442,33 @@ export default function CampaignDetailScreen() {
                     next.delete(retryInserted.id);
                     return next;
                   });
+                  setSuccessfullyAutoTaggedCount((prev) => prev + 1);
                   await loadCampaign();
                 },
-                onError: (error) => {
+                onError: async (error) => {
+                  // Only remove from Set if it's a final failure (not a retry)
+                  // If status is still pending, keep it in the Set
+                  const currentAsset = assets.find(a => a.id === retryInserted.id);
+                  if (currentAsset?.auto_tag_status !== 'pending') {
+                    setAutoTaggingAssets((prev) => {
+                      const next = new Set(prev);
+                      next.delete(retryInserted.id);
+                      return next;
+                    });
+                  }
+                  // Reload to get updated status from DB
+                  await loadCampaign();
+                },
+                onRetryStart: (assetId) => {
+                  // Retry started - add to Set to show loading
                   setAutoTaggingAssets((prev) => {
                     const next = new Set(prev);
-                    next.delete(retryInserted.id);
+                    next.add(assetId);
                     return next;
                   });
+                  showRetryNotificationBanner(1);
+                  // Also reload to get updated status from DB
+                  loadCampaign();
                 },
               });
             }
@@ -265,9 +478,46 @@ export default function CampaignDetailScreen() {
         }
 
         setImportProgress(prev => ({ ...prev, imported: prev.imported + 1 }));
+        importedIds.add(inserted.id);
+        
+        // Refresh assets incrementally to show photos as they're imported
+        // Only refresh every 3 photos or on last photo to avoid too many updates
+        const currentImported = importedIds.size;
+        if (currentImported % 3 === 0) {
+          await loadCampaign();
+        }
 
         const edgeBase = process.env.EXPO_PUBLIC_EDGE_BASE_URL;
         if (edgeBase && inserted) {
+          // Verify asset exists in database before queuing (avoid race condition)
+          // Increased delay to ensure database transaction is fully committed and replicated
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
+          // Double-check asset exists with retries
+          let verifyAsset = null;
+          for (let retry = 0; retry < 3; retry++) {
+            const { data, error } = await supabase
+              .from('assets')
+              .select('id')
+              .eq('id', inserted.id)
+              .single();
+            
+            if (data && !error) {
+              verifyAsset = data;
+              break;
+            }
+            
+            if (retry < 2) {
+              console.log(`[CampaignDetail] Asset ${inserted.id} not found, retrying (${retry + 1}/3)...`);
+              await new Promise(resolve => setTimeout(resolve, 300));
+            }
+          }
+          
+          if (!verifyAsset) {
+            console.warn(`[CampaignDetail] Asset ${inserted.id} not found after insert and retries, skipping auto-tag`);
+            continue;
+          }
+          
           const publicUrl = supabase.storage.from('assets').getPublicUrl(filePath).data.publicUrl;
           setAutoTaggingAssets((prev) => new Set(prev).add(inserted.id));
           queueAutoTag(inserted.id, publicUrl, {
@@ -277,14 +527,33 @@ export default function CampaignDetailScreen() {
                 next.delete(inserted.id);
                 return next;
               });
+              setSuccessfullyAutoTaggedCount((prev) => prev + 1);
               await loadCampaign();
             },
-            onError: (error) => {
+            onError: async (error) => {
+              // Only remove from Set if it's a final failure (not a retry)
+              // If status is still pending, keep it in the Set
+              const currentAsset = assets.find(a => a.id === inserted.id);
+              if (currentAsset?.auto_tag_status !== 'pending') {
+                setAutoTaggingAssets((prev) => {
+                  const next = new Set(prev);
+                  next.delete(inserted.id);
+                  return next;
+                });
+              }
+              // Reload to get updated status from DB
+              await loadCampaign();
+            },
+            onRetryStart: (assetId) => {
+              // Retry started - add to Set to show loading
               setAutoTaggingAssets((prev) => {
                 const next = new Set(prev);
-                next.delete(inserted.id);
+                next.add(assetId);
                 return next;
               });
+              showRetryNotificationBanner(1);
+              // Also reload to get updated status from DB
+              loadCampaign();
             },
           });
         }
@@ -294,9 +563,68 @@ export default function CampaignDetailScreen() {
       }
     }
 
+    // Final refresh to ensure all photos are shown
     await loadCampaign();
-    setIsImporting(false);
-  }, [campaignId, loadCampaign, pendingImportData]);
+    
+    // Store the newly imported asset IDs for retry notification
+    setNewlyImportedAssetIds(importedIds);
+    
+    // Overlay will auto-dismiss via onDismiss callback
+    
+    // Check for pending/failed assets from THIS import session and show notification when overlay is dismissed
+    // Use a small delay to ensure database state is consistent and overlay is dismissed
+    const checkForRetries = async () => {
+      if (campaignId && supabase && importedIds.size > 0) {
+        console.log('[CampaignDetail] Checking for pending/failed assets from current import session...');
+        console.log('[CampaignDetail] Newly imported asset IDs:', Array.from(importedIds));
+        
+        // Check database for the specific assets we just imported
+        const importedIdsArray = Array.from(importedIds);
+        const { data: importedAssets, error: importedError } = await supabase
+          .from('assets')
+          .select('id, tags, auto_tag_status')
+          .in('id', importedIdsArray);
+        
+        if (importedError) {
+          console.error('[CampaignDetail] Error fetching imported assets:', importedError);
+        }
+        
+        // Count pending assets + failed assets with no tags from THIS import session
+        const pendingCount = (importedAssets || []).filter((asset: any) => asset.auto_tag_status === 'pending').length;
+        const failedCount = (importedAssets || []).filter((asset: any) => 
+          asset.auto_tag_status === 'failed' && (!asset.tags || asset.tags.length === 0)
+        ).length;
+        const retryCount = pendingCount + failedCount;
+        
+        console.log('[CampaignDetail] Retry check results (current import only):', {
+          pendingCount,
+          failedCount,
+          retryCount,
+          importedAssets: importedAssets?.map((a: any) => ({ 
+            id: a.id, 
+            tags: a.tags?.length || 0, 
+            status: a.auto_tag_status 
+          })),
+        });
+        
+        if (retryCount > 0) {
+          console.log(`[CampaignDetail] ✅ Showing retry notification for ${retryCount} asset(s) from current import`);
+          showRetryNotificationBanner(retryCount);
+        } else {
+          console.log('[CampaignDetail] ❌ No assets from current import need retry, skipping notification');
+        }
+      } else {
+        console.log('[CampaignDetail] ⚠️  Cannot check for retries:', {
+          hasCampaignId: !!campaignId,
+          hasSupabase: !!supabase,
+          importedIdsSize: importedIds.size,
+        });
+      }
+    };
+    
+    // Delay the check to ensure progress bar is dismissed and database is consistent
+    setTimeout(checkForRetries, 2000);
+  }, [campaignId, loadCampaign, pendingImportData, showRetryNotificationBanner]);
 
   const handleImport = useCallback(async () => {
     if (!campaignId) {
@@ -327,6 +655,10 @@ export default function CampaignDetailScreen() {
         return;
       }
       const userId = user.id;
+
+      // Show import overlay IMMEDIATELY when photos are selected
+      setIsImporting(true);
+      setImportProgress({ total: result.assets.length, imported: 0, currentPhoto: 0 });
 
       // Process and compress all images
       console.log('[CampaignDetail] Processing images for duplicate detection...');
@@ -366,22 +698,30 @@ export default function CampaignDetailScreen() {
           }
         }
 
-        // Compress image
+        // Compute hash from ORIGINAL image (before compression)
+        // This ensures consistent hashing even if compression parameters differ
+        // or if iOS re-encodes the image when saving to camera roll
+        let hash = '';
         try {
-          const compressed = await compressImageForUpload(imageUri);
-          compressedImages.push(compressed);
+          hash = await computeImageHash(imageUri);
+          imageHashes.push(hash);
+          console.log(`[CampaignDetail] Computed hash from original image for photo ${i + 1}`);
+        } catch (hashError) {
+          console.warn(`[CampaignDetail] Failed to compute hash for photo ${i + 1}:`, hashError);
+          imageHashes.push('');
+        }
 
-          // Compute hash
-          try {
-            const hash = await computeImageHash(compressed.uri);
-            imageHashes.push(hash);
-          } catch (hashError) {
-            console.warn(`[CampaignDetail] Failed to compute hash for photo ${i + 1}:`, hashError);
-            imageHashes.push('');
-          }
+        // Compress image to A2 format (1024px long edge for AI tagging) AFTER computing hash
+        try {
+          const compressed = await compressImageForAI(imageUri);
+          compressedImages.push(compressed);
         } catch (compressError) {
           console.error(`[CampaignDetail] Failed to compress photo ${i + 1}:`, compressError);
-          continue;
+          // If compression fails but we have a hash, we can still proceed
+          // (though upload might fail if file is too large)
+          if (!hash) {
+            continue; // Skip if both hash and compression failed
+          }
         }
       }
 
@@ -410,6 +750,49 @@ export default function CampaignDetailScreen() {
     } catch (error) {
       console.error('[CampaignDetail] import failed', error);
       Alert.alert('Import failed', 'We could not import one or more photos.');
+      
+      // Check for pending/failed assets and show notification when overlay is dismissed
+      setTimeout(async () => {
+        if (campaignId && supabase) {
+          console.log('[CampaignDetail] Checking for pending/failed assets after import error...');
+          const { data: pendingAssets, error: pendingError } = await supabase
+            .from('assets')
+            .select('id, tags, auto_tag_status')
+            .eq('campaign_id', campaignId)
+            .eq('auto_tag_status', 'pending');
+          
+          if (pendingError) {
+            console.error('[CampaignDetail] Error fetching pending assets:', pendingError);
+          }
+          
+          const { data: failedAssets, error: failedError } = await supabase
+            .from('assets')
+            .select('id, tags, auto_tag_status')
+            .eq('campaign_id', campaignId)
+            .eq('auto_tag_status', 'failed');
+          
+          if (failedError) {
+            console.error('[CampaignDetail] Error fetching failed assets:', failedError);
+          }
+          
+          // Count pending assets + failed assets with no tags
+          const pendingCount = pendingAssets?.length || 0;
+          const failedCount = (failedAssets || []).filter((asset: any) => !asset.tags || asset.tags.length === 0).length;
+          const retryCount = pendingCount + failedCount;
+          
+          console.log('[CampaignDetail] Retry check results (error path):', {
+            pendingCount,
+            failedCount,
+            retryCount,
+          });
+          
+          if (retryCount > 0) {
+            console.log(`[CampaignDetail] Showing retry notification for ${retryCount} asset(s) after overlay dismissal (error)`);
+            showRetryNotificationBanner(retryCount);
+          }
+        }
+      }, 1000); // 1 second delay to ensure database state is consistent
+      
       setIsImporting(false);
     }
   }, [campaignId, loadCampaign, processImport]);
@@ -461,6 +844,64 @@ export default function CampaignDetailScreen() {
     setActiveAsset(null);
   };
 
+  // Helper function to show retry notification
+  const showRetryNotificationBanner = useCallback((count: number) => {
+    console.log(`[CampaignDetail] 🎯 showRetryNotificationBanner called with count: ${count}`);
+    
+    // Set state first
+    setRetryCount(count);
+    setShowRetryNotification(true);
+    
+    console.log(`[CampaignDetail] ✅ Set showRetryNotification to true, retryCount: ${count}`);
+    
+    // Reset animation values
+    retryNotificationOpacity.setValue(0);
+    retryNotificationTranslateY.setValue(-60);
+    
+    // Start animation after a tiny delay to ensure state is set
+    setTimeout(() => {
+      console.log(`[CampaignDetail] 🎬 Starting notification animation...`);
+      Animated.parallel([
+        Animated.spring(retryNotificationTranslateY, {
+          toValue: 0,
+          tension: 100,
+          friction: 8,
+          useNativeDriver: true,
+        }),
+        Animated.timing(retryNotificationOpacity, {
+          toValue: 1,
+          duration: 250,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]).start((finished) => {
+        console.log(`[CampaignDetail] ✅ Notification animation started, finished: ${finished}`);
+      });
+      
+      // Auto-dismiss after 3 seconds
+      setTimeout(() => {
+        console.log(`[CampaignDetail] 🕐 Auto-dismissing notification...`);
+        Animated.parallel([
+          Animated.timing(retryNotificationTranslateY, {
+            toValue: -60,
+            duration: 300,
+            easing: Easing.in(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(retryNotificationOpacity, {
+            toValue: 0,
+            duration: 300,
+            easing: Easing.in(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]).start(() => {
+          console.log(`[CampaignDetail] ✅ Notification dismissed`);
+          setShowRetryNotification(false);
+        });
+      }, 3000);
+    }, 50); // Small delay to ensure state update is processed
+  }, [retryNotificationOpacity, retryNotificationTranslateY]);
+
   const updateTags = async (newTags: TagVocabulary[]) => {
     if (!activeAsset || !supabase) {
       return;
@@ -479,6 +920,54 @@ export default function CampaignDetailScreen() {
 
   return (
     <View className="flex-1 bg-background">
+      {/* Background Retry Notification */}
+      {showRetryNotification && (
+        <Animated.View
+          style={{
+            position: 'absolute',
+            top: Math.max(insets.top, 16) + 56,
+            left: 0,
+            right: 0,
+            zIndex: 10000, // Increased z-index to ensure it's on top
+            opacity: retryNotificationOpacity,
+            transform: [{ translateY: retryNotificationTranslateY }],
+            alignItems: 'center',
+            pointerEvents: 'box-none', // Allow touches to pass through
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: 12,
+              paddingVertical: 10,
+              paddingHorizontal: 18,
+              flexDirection: 'row',
+              alignItems: 'center',
+              marginHorizontal: 20,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.1,
+              shadowRadius: 8,
+              elevation: 5,
+              borderWidth: 1,
+              borderColor: '#e5e7eb',
+            }}
+          >
+            <ActivityIndicator size="small" color="#b38f5b" style={{ marginRight: 10 }} />
+            <Text
+              style={{
+                color: '#111827',
+                fontSize: 14,
+                fontWeight: '500',
+                letterSpacing: -0.2,
+              }}
+            >
+              Retrying auto-tagging for {retryCount} {retryCount === 1 ? 'photo' : 'photos'}...
+            </Text>
+          </View>
+        </Animated.View>
+      )}
+
       {/* Header */}
       <View
         style={{
@@ -619,6 +1108,10 @@ export default function CampaignDetailScreen() {
         onClose={closeTagModal}
         onUpdateTags={updateTags}
         allAvailableTags={allAvailableTags}
+        allAssets={filteredAssets}
+        onAssetChange={(newAsset) => {
+          setActiveAsset(newAsset);
+        }}
       />
 
       {/* Import Loading Overlay */}
@@ -627,7 +1120,12 @@ export default function CampaignDetailScreen() {
         totalPhotos={importProgress.total}
         importedCount={importProgress.imported}
         autoTaggingCount={autoTaggingAssets.size}
+        successfullyAutoTaggedCount={successfullyAutoTaggedCount}
         currentPhoto={importProgress.currentPhoto}
+        onDismiss={() => {
+          // Overlay auto-dismisses after import completes
+          setIsImporting(false);
+        }}
       />
 
       {/* Duplicate Detection Dialog */}
@@ -663,6 +1161,8 @@ export default function CampaignDetailScreen() {
           onCancel={() => {
             setShowDuplicateDialog(false);
             setPendingImportData(null);
+            setIsImporting(false);
+            setImportProgress({ total: 0, imported: 0, currentPhoto: 0 });
           }}
         />
       )}

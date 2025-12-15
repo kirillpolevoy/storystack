@@ -16,6 +16,8 @@ export type Asset = {
   tags: string[];
   created_at: string;
   publicUrl?: string;
+  auto_tag_status?: 'pending' | 'failed' | 'completed' | null;
+  openai_batch_id?: string | null; // OpenAI Batch API batch_id for async processing (20+ images)
 };
 
 export type Sequence = {
