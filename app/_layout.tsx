@@ -8,6 +8,7 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { DelightfulLoadingScreen } from '@/components/DelightfulLoadingScreen';
 import { hasCompletedOnboarding } from '@/utils/onboarding';
 import { PostHogProvider } from 'posthog-react-native';
+import { posthog } from '@/lib/posthog';
 import { initializeBatchPolling, stopBatchPolling } from '@/utils/pollBatchStatus';
 
 // Keep splash screen visible while we load
@@ -32,6 +33,12 @@ class ErrorBoundary extends Component<
 
   componentDidCatch(error: Error, errorInfo: any) {
     console.error('[ErrorBoundary] Caught error:', error, errorInfo);
+    // Capture exception with PostHog
+    try {
+      posthog.captureException(error);
+    } catch (posthogError) {
+      console.error('[ErrorBoundary] Failed to capture exception with PostHog:', posthogError);
+    }
   }
 
   render() {
@@ -387,11 +394,7 @@ function LoadingFallback() {
 
 export default function RootLayout() {
   return (
-    <PostHogProvider
-      apiKey="phc_QqDag34ZeHH7lCMnB3KFZIoPkUczd2Q3YmWK109NUVw"
-      options={{ host: 'https://us.i.posthog.com', enableSessionReplay: true }}
-      autocapture
-    >
+    <PostHogProvider client={posthog} autocapture>
       <AuthProvider>
         <RootLayoutNav />
       </AuthProvider>

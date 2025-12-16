@@ -1,6 +1,7 @@
 import { Component, ReactNode, useState, useEffect } from 'react';
 import { View, Text, AppState, AppStateStatus } from 'react-native';
 import { DelightfulLoadingScreen } from '@/components/DelightfulLoadingScreen';
+import { posthog } from '@/lib/posthog';
 
 // Delay loading ExpoRoot until native modules are definitely ready
 let ExpoRoot: any = null;
@@ -34,6 +35,12 @@ class AppErrorBoundary extends Component<
 
   componentDidCatch(error: Error, errorInfo: any) {
     console.error('[App] Error caught:', error, errorInfo);
+    // Capture exception with PostHog
+    try {
+      posthog.captureException(error);
+    } catch (posthogError) {
+      console.error('[App] Failed to capture exception with PostHog:', posthogError);
+    }
   }
 
   render() {
