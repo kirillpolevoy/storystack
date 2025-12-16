@@ -105,3 +105,4 @@ Animated.parallel([
 
 
 
+
