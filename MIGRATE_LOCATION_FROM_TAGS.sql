@@ -78,3 +78,4 @@ SELECT
   )) AS assets_with_location_in_tags,
   COUNT(*) AS total_assets
 FROM assets;
+
