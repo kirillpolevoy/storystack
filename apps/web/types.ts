@@ -1,3 +1,4 @@
+// Shared types for web app
 export type Campaign = {
   id: string;
   user_id?: string | null;
@@ -10,15 +11,22 @@ export type AssetSource = 'local' | 'imported' | 'generated';
 export type Asset = {
   id: string;
   user_id?: string;
-  campaign_id: string;
+  campaign_id?: string;
   storage_path: string;
+  storage_path_preview?: string | null;
+  storage_path_thumb?: string | null;
   source: AssetSource;
   tags: string[];
   created_at: string;
   publicUrl?: string;
+  previewUrl?: string;
+  thumbUrl?: string;
   auto_tag_status?: 'pending' | 'failed' | 'completed' | null;
-  openai_batch_id?: string | null; // OpenAI Batch API batch_id for async processing (20+ images)
-  location?: string | null; // City name where photo was taken (from EXIF or manually entered)
+  openai_batch_id?: string | null;
+  location?: string | null;
+  file_hash?: string | null;
+  date_taken?: string | null; // Date when photo was taken (from EXIF)
+  original_filename?: string | null; // Original filename from upload
   // Story membership data (from asset_story_summary view)
   story_ids?: string[];
   story_names?: string[];
@@ -56,25 +64,6 @@ export type StoryWithAssets = Story & {
   assets: Asset[];
   asset_count: number;
 };
-
-// Legacy tags (kept for backward compatibility)
-export const BASE_TAGS = ['Product', 'Queens', 'Tali', 'Quotes', 'Testimonials'] as const;
-export const BRAND_TAGS = ['Necklace', 'Earrings', 'Rings', 'Bracelets'] as const;
-
-// New tag vocabulary for StoryStack
-export const STORYSTACK_TAGS = [
-  'Product',
-  'Lifestyle',
-  'Studio',
-  'Bright',
-  'Moody',
-  'Onyx',
-  'Layered Look',
-  'Semi-Precious Stone',
-  'Choker Statement',
-  'Everyday Luxe',
-  'Necklace Stack',
-] as const;
 
 export type TagVocabulary = string;
 
