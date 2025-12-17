@@ -2108,6 +2108,21 @@ Return tags that accurately reflect what is in the image.`,
 Deno.serve(async (req) => {
   const functionStartTime = Date.now();
   
+  // CORS headers for browser requests
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  };
+  
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: corsHeaders,
+    });
+  }
+  
   // Support GET for batch polling
   if (req.method === 'GET') {
     const url = new URL(req.url);
@@ -2618,7 +2633,10 @@ Deno.serve(async (req) => {
       
       return new Response(JSON.stringify(responsePayload), {
         status: 200,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...corsHeaders,
+        },
       });
     } else {
       // Handle single request (backward compatibility)
@@ -2818,7 +2836,10 @@ Deno.serve(async (req) => {
       
       return new Response(JSON.stringify({ assetId: singleBody.assetId, tags }), {
         status: 200,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...corsHeaders,
+        },
       });
     }
   } catch (error) {
