@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+apps/web/node_modules/
+
+# Build outputs
+.next/
+dist/
+build/
+apps/web/.next/
+apps/web/dist/
+apps/web/build/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Expo/Mobile app files (not needed for web deployment)
+app/
+components/
+contexts/
+assets/
+ios/
+android/
+*.tsx
+!apps/web/**/*.tsx
+*.ts
+!apps/web/**/*.ts
+
+# Documentation
+*.md
+!apps/web/README.md
+
+# SQL files
+*.sql
+
+# Test files
+**/__tests__/
+**/*.test.*
+**/*.spec.*
+
+# Misc
+.expo/
+.expo-shared/
+coverage/
+.cache/
+
