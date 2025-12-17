@@ -37,6 +37,21 @@ export function useAvailableTags() {
         }
       })
 
+      // Also include tags from tag_config.auto_tags (even if they have 0 photos)
+      const { data: config } = await supabase
+        .from('tag_config')
+        .select('auto_tags')
+        .eq('user_id', user.id)
+        .single()
+
+      if (config?.auto_tags && Array.isArray(config.auto_tags)) {
+        config.auto_tags.forEach((tag: string) => {
+          if (tag && tag.trim()) {
+            allTags.add(tag.trim())
+          }
+        })
+      }
+
       return Array.from(allTags).sort()
     },
   })

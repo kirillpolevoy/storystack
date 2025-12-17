@@ -27,7 +27,7 @@ const getColumnCount = (width: number) => {
   return 6
 }
 
-const GAP = 16
+const GAP = 20 // Increased vertical spacing for breathing room
 const PADDING = 32
 
 export function AssetGrid({

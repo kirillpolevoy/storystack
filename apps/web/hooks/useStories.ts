@@ -18,14 +18,66 @@ export function useStories() {
         throw new Error('Not authenticated')
       }
 
+      // Fetch stories with their first asset for thumbnail
       const { data, error } = await supabase
         .from('stories')
-        .select('*')
+        .select(`
+          *,
+          story_assets(
+            order_index,
+            assets(
+              id,
+              storage_path,
+              storage_path_thumb,
+              storage_path_preview
+            )
+          )
+        `)
         .eq('user_id', user.id)
         .order('updated_at', { ascending: false })
 
       if (error) throw error
-      return data as Story[]
+
+      // Process stories to get thumbnail URL for first asset
+      const storiesWithThumbnails = (data || []).map((story: any) => {
+        // Get first asset (lowest order_index)
+        const storyAssets = story.story_assets || []
+        if (storyAssets.length === 0) {
+          return {
+            ...story,
+            thumbnailUrl: null,
+            assetCount: 0,
+          }
+        }
+
+        // Sort by order_index and get first asset
+        const sortedAssets = storyAssets
+          .filter((sa: any) => sa.assets) // Filter out null assets
+          .sort((a: any, b: any) => a.order_index - b.order_index)
+        const firstAsset = sortedAssets[0]?.assets
+
+        if (!firstAsset) {
+          return {
+            ...story,
+            thumbnailUrl: null,
+            assetCount: storyAssets.length,
+          }
+        }
+
+        // Generate thumbnail URL
+        const thumbPath = firstAsset.storage_path_thumb || firstAsset.storage_path_preview || firstAsset.storage_path
+        const thumbnailUrl = thumbPath
+          ? supabase.storage.from('assets').getPublicUrl(thumbPath).data.publicUrl
+          : null
+
+        return {
+          ...story,
+          thumbnailUrl,
+          assetCount: storyAssets.length,
+        }
+      })
+
+      return storiesWithThumbnails as (Story & { thumbnailUrl: string | null; assetCount: number })[]
     },
   })
 }
@@ -51,6 +103,42 @@ export function useCreateStory() {
           name,
           description: null,
         })
+        .select()
+        .single()
+
+      if (error) throw error
+      return data as Story
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['stories'] })
+    },
+  })
+}
+
+export function useUpdateStory() {
+  const queryClient = useQueryClient()
+  const supabase = createClient()
+
+  return useMutation({
+    mutationFn: async ({ storyId, name, description }: { storyId: string; name?: string; description?: string | null }) => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+
+      if (!user) {
+        throw new Error('Not authenticated')
+      }
+
+      const updates: { name?: string; description?: string | null; updated_at?: string } = {}
+      if (name !== undefined) updates.name = name
+      if (description !== undefined) updates.description = description
+      updates.updated_at = new Date().toISOString()
+
+      const { data, error } = await supabase
+        .from('stories')
+        .update(updates)
+        .eq('id', storyId)
+        .eq('user_id', user.id)
         .select()
         .single()
 

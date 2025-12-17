@@ -66,19 +66,19 @@ export function FilterBar({
 
   return (
     <div className="space-y-3">
-      {/* Search Input */}
+      {/* Search Input - Visually dominant */}
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 pointer-events-none" />
         <Input
           type="text"
-          placeholder="Search assets..."
+          placeholder="Search assets…"
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
-          className="pl-9 h-9 text-sm"
+          className="pl-9 pr-4 h-10 text-sm border-gray-300 bg-white focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:border-accent transition-all duration-200"
         />
       </div>
 
-      {/* Filter Controls */}
+      {/* Filter Controls - Compact pills */}
       <div className="flex items-center gap-2 flex-wrap">
         {/* Tags Filter */}
         <Popover open={tagsOpen} onOpenChange={setTagsOpen}>
@@ -86,12 +86,12 @@ export function FilterBar({
             <Button
               variant={selectedTags.length > 0 ? 'default' : 'outline'}
               size="sm"
-              className="h-8 text-xs"
+              className="h-8 px-3 text-xs font-medium rounded-md border-gray-300 transition-all duration-200 hover:shadow-sm"
             >
               <Tag className="mr-1.5 h-3.5 w-3.5" />
               Tags
               {selectedTags.length > 0 && (
-                <span className="ml-1.5 px-1.5 py-0.5 bg-white/20 rounded text-xs">
+                <span className="ml-1.5 px-1.5 py-0.5 bg-white/20 rounded text-xs font-medium">
                   {selectedTags.length}
                 </span>
               )}
@@ -131,12 +131,12 @@ export function FilterBar({
             <Button
               variant={selectedLocation ? 'default' : 'outline'}
               size="sm"
-              className="h-8 text-xs"
+              className="h-8 px-3 text-xs font-medium rounded-md border-gray-300 transition-all duration-200 hover:shadow-sm"
             >
               <MapPin className="mr-1.5 h-3.5 w-3.5" />
               Location
               {selectedLocation && (
-                <span className="ml-1.5 px-1.5 py-0.5 bg-white/20 rounded text-xs">
+                <span className="ml-1.5 px-1.5 py-0.5 bg-white/20 rounded text-xs font-medium">
                   1
                 </span>
               )}
@@ -173,18 +173,18 @@ export function FilterBar({
           </PopoverContent>
         </Popover>
 
-        {/* Date Range Filter - Simplified for now */}
+        {/* Date Range Filter */}
         <Popover open={dateOpen} onOpenChange={setDateOpen}>
           <PopoverTrigger asChild>
             <Button
               variant={dateRange.from || dateRange.to ? 'default' : 'outline'}
               size="sm"
-              className="h-8 text-xs"
+              className="h-8 px-3 text-xs font-medium rounded-md border-gray-300 transition-all duration-200 hover:shadow-sm"
             >
               <Calendar className="mr-1.5 h-3.5 w-3.5" />
               Date
               {(dateRange.from || dateRange.to) && (
-                <span className="ml-1.5 px-1.5 py-0.5 bg-white/20 rounded text-xs">
+                <span className="ml-1.5 px-1.5 py-0.5 bg-white/20 rounded text-xs font-medium">
                   1
                 </span>
               )}
@@ -248,26 +248,26 @@ export function FilterBar({
               onLocationChange(null)
               onDateRangeChange({ from: null, to: null })
             }}
-            className="h-8 text-xs text-gray-600"
+            className="h-8 px-3 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-50 transition-colors"
           >
             Clear all
           </Button>
         )}
       </div>
 
-      {/* Active Filter Chips */}
+      {/* Active Filter Chips - Polished pills */}
       {(selectedTags.length > 0 || selectedLocation || dateRange.from || dateRange.to) && (
         <div className="flex flex-wrap gap-2">
           {selectedTags.map((tag) => (
             <Badge
               key={tag}
               variant="secondary"
-              className="px-2 py-0.5 text-xs"
+              className="px-2.5 py-1 text-xs font-medium bg-gray-100 text-gray-700 border-0 rounded-full hover:bg-gray-200 transition-colors"
             >
               {tag}
               <button
                 onClick={() => handleTagToggle(tag)}
-                className="ml-1.5 hover:text-gray-900"
+                className="ml-1.5 hover:text-gray-900 transition-colors"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -276,12 +276,12 @@ export function FilterBar({
           {selectedLocation && (
             <Badge
               variant="secondary"
-              className="px-2 py-0.5 text-xs"
+              className="px-2.5 py-1 text-xs font-medium bg-gray-100 text-gray-700 border-0 rounded-full hover:bg-gray-200 transition-colors"
             >
               {selectedLocation}
               <button
                 onClick={() => onLocationChange(null)}
-                className="ml-1.5 hover:text-gray-900"
+                className="ml-1.5 hover:text-gray-900 transition-colors"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -290,12 +290,12 @@ export function FilterBar({
           {(dateRange.from || dateRange.to) && (
             <Badge
               variant="secondary"
-              className="px-2 py-0.5 text-xs"
+              className="px-2.5 py-1 text-xs font-medium bg-gray-100 text-gray-700 border-0 rounded-full hover:bg-gray-200 transition-colors"
             >
               {dateRange.from?.toLocaleDateString() || '...'} - {dateRange.to?.toLocaleDateString() || '...'}
               <button
                 onClick={() => onDateRangeChange({ from: null, to: null })}
-                className="ml-1.5 hover:text-gray-900"
+                className="ml-1.5 hover:text-gray-900 transition-colors"
               >
                 <X className="h-3 w-3" />
               </button>

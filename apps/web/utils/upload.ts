@@ -1,8 +1,11 @@
 import { createClient } from '@/lib/supabase/client'
-import { generateThumbnails } from './imageProcessing'
+import { generateThumbnails, compressImageForAI } from './imageProcessing'
 import { Asset } from '@/types'
 import exifr from 'exifr'
 import { computeImageHash } from './duplicateDetection'
+import { getDefaultCampaignId } from './getDefaultCampaign'
+// @ts-ignore - heic2any doesn't have TypeScript types
+import convert from 'heic2any'
 
 export interface UploadProgress {
   file: File
@@ -10,6 +13,50 @@ export interface UploadProgress {
   status: 'pending' | 'uploading' | 'processing' | 'success' | 'error'
   error?: string
   asset?: Asset
+}
+
+/**
+ * Convert HEIC/HEIF files to JPEG using heic2any library
+ * Matches mobile app behavior (converts unsupported formats to JPEG)
+ */
+async function convertHeicToJpeg(file: File): Promise<File> {
+  const fileName = file.name.toLowerCase()
+  const isHeic = fileName.endsWith('.heic') || 
+                 fileName.endsWith('.heif') || 
+                 file.type === 'image/heic' || 
+                 file.type === 'image/heif'
+  
+  if (!isHeic) {
+    return file // Not HEIC, return as-is
+  }
+  
+  console.log('[upload] Converting HEIC file to JPEG:', file.name)
+  
+  try {
+    // Use heic2any library for cross-browser HEIC conversion
+    const convertedBlobs = await convert({
+      blob: file,
+      toType: 'image/jpeg',
+      quality: 0.9,
+    })
+    
+    // heic2any returns an array, take the first result
+    const jpegBlob = Array.isArray(convertedBlobs) ? convertedBlobs[0] : convertedBlobs
+    
+    if (!jpegBlob || !(jpegBlob instanceof Blob)) {
+      throw new Error('HEIC conversion returned invalid result')
+    }
+    
+    // Create new File with .jpg extension
+    const jpegFileName = file.name.replace(/\.(heic|heif)$/i, '.jpg')
+    const jpegFile = new File([jpegBlob], jpegFileName, { type: 'image/jpeg' })
+    console.log('[upload] ✅ Converted HEIC to JPEG:', jpegFileName, `(${(jpegBlob.size / 1024).toFixed(0)} KB)`)
+    return jpegFile
+  } catch (error) {
+    console.error('[upload] ❌ HEIC conversion failed:', error)
+    // Throw error instead of returning original - HEIC files won't work without conversion
+    throw new Error(`Failed to convert HEIC file: ${error instanceof Error ? error.message : String(error)}. Please convert HEIC files to JPEG before uploading.`)
+  }
 }
 
 export async function uploadAsset(
@@ -28,10 +75,16 @@ export async function uploadAsset(
 
   onProgress?.(5)
 
-  // Compute file hash for duplicate detection
+  // Convert HEIC/HEIF files to JPEG before processing (matches mobile app)
+  const processedFile = await convertHeicToJpeg(file)
+  if (processedFile !== file) {
+    console.log('[upload] ✅ File converted from HEIC to JPEG')
+  }
+
+  // Compute file hash for duplicate detection (use processed file)
   let fileHash: string | null = null
   try {
-    fileHash = await computeImageHash(file)
+    fileHash = await computeImageHash(processedFile)
   } catch (error) {
     console.warn('[upload] Failed to compute file hash:', error)
     // Continue without hash - duplicate check will be skipped
@@ -39,10 +92,10 @@ export async function uploadAsset(
 
   onProgress?.(10)
 
-  // Extract EXIF date (when photo was taken)
+  // Extract EXIF date (when photo was taken) - use processed file
   let dateTaken: Date | null = null
   try {
-    const exifData = await exifr.parse(file, {
+    const exifData = await exifr.parse(processedFile, {
       pick: ['DateTimeOriginal', 'CreateDate', 'ModifyDate'],
     })
     
@@ -68,32 +121,43 @@ export async function uploadAsset(
     // Continue without date_taken - will fall back to created_at
   }
 
-  // Generate thumbnails
-  const { preview, thumb } = await generateThumbnails(file)
+  // Compress image to A2 format (1024px long edge) for AI tagging - matches mobile app
+  // Use processed file (HEIC converted to JPEG if needed)
+  console.log('[upload] Compressing image to A2 format (1024px long edge)...')
+  const a2CompressedBlob = await compressImageForAI(processedFile)
+  const a2ArrayBuffer = await a2CompressedBlob.arrayBuffer()
+  const a2SizeKB = a2ArrayBuffer.byteLength / 1024
+  const a2SizeMB = a2SizeKB / 1024
+  console.log(`[upload] ✅ A2 compression complete: ${a2SizeKB.toFixed(0)} KB (${a2SizeMB.toFixed(2)} MB)`)
+  onProgress?.(20)
+
+  // Generate thumbnails (use processed file)
+  const { preview, thumb } = await generateThumbnails(processedFile)
   onProgress?.(30)
 
   // Generate unique file paths
   // Preserve original filename for display, but use unique name for storage to avoid conflicts
   const timestamp = Date.now()
   const random = Math.random().toString(36).slice(2, 8)
-  const originalFileName = file.name
-  const fileExtension = originalFileName.split('.').pop() || 'jpg'
+  const originalFileName = file.name // Keep original filename for display
+  const fileExtension = 'jpg' // A2 is always JPEG
   const baseFileName = `${timestamp}-${random}.${fileExtension}`
 
-  const originalPath = `users/${user.id}/assets/${baseFileName}`
+  // Store A2 compressed image in ai/ folder (matches mobile app pattern)
+  const a2Path = `users/${user.id}/assets/ai/${baseFileName}`
   const previewPath = `users/${user.id}/assets/preview/${baseFileName}`
   const thumbPath = `users/${user.id}/assets/thumb/${baseFileName}`
 
-  // Upload original
-  const originalArrayBuffer = await file.arrayBuffer()
-  const { error: originalError } = await supabase.storage
+  // Upload A2 compressed image (this is what will be used for AI tagging)
+  const { error: a2Error } = await supabase.storage
     .from('assets')
-    .upload(originalPath, originalArrayBuffer, {
+    .upload(a2Path, a2ArrayBuffer, {
       contentType: 'image/jpeg',
       upsert: false,
     })
 
-  if (originalError) throw originalError
+  if (a2Error) throw a2Error
+  console.log(`[upload] ✅ Uploaded A2 compressed image to: ${a2Path}`)
   onProgress?.(50)
 
   // Upload preview
@@ -120,13 +184,21 @@ export async function uploadAsset(
   if (thumbError) throw thumbError
   onProgress?.(90)
 
+  // Get or create default campaign ID (matches mobile app behavior)
+  // This ensures web-uploaded assets appear in the mobile app
+  const campaignId = await getDefaultCampaignId(user.id)
+  if (!campaignId) {
+    console.warn('[upload] Failed to get default campaign ID, uploading without campaign_id')
+  }
+
   // Insert into database
   // Use 'local' as source to match mobile app behavior
   // The database constraint allows: 'local', 'imported', 'generated'
-  // Note: campaign_id may be nullable based on v0 requirements
+  // Set campaign_id to match mobile app's default campaign so assets appear in mobile app
   const insertData: any = {
     user_id: user.id,
-    storage_path: originalPath,
+    campaign_id: campaignId, // Set campaign_id so assets appear in mobile app
+    storage_path: a2Path, // Use A2 compressed image path (matches mobile app)
     storage_path_preview: previewPath,
     storage_path_thumb: thumbPath,
     source: 'local', // Use 'local' to match mobile app and ensure constraint compliance
@@ -150,38 +222,14 @@ export async function uploadAsset(
   if (insertError) throw insertError
   onProgress?.(95)
 
-  // Map with URLs
+  // Map with URLs - use A2 path for publicUrl (matches mobile app)
   const thumbUrl = supabase.storage.from('assets').getPublicUrl(thumbPath).data.publicUrl
   const previewUrl = supabase.storage.from('assets').getPublicUrl(previewPath).data.publicUrl
-  const publicUrl = supabase.storage.from('assets').getPublicUrl(originalPath).data.publicUrl
+  const publicUrl = supabase.storage.from('assets').getPublicUrl(a2Path).data.publicUrl // Use A2 path
 
-  // Trigger auto-tagging after successful upload (similar to mobile app)
-  // Use a small delay to ensure the database transaction is committed
-  setTimeout(async () => {
-    try {
-      // Use Supabase client's functions.invoke for proper authentication
-      const { data, error } = await supabase.functions.invoke('auto_tag_asset', {
-        body: {
-          assets: [
-            {
-              assetId: inserted.id,
-              imageUrl: publicUrl,
-            },
-          ],
-        },
-      })
-
-      if (error) {
-        console.error('[upload] Auto-tagging failed:', error)
-        // Don't throw - asset upload succeeded, tagging can retry later
-      } else {
-        console.log('[upload] Auto-tagging triggered successfully for asset:', inserted.id)
-      }
-    } catch (error) {
-      console.error('[upload] Failed to trigger auto-tagging:', error)
-      // Don't throw - asset upload succeeded, tagging can retry later
-    }
-  }, 500) // 500ms delay to ensure database transaction is committed
+  // Note: Auto-tagging is now handled in batches by the UploadZone component
+  // This prevents individual API calls for each file during large imports
+  // The UploadZone will batch all uploaded assets and trigger tagging efficiently
 
   onProgress?.(100)
 

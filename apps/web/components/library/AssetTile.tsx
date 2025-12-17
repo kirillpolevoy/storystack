@@ -40,13 +40,14 @@ export function AssetTile({
   const storyCount = asset.story_count || 0
   const storyNames = asset.story_names || []
   
-  // Check if asset is recent (within last 7 days) - based on created_at (when imported)
+  // Check if asset is recent (within last 48-72 hours) - based on created_at (when imported)
   // Use created_at, not date_taken, because "NEW" should indicate recently imported assets
+  // Reduced to 48-72 hours for more meaningful "NEW" badge
   const isRecent = (() => {
     if (!asset.created_at) return false
     const importDate = new Date(asset.created_at)
-    const daysAgo = (Date.now() - importDate.getTime()) / (1000 * 60 * 60 * 24)
-    return daysAgo <= 7
+    const hoursAgo = (Date.now() - importDate.getTime()) / (1000 * 60 * 60)
+    return hoursAgo <= 72 // 3 days max
   })()
   
   // Check if asset is currently being tagged
@@ -61,7 +62,7 @@ export function AssetTile({
 
   return (
     <div
-      className="group relative w-full h-full cursor-pointer overflow-hidden rounded-md bg-gray-50 transition-all duration-200 hover:shadow-sm"
+      className="group relative w-full h-full cursor-pointer overflow-hidden rounded-lg bg-gray-50 transition-all duration-200 hover:shadow-md hover:scale-[1.01]"
       onClick={onClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -106,20 +107,20 @@ export function AssetTile({
         </div>
       )}
       
-      {/* NEW Indicator - only show if not tagging */}
+      {/* NEW Indicator - subtle, reduced visual dominance */}
       {isRecent && !isTagging && (
-        <div className="absolute top-2 right-2 z-10 px-1.5 py-0.5 bg-accent text-white text-[10px] font-semibold rounded uppercase tracking-wide">
+        <div className="absolute top-2 right-2 z-10 px-2 py-0.5 bg-gray-700/80 text-white text-[10px] font-medium rounded-full backdrop-blur-sm">
           New
         </div>
       )}
 
-      {/* Story Badge - always visible if in stories */}
+      {/* Story Badge - subtle, neutral color */}
       {storyCount > 0 && (
         <Popover open={isStoryBadgeOpen} onOpenChange={setIsStoryBadgeOpen}>
           <PopoverTrigger asChild>
             <button
-              className={`absolute bottom-2 left-2 z-10 px-2 py-0.5 bg-black/70 text-white text-[10px] font-medium rounded backdrop-blur-sm hover:bg-black/90 transition-colors ${
-                isHovered ? 'opacity-100' : 'opacity-80'
+              className={`absolute bottom-2 left-2 z-10 px-2 py-0.5 bg-gray-600/70 text-white text-[10px] font-medium rounded-full backdrop-blur-sm hover:bg-gray-600/90 transition-all duration-200 ${
+                isHovered ? 'opacity-100' : 'opacity-70'
               }`}
               onClick={(e) => {
                 e.stopPropagation()

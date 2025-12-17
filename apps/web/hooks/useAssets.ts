@@ -197,6 +197,116 @@ export function useAssets(
       
       // 4. Date filter is applied in LibraryPage component after this hook returns
 
+      // Get total count from backend (before pagination and client-side filtering)
+      // This count reflects server-side filters: tags, location, search, and view filter
+      let totalCount = 0
+
+      try {
+        // Build count query with same filters as data query
+        let countQuery = supabase
+          .from('assets')
+          .select('id', { count: 'exact', head: true })
+          .eq('user_id', user.id)
+
+        // Apply server-side filters for count
+        if (!searchQuery && selectedFilters && selectedFilters.length > 0) {
+          if (regularTags.length > 0) {
+            countQuery = countQuery.contains('tags', regularTags)
+          } else if (hasNoTagsFilter) {
+            countQuery = countQuery.or('tags.is.null,tags.eq.[]')
+          }
+          if (locationFilters.length > 0) {
+            countQuery = countQuery.in('location', locationFilters)
+          }
+        }
+
+        // For search, apply server-side search filters
+        if (searchQuery && searchQuery.trim()) {
+          const searchTerms = searchQuery.trim().split(/\s+/).filter(term => term.length > 0)
+          if (searchTerms.length > 0) {
+            // Use OR logic: match any search term in storage_path or location
+            const searchConditions = searchTerms.map(term => 
+              `storage_path.ilike.%${term}%,location.ilike.%${term}%`
+            ).join(',')
+            countQuery = countQuery.or(searchConditions)
+          }
+        }
+
+        const { count: serverSideCount, error: countError } = await countQuery
+
+        if (countError) {
+          console.warn('[useAssets] Count query error (non-fatal):', countError)
+        }
+
+        totalCount = serverSideCount || 0
+
+        // Apply view filter count adjustment using asset_story_summary
+        if (viewFilter !== 'all') {
+          // Get all asset IDs that match the base filters (for count calculation)
+          let viewCountQuery = supabase
+            .from('assets')
+            .select('id')
+            .eq('user_id', user.id)
+
+          // Apply same server-side filters as count query
+          if (!searchQuery && selectedFilters && selectedFilters.length > 0) {
+            if (regularTags.length > 0) {
+              viewCountQuery = viewCountQuery.contains('tags', regularTags)
+            } else if (hasNoTagsFilter) {
+              viewCountQuery = viewCountQuery.or('tags.is.null,tags.eq.[]')
+            }
+            if (locationFilters.length > 0) {
+              viewCountQuery = viewCountQuery.in('location', locationFilters)
+            }
+          }
+
+          if (searchQuery && searchQuery.trim()) {
+            const searchTerms = searchQuery.trim().split(/\s+/).filter(term => term.length > 0)
+            if (searchTerms.length > 0) {
+              const searchConditions = searchTerms.map(term => 
+                `storage_path.ilike.%${term}%,location.ilike.%${term}%`
+              ).join(',')
+              viewCountQuery = viewCountQuery.or(searchConditions)
+            }
+          }
+
+          const { data: assetIdsData, error: assetIdsError } = await viewCountQuery
+
+          if (!assetIdsError && assetIdsData && assetIdsData.length > 0) {
+            const assetIds = assetIdsData.map((a: any) => a.id)
+
+            // Query asset_story_summary to filter by story membership
+            const { data: storySummaryData, error: storySummaryError } = await supabase
+              .from('asset_story_summary')
+              .select('asset_id, story_count')
+              .in('asset_id', assetIds)
+
+            if (!storySummaryError && storySummaryData) {
+              const storySummaryMap = new Map(
+                storySummaryData.map((s: any) => [s.asset_id, s.story_count || 0])
+              )
+
+              // Count assets based on view filter
+              if (viewFilter === 'in-stories') {
+                totalCount = assetIds.filter((id: string) => {
+                  const count = storySummaryMap.get(id) || 0
+                  return count > 0
+                }).length
+              } else if (viewFilter === 'not-in-stories') {
+                totalCount = assetIds.filter((id: string) => {
+                  const count = storySummaryMap.get(id) || 0
+                  return count === 0
+                }).length
+              }
+            }
+          }
+        }
+      } catch (countErr) {
+        console.warn('[useAssets] Error calculating count:', countErr)
+        // Fallback: use filtered data length as approximate count
+        totalCount = filteredData.length
+      }
+
       // Map assets with public URLs and story membership data
       const assetsWithUrls: Asset[] = filteredData.map((asset: any) => {
         const thumbUrl = asset.storage_path_thumb
@@ -232,6 +342,7 @@ export function useAssets(
         return {
           assets: assetsWithUrls,
           nextPage: filteredData.length === PAGE_SIZE ? pageParam + 1 : null,
+          totalCount: totalCount, // Backend-driven count
         }
       } catch (error) {
         console.error('[useAssets] Error:', error)

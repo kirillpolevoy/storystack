@@ -44,27 +44,54 @@ const DEFAULT_TAG_VOCABULARY = [
 // Now user-specific: gets tags for the user who owns the asset
 async function getTagVocabulary(supabaseClient: any, userId: string): Promise<string[]> {
   try {
-    console.log('[auto_tag_asset] Fetching tag_config from database for user:', userId);
+    console.log('[auto_tag_asset] 🔍 Fetching tag_config from database for user:', userId);
+    console.log('[auto_tag_asset] 🔍 Query: SELECT auto_tags FROM tag_config WHERE user_id =', userId);
+    
     const { data: config, error } = await supabaseClient
       .from('tag_config')
-      .select('auto_tags')
+      .select('auto_tags, user_id')
       .eq('user_id', userId)
       .single();
     
     if (error) {
       console.error('[auto_tag_asset] ❌ Failed to load tag config:', error);
-      console.error('[auto_tag_asset] Error code:', error.code);
-      console.error('[auto_tag_asset] Error message:', error.message);
+      console.error('[auto_tag_asset] ❌ Error code:', error.code);
+      console.error('[auto_tag_asset] ❌ Error message:', error.message);
+      console.error('[auto_tag_asset] ❌ Error details:', JSON.stringify(error, null, 2));
+      
+      // If config doesn't exist (PGRST116), try to see if there are any tag_configs for this user
+      if (error.code === 'PGRST116') {
+        console.log('[auto_tag_asset] 🔍 No tag_config found for user. Checking if any tag_configs exist...');
+        const { data: allConfigs, error: listError } = await supabaseClient
+          .from('tag_config')
+          .select('user_id, auto_tags')
+          .limit(5);
+        
+        if (!listError && allConfigs) {
+          console.log('[auto_tag_asset] 🔍 Found tag_configs for other users:', allConfigs.map((c: any) => ({
+            user_id: c.user_id,
+            auto_tags_count: Array.isArray(c.auto_tags) ? c.auto_tags.length : 'not array',
+            auto_tags: c.auto_tags
+          })));
+        }
+      }
+      
       // If config doesn't exist, return empty array (no auto-tagging)
       return [];
     }
     
-    console.log('[auto_tag_asset] Config retrieved:', config);
+    console.log('[auto_tag_asset] 📦 Config retrieved:', JSON.stringify(config, null, 2));
+    console.log('[auto_tag_asset] 📦 Config type:', typeof config);
+    console.log('[auto_tag_asset] 📦 Config.auto_tags type:', typeof config?.auto_tags);
+    console.log('[auto_tag_asset] 📦 Config.auto_tags is array?', Array.isArray(config?.auto_tags));
+    console.log('[auto_tag_asset] 📦 Config.auto_tags value:', config?.auto_tags);
     
     if (config?.auto_tags && Array.isArray(config.auto_tags)) {
       // Only return enabled tags, even if empty (user disabled all tags)
       console.log('[auto_tag_asset] ✅ Loaded auto_tags from config:', config.auto_tags);
-      console.log('[auto_tag_asset] Number of enabled tags:', config.auto_tags.length);
+      console.log('[auto_tag_asset] ✅ Number of enabled tags:', config.auto_tags.length);
+      console.log('[auto_tag_asset] ✅ Tag names:', config.auto_tags);
+      
       if (config.auto_tags.length === 0) {
         console.log('[auto_tag_asset] ⚠️  No tags enabled - auto-tagging will be skipped');
       }
@@ -73,9 +100,11 @@ async function getTagVocabulary(supabaseClient: any, userId: string): Promise<st
     
     // Config exists but auto_tags is null/undefined/empty - user has disabled all tags
     console.log('[auto_tag_asset] ⚠️  No auto_tags configured (null/undefined/empty) - auto-tagging disabled');
+    console.log('[auto_tag_asset] ⚠️  Config object:', JSON.stringify(config, null, 2));
     return [];
   } catch (error) {
     console.error('[auto_tag_asset] ❌ Exception loading tag config:', error);
+    console.error('[auto_tag_asset] ❌ Exception details:', error instanceof Error ? error.stack : String(error));
     // Return empty array instead of defaults - don't auto-tag if config can't be loaded
     return [];
   }
@@ -404,11 +433,72 @@ async function convertToBase64(imageUrl: string): Promise<string> {
   if (!imageResponse.ok) {
     throw new Error(`Failed to fetch image: ${imageResponse.status}`);
   }
+  
+  // Detect actual image MIME type from response headers or file signature
+  let mimeType = imageResponse.headers.get('content-type') || 'image/jpeg';
+  
+  // Validate MIME type - OpenAI supports: image/jpeg, image/png, image/gif, image/webp
+  const supportedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+  if (!supportedMimeTypes.some(type => mimeType.toLowerCase().includes(type.replace('image/', '')))) {
+    console.warn(`[auto_tag_asset] ⚠️  Unsupported MIME type from headers: ${mimeType}, defaulting to image/jpeg`);
+    mimeType = 'image/jpeg';
+  } else {
+    // Normalize MIME type
+    if (mimeType.includes('jpeg') || mimeType.includes('jpg')) {
+      mimeType = 'image/jpeg';
+    } else if (mimeType.includes('png')) {
+      mimeType = 'image/png';
+    } else if (mimeType.includes('gif')) {
+      mimeType = 'image/gif';
+    } else if (mimeType.includes('webp')) {
+      mimeType = 'image/webp';
+    }
+  }
+  
   const imageBuffer = await imageResponse.arrayBuffer();
   const imageBytes = new Uint8Array(imageBuffer);
   
+  // Verify image format by checking file signature (magic bytes)
+  // This is more reliable than trusting Content-Type header
+  let detectedMimeType = mimeType;
+  if (imageBytes.length >= 4) {
+    // Check magic bytes
+    const signature = Array.from(imageBytes.slice(0, 4))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('')
+      .toUpperCase();
+    
+    // JPEG: FF D8 FF
+    if (imageBytes[0] === 0xFF && imageBytes[1] === 0xD8 && imageBytes[2] === 0xFF) {
+      detectedMimeType = 'image/jpeg';
+    }
+    // PNG: 89 50 4E 47
+    else if (imageBytes[0] === 0x89 && imageBytes[1] === 0x50 && imageBytes[2] === 0x4E && imageBytes[3] === 0x47) {
+      detectedMimeType = 'image/png';
+    }
+    // GIF: 47 49 46 38
+    else if (imageBytes[0] === 0x47 && imageBytes[1] === 0x49 && imageBytes[2] === 0x46 && imageBytes[3] === 0x38) {
+      detectedMimeType = 'image/gif';
+    }
+    // WebP: Check for RIFF...WEBP (more complex, check first 12 bytes)
+    else if (imageBytes.length >= 12 && 
+             imageBytes[0] === 0x52 && imageBytes[1] === 0x49 && imageBytes[2] === 0x46 && imageBytes[3] === 0x46 &&
+             imageBytes[8] === 0x57 && imageBytes[9] === 0x45 && imageBytes[10] === 0x42 && imageBytes[11] === 0x50) {
+      detectedMimeType = 'image/webp';
+    } else {
+      console.warn(`[auto_tag_asset] ⚠️  Unknown image format signature: ${signature}, using detected MIME type: ${detectedMimeType}`);
+    }
+  }
+  
+  // Use detected MIME type (from file signature) if different from header
+  if (detectedMimeType !== mimeType) {
+    console.log(`[auto_tag_asset] 🔍 MIME type mismatch - Header: ${mimeType}, Detected: ${detectedMimeType}, using detected`);
+    mimeType = detectedMimeType;
+  }
+  
   const originalSizeMB = imageBuffer.byteLength / (1024 * 1024);
   console.log('[auto_tag_asset] Image size before base64 conversion:', originalSizeMB.toFixed(2), 'MB');
+  console.log('[auto_tag_asset] Detected image format:', mimeType);
   
   // Convert to base64 efficiently
   // For binary data (images), we need to convert bytes to base64 safely
@@ -429,7 +519,7 @@ async function convertToBase64(imageUrl: string): Promise<string> {
     base64 += btoa(chunkString);
   }
   
-  const dataUrl = `data:image/jpeg;base64,${base64}`;
+  const dataUrl = `data:${mimeType};base64,${base64}`;
   const base64SizeMB = dataUrl.length / (1024 * 1024);
   console.log('[auto_tag_asset] ✅ Converted to base64 data URL (size:', base64SizeMB.toFixed(2), 'MB)');
   
@@ -553,8 +643,10 @@ async function ensureSupportedImageFormat(
             }
           }
         } else {
-          // A1 path (old assets) - get or create A2 version as fallback
-          console.log('[auto_tag_asset] ⚠️  A1 path detected (legacy asset) - will create A2 as fallback');
+          // A1 path (web uploads store here) - get or create A2 version as fallback
+          console.log('[auto_tag_asset] ⚠️  A1 path detected (web upload or legacy asset) - will create A2 as fallback');
+          console.log('[auto_tag_asset] ⚠️  Web uploads store full-size images in A1, so we MUST compress or convert to base64');
+          
           try {
             const a2StartTime = Date.now();
             console.log('[auto_tag_asset] 🎯 Attempting to get or create A2 version from A1...');
@@ -564,23 +656,18 @@ async function ensureSupportedImageFormat(
             // Check if we got A2 or fell back to A1
             if (a2Url === originalUrl) {
               console.error('[auto_tag_asset] ❌ getOrCreateA2Version returned A1 URL (fallback), A2 creation failed');
-              console.error('[auto_tag_asset] ❌ This means A2 compression is NOT being used - checking if A1 is acceptable...');
+              console.error('[auto_tag_asset] ❌ Web uploads store uncompressed images - MUST convert to base64 to avoid OpenAI 400 errors');
               
-              // Check A1 size before falling back - if too large, throw error
+              // For web uploads (A1 path), ALWAYS convert to base64 to avoid size issues
+              // Web uploads don't compress images, so they're often too large for URL-based requests
+              console.log('[auto_tag_asset] 🔄 A2 creation failed - converting A1 to base64 for safety (web uploads are uncompressed)');
               try {
-                const a1HeadResponse = await fetch(originalUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
-                const a1SizeMB = a1HeadResponse.headers.get('content-length') 
-                  ? parseInt(a1HeadResponse.headers.get('content-length')!) / (1024 * 1024) 
-                  : null;
-                
-                if (a1SizeMB && a1SizeMB > 20) {
-                  console.error(`[auto_tag_asset] ❌ A1 image is ${a1SizeMB.toFixed(2)} MB - too large for OpenAI (max 20MB base64)`);
-                  throw new Error(`A2 creation failed and A1 image (${a1SizeMB.toFixed(2)}MB) exceeds OpenAI limit (20MB)`);
-                }
-                console.warn(`[auto_tag_asset] ⚠️  A1 size (${a1SizeMB ? a1SizeMB.toFixed(2) : 'unknown'} MB) is acceptable, will use A1`);
-              } catch (a1CheckError) {
-                console.error('[auto_tag_asset] ❌ Failed to check A1 size:', a1CheckError);
-                throw new Error(`A2 creation failed and cannot verify A1 size: ${a1CheckError instanceof Error ? a1CheckError.message : String(a1CheckError)}`);
+                const base64Result = await convertToBase64(originalUrl);
+                console.log('[auto_tag_asset] ✅ A1 converted to base64 successfully (web upload safety conversion)');
+                return base64Result;
+              } catch (base64Error) {
+                console.error('[auto_tag_asset] ❌ Base64 conversion failed:', base64Error);
+                throw new Error(`A2 creation failed and base64 conversion failed: ${base64Error instanceof Error ? base64Error.message : String(base64Error)}`);
               }
             } else {
               console.log(`[auto_tag_asset] ✅ Got A2 URL from getOrCreateA2Version (took ${a2Time}ms)`);
@@ -1196,9 +1283,13 @@ Return tags for each image in order (image 1, image 2, etc.). Each image should 
       // 400 errors often indicate a problem with a specific image (e.g., "Image size exceeds the limit")
       // If we have multiple images, try processing them individually as fallback
       const errorMessage = errorJson?.error?.message || errorText;
+      const errorCode = errorJson?.error?.code || '';
       const isImageError = errorMessage?.toLowerCase().includes('image') || 
                           errorMessage?.toLowerCase().includes('invalid_image') ||
-                          errorMessage?.includes('Image size');
+                          errorMessage?.includes('Image size') ||
+                          errorCode === 'image_parse_error' ||
+                          errorMessage?.toLowerCase().includes('unsupported image') ||
+                          errorMessage?.toLowerCase().includes('image_parse');
       
       if (isImageError && successful.length > 1) {
         console.warn(`[auto_tag_asset] ⚠️  Batch failed with image error (${response.status}), falling back to individual processing`);
@@ -1221,8 +1312,14 @@ Return tags for each image in order (image 1, image 2, etc.). Each image should 
           
           try {
             console.log(`[auto_tag_asset] 🔄 Processing image ${i + 1}/${successful.length} individually: ${successItem.assetId}`);
+            console.log(`[auto_tag_asset] Image URL: ${originalRequest.imageUrl.substring(0, 100)}...`);
+            
+            // Ensure image format is supported before processing individually
+            const supportedUrl = await ensureSupportedImageFormat(originalRequest.imageUrl, supabaseClient);
+            const updatedRequest = { ...originalRequest, imageUrl: supportedUrl };
+            
             const singleResult = await getSuggestedTagsBatch(
-              [originalRequest],
+              [updatedRequest],
               apiKey,
               tagVocabulary,
               supabaseClient
@@ -1238,6 +1335,7 @@ Return tags for each image in order (image 1, image 2, etc.). Each image should 
           } catch (individualError) {
             console.error(`[auto_tag_asset] ❌ Individual processing failed for ${successItem.assetId}:`, individualError);
             console.error(`[auto_tag_asset] Error details:`, individualError instanceof Error ? individualError.message : String(individualError));
+            console.error(`[auto_tag_asset] Error stack:`, individualError instanceof Error ? individualError.stack : 'N/A');
             // Add empty tags for this failed image, but continue processing others
             individualResults.push({ assetId: successItem.assetId, tags: [] });
           }

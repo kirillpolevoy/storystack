@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import Image from 'next/image'
 import { Asset } from '@/types'
 import { useUpdateAssetTags } from '@/hooks/useUpdateAssetTags'
@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { X, Trash2, Plus, MapPin, Sparkles, Edit2, Calendar, FileText, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { X, Trash2, Plus, MapPin, Sparkles, Edit2, Calendar, FileText, Loader2, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react'
 import dayjs from 'dayjs'
 import {
   AlertDialog,
@@ -34,6 +34,12 @@ interface AssetDetailPanelProps {
   onRetagStart?: (assetId: string) => void // Callback to notify parent when retagging starts
   retaggingAssetIds?: Set<string> // Assets currently being retagged (from parent)
   completedRetaggingAssetIds?: Set<string> // Assets that just completed retagging (from parent)
+  onNavigatePrevious?: () => void // Navigate to previous asset
+  onNavigateNext?: () => void // Navigate to next asset
+  canNavigatePrevious?: boolean // Whether previous navigation is available
+  canNavigateNext?: boolean // Whether next navigation is available
+  currentIndex?: number // Current asset index (0-based)
+  totalCount?: number // Total number of assets
 }
 
 export function AssetDetailPanel({ 
@@ -43,6 +49,12 @@ export function AssetDetailPanel({
   onRetagStart,
   retaggingAssetIds = new Set(),
   completedRetaggingAssetIds = new Set(),
+  onNavigatePrevious,
+  onNavigateNext,
+  canNavigatePrevious = false,
+  canNavigateNext = false,
+  currentIndex,
+  totalCount,
 }: AssetDetailPanelProps) {
   const [tags, setTags] = useState<string[]>(asset.tags || [])
   const [newTag, setNewTag] = useState('')
@@ -52,8 +64,18 @@ export function AssetDetailPanel({
   const [isMobile, setIsMobile] = useState(false)
   const [isRetagging, setIsRetagging] = useState(false)
   const [retagStatus, setRetagStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle')
+  const [showTagSuggestions, setShowTagSuggestions] = useState(false)
+  const [localAvailableTags, setLocalAvailableTags] = useState<string[]>([])
+  const lastAssetIdRef = useRef<string | null>(null)
 
   const { data: availableTags } = useAvailableTags()
+  
+  // Merge server tags with locally added tags
+  const allAvailableTags = useMemo(() => {
+    const serverTags = availableTags || []
+    const merged = [...new Set([...serverTags, ...localAvailableTags])].sort()
+    return merged
+  }, [availableTags, localAvailableTags])
   const updateTagsMutation = useUpdateAssetTags()
   const updateLocationMutation = useUpdateAssetLocation()
   const deleteAssetMutation = useDeleteAsset()
@@ -62,12 +84,41 @@ export function AssetDetailPanel({
 
   useEffect(() => {
     if (open) {
-      setTags(asset.tags || [])
+      // Only reset tags if this is a different asset OR if mutation is not in progress
+      // This prevents race conditions where useEffect resets tags after a successful mutation
+      const isDifferentAsset = lastAssetIdRef.current !== asset.id
+      if (isDifferentAsset || (!updateTagsMutation.isPending && isDifferentAsset)) {
+        setTags(asset.tags || [])
+        lastAssetIdRef.current = asset.id
+      }
       setLocation(asset.location || '')
       setIsEditingLocation(false)
       setRetagStatus('idle')
+      setNewTag('')
+      setShowTagSuggestions(false)
+      
+      // Add any tags from this asset that aren't in available tags to both local list and query cache
+      if (asset.tags && availableTags) {
+        const newTags = asset.tags.filter(tag => !availableTags.includes(tag))
+        if (newTags.length > 0) {
+          setLocalAvailableTags((prev) => {
+            const updated = [...prev, ...newTags]
+            return [...new Set(updated)].sort()
+          })
+          
+          // Update query cache to persist these tags
+          queryClient.setQueryData(['availableTags'], (oldData: string[] | undefined) => {
+            if (!oldData) return [...newTags].sort()
+            const merged = [...oldData, ...newTags]
+            return [...new Set(merged)].sort()
+          })
+        }
+      }
+    } else {
+      // Reset ref when panel closes
+      lastAssetIdRef.current = null
     }
-  }, [asset, open])
+  }, [asset.id, asset.tags, open, availableTags, queryClient, updateTagsMutation.isPending])
 
   // Update tags when asset completes retagging (parent polling handles status updates)
   useEffect(() => {
@@ -91,8 +142,37 @@ export function AssetDetailPanel({
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
-  const handleAddTag = () => {
-    const trimmedTag = newTag.trim()
+  // Keyboard navigation
+  useEffect(() => {
+    if (!open) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't handle if user is typing in an input field
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return
+      }
+
+      if (e.key === 'ArrowLeft' && canNavigatePrevious && onNavigatePrevious) {
+        e.preventDefault()
+        onNavigatePrevious()
+      } else if (e.key === 'ArrowRight' && canNavigateNext && onNavigateNext) {
+        e.preventDefault()
+        onNavigateNext()
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [open, canNavigatePrevious, canNavigateNext, onNavigatePrevious, onNavigateNext, onClose])
+
+  const handleAddTag = (tagToAdd?: string) => {
+    // Use provided tag or current input value
+    const tagToUse = tagToAdd || newTag.trim()
+    const trimmedTag = tagToUse.trim()
+    
     if (trimmedTag && !tags.includes(trimmedTag)) {
       const updatedTags = [...tags, trimmedTag]
       setTags(updatedTags)
@@ -100,17 +180,71 @@ export function AssetDetailPanel({
         assetId: asset.id,
         tags: updatedTags,
       })
+      
+      // If this tag doesn't exist in available tags, add it to local list and update query cache
+      if (!allAvailableTags.includes(trimmedTag)) {
+        setLocalAvailableTags((prev) => {
+          const updated = [...prev, trimmedTag]
+          return [...new Set(updated)].sort()
+        })
+        
+        // Update the query cache to persist the new tag
+        queryClient.setQueryData(['availableTags'], (oldData: string[] | undefined) => {
+          if (!oldData) return [trimmedTag]
+          if (oldData.includes(trimmedTag)) return oldData
+          return [...oldData, trimmedTag].sort()
+        })
+        
+        // Also invalidate to refetch from server (ensures persistence across sessions)
+        queryClient.invalidateQueries({ queryKey: ['availableTags'] })
+        // Invalidate tags query so Tag Management page shows the new tag
+        queryClient.invalidateQueries({ queryKey: ['tags'] })
+      }
+      
       setNewTag('')
+      setShowTagSuggestions(false)
     }
   }
 
   const handleRemoveTag = (tagToRemove: string) => {
+    console.log('[AssetDetailPanel] Removing tag:', tagToRemove)
+    console.log('[AssetDetailPanel] Current tags:', tags)
+    
+    // Use exact match (case-sensitive) to remove the tag
     const updatedTags = tags.filter((tag) => tag !== tagToRemove)
+    console.log('[AssetDetailPanel] Updated tags:', updatedTags)
+    
+    if (updatedTags.length === tags.length) {
+      console.warn('[AssetDetailPanel] Tag not found in list:', tagToRemove, 'Available tags:', tags)
+      return
+    }
+    
     setTags(updatedTags)
-    updateTagsMutation.mutate({
-      assetId: asset.id,
-      tags: updatedTags,
-    })
+    updateTagsMutation.mutate(
+      {
+        assetId: asset.id,
+        tags: updatedTags,
+      },
+      {
+        onSuccess: (data) => {
+          console.log('[AssetDetailPanel] Tag removal successful:', data)
+          // Update local state with the response from server to ensure consistency
+          if (data?.tags) {
+            setTags(data.tags)
+          }
+          // Invalidate queries to update Tag Management usage counts
+          queryClient.invalidateQueries({ queryKey: ['tags'] })
+          queryClient.invalidateQueries({ queryKey: ['availableTags'] })
+          queryClient.invalidateQueries({ queryKey: ['assets'] })
+          queryClient.invalidateQueries({ queryKey: ['asset', asset.id] })
+        },
+        onError: (error) => {
+          console.error('[AssetDetailPanel] Tag removal failed:', error)
+          // Revert to original tags on error
+          setTags(asset.tags || [])
+        },
+      }
+    )
   }
 
   const handleUpdateLocation = () => {
@@ -228,7 +362,7 @@ export function AssetDetailPanel({
     <div className="space-y-6">
       {/* Hero Image - Takes prominent space */}
       {imageUrl && (
-        <div className="relative w-full aspect-square overflow-hidden rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200/50 shadow-sm">
+        <div className="relative w-full aspect-square overflow-hidden rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200/50 shadow-sm group">
           <Image
             src={imageUrl}
             alt={asset.tags[0] || 'Asset'}
@@ -287,70 +421,137 @@ export function AssetDetailPanel({
           </Button>
         </div>
 
-        {/* Tags Section - Most Important, Prominent */}
-        <div className="space-y-3">
+        {/* Tags Section - Airbnb-inspired design */}
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900">Tags</h3>
             {tags.length > 0 && (
-              <span className="text-xs text-gray-500">{tags.length}</span>
+              <span className="text-xs font-medium text-gray-500 bg-gray-50 px-2 py-0.5 rounded-full">
+                {tags.length}
+              </span>
             )}
           </div>
           
-          {/* Existing Tags */}
+          {/* Existing Tags - Elegant, spacious design */}
           {tags.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2.5">
               {tags.map((tag) => (
-                <Badge
+                <div
                   key={tag}
-                  variant="secondary"
-                  className="group gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-gradient-to-br from-amber-50 to-amber-100/50 text-amber-900 border border-amber-200/50 hover:from-amber-100 hover:to-amber-150 hover:border-amber-300/50 transition-all"
+                  className="group inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-lg hover:border-gray-300 hover:shadow-sm transition-all duration-150"
                 >
-                  <span>{tag}</span>
+                  <span className="text-sm font-medium text-gray-700">{tag}</span>
                   <button
                     onClick={() => handleRemoveTag(tag)}
-                    className="opacity-0 group-hover:opacity-100 hover:bg-amber-200/50 rounded-md p-0.5 transition-all"
+                    className="flex items-center justify-center w-4 h-4 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors duration-150"
                     aria-label={`Remove ${tag}`}
+                    title="Remove tag"
                   >
-                    <X className="h-3 w-3" />
+                    <X className="h-3 w-3" strokeWidth={2.5} />
                   </button>
-                </Badge>
+                </div>
               ))}
             </div>
           ) : (
-            <p className="text-sm text-gray-400 italic py-2">No tags yet</p>
+            <div className="py-3 text-center">
+              <p className="text-sm text-gray-400">No tags yet. Add tags to organize your assets.</p>
+            </div>
           )}
 
-          {/* Add Tag Input */}
-          <div className="flex gap-2">
-            <Input
-              type="text"
-              placeholder="Add tag..."
-              value={newTag}
-              onChange={(e) => setNewTag(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  handleAddTag()
-                }
-              }}
-              list="available-tags"
-              className="flex-1 h-9 text-sm border-gray-200 focus:border-accent focus:ring-accent/20"
-            />
-            <datalist id="available-tags">
-              {availableTags
-                ?.filter((tag) => !tags.includes(tag))
-                .map((tag) => (
-                  <option key={tag} value={tag} />
-                ))}
-            </datalist>
-            <Button 
-              onClick={handleAddTag} 
-              size="icon" 
-              className="h-9 w-9 shrink-0"
-              disabled={!newTag.trim()}
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
+          {/* Add Tag Input - Premium autocomplete experience */}
+          <div className="relative">
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Input
+                  type="text"
+                  placeholder="Add a tag..."
+                  value={newTag}
+                  onChange={(e) => {
+                    setNewTag(e.target.value)
+                    setShowTagSuggestions(true)
+                  }}
+                  onFocus={() => {
+                    // Show all available tags when input is focused
+                    if (allAvailableTags && allAvailableTags.filter((tag: string) => !tags.includes(tag)).length > 0) {
+                      setShowTagSuggestions(true)
+                    }
+                  }}
+                  onBlur={() => {
+                    // Delay closing to allow clicks on suggestions
+                    setTimeout(() => setShowTagSuggestions(false), 200)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      handleAddTag()
+                    } else if (e.key === 'Escape') {
+                      setNewTag('')
+                      setShowTagSuggestions(false)
+                    }
+                  }}
+                  className="h-10 text-sm border-gray-200 focus:border-gray-400 focus:ring-1 focus:ring-gray-400/20 pr-10 transition-all"
+                />
+                {/* Tag suggestions indicator - show when there are available tags */}
+                {allAvailableTags && allAvailableTags.filter((tag: string) => !tags.includes(tag)).length > 0 && (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                    <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform ${showTagSuggestions ? 'rotate-180' : ''}`} />
+                  </div>
+                )}
+              </div>
+              <Button 
+                onClick={() => handleAddTag()} 
+                size="sm"
+                className="h-10 px-4 shrink-0 font-medium"
+                disabled={!newTag.trim()}
+              >
+                <Plus className="h-4 w-4 mr-1.5" />
+                Add
+              </Button>
+            </div>
+            
+            {/* Tag suggestions dropdown - Show all available tags when focused, filter when typing */}
+            {showTagSuggestions && allAvailableTags && allAvailableTags.filter((tag: string) => !tags.includes(tag)).length > 0 && (
+              <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                <div className="py-1 max-h-48 overflow-y-auto">
+                  {allAvailableTags
+                    .filter((tag: string) => {
+                      // Filter out already added tags
+                      if (tags.includes(tag)) return false
+                      // If user is typing, filter by match; otherwise show all
+                      if (newTag.trim()) {
+                        return tag.toLowerCase().includes(newTag.toLowerCase())
+                      }
+                      return true
+                    })
+                    .slice(0, 12) // Show more tags when showing full list
+                    .map((tag: string) => (
+                      <button
+                        key={tag}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          // Directly add the tag without setting input first
+                          handleAddTag(tag)
+                        }}
+                        onMouseDown={(e) => {
+                          // Prevent blur from closing dropdown before click
+                          e.preventDefault()
+                          e.stopPropagation()
+                        }}
+                        className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100 flex items-center gap-2 cursor-pointer"
+                      >
+                        <span className="flex-1">{tag}</span>
+                        <Plus className="h-3.5 w-3.5 text-gray-400" />
+                      </button>
+                    ))}
+                  {allAvailableTags.filter((tag: string) => !tags.includes(tag) && (!newTag.trim() || tag.toLowerCase().includes(newTag.toLowerCase()))).length === 0 && (
+                    <div className="px-4 py-3 text-sm text-gray-500 text-center">
+                      {newTag.trim() ? 'No matching tags' : 'No tags available'}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -480,8 +681,49 @@ export function AssetDetailPanel({
       <>
         <Dialog open={open} onOpenChange={onClose}>
           <DialogContent className="max-h-[90vh] overflow-y-auto p-6">
-            <DialogHeader className="mb-6">
-              <DialogTitle className="text-lg font-semibold">Asset Details</DialogTitle>
+            <DialogHeader className="mb-4">
+              <DialogTitle className="text-lg font-semibold mb-3">Asset Details</DialogTitle>
+              {/* Navigation controls - Simple, clean design */}
+              {(canNavigatePrevious || canNavigateNext) && (
+                <div className="flex items-center justify-center gap-3 pt-2 border-t border-gray-100">
+                  {canNavigatePrevious && onNavigatePrevious ? (
+                    <button
+                      onClick={onNavigatePrevious}
+                      className="flex items-center justify-center w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors text-gray-700 hover:text-gray-900"
+                      aria-label="Previous asset"
+                      title="Previous asset (←)"
+                    >
+                      <ChevronLeft className="h-5 w-5" strokeWidth={2} />
+                    </button>
+                  ) : (
+                    <div className="flex items-center justify-center w-9 h-9 rounded-full bg-gray-50 opacity-40">
+                      <ChevronLeft className="h-5 w-5 text-gray-400" strokeWidth={2} />
+                    </div>
+                  )}
+                  
+                  {/* Asset counter */}
+                  {currentIndex !== undefined && totalCount !== undefined && (
+                    <span className="text-sm font-medium text-gray-600 min-w-[3rem] text-center">
+                      {currentIndex + 1} / {totalCount}
+                    </span>
+                  )}
+                  
+                  {canNavigateNext && onNavigateNext ? (
+                    <button
+                      onClick={onNavigateNext}
+                      className="flex items-center justify-center w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors text-gray-700 hover:text-gray-900"
+                      aria-label="Next asset"
+                      title="Next asset (→)"
+                    >
+                      <ChevronRight className="h-5 w-5" strokeWidth={2} />
+                    </button>
+                  ) : (
+                    <div className="flex items-center justify-center w-9 h-9 rounded-full bg-gray-50 opacity-40">
+                      <ChevronRight className="h-5 w-5 text-gray-400" strokeWidth={2} />
+                    </div>
+                  )}
+                </div>
+              )}
             </DialogHeader>
             {content}
           </DialogContent>
@@ -524,8 +766,49 @@ export function AssetDetailPanel({
     <>
       <Sheet open={open} onOpenChange={onClose}>
         <SheetContent className="w-full overflow-y-auto sm:max-w-[420px] p-6">
-          <SheetHeader className="mb-6">
-            <SheetTitle className="text-lg font-semibold">Asset Details</SheetTitle>
+          <SheetHeader className="mb-4">
+            <SheetTitle className="text-lg font-semibold mb-3">Asset Details</SheetTitle>
+            {/* Navigation controls - Simple, clean design */}
+            {(canNavigatePrevious || canNavigateNext) && (
+              <div className="flex items-center justify-center gap-3 pt-2 border-t border-gray-100">
+                {canNavigatePrevious && onNavigatePrevious ? (
+                  <button
+                    onClick={onNavigatePrevious}
+                    className="flex items-center justify-center w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors text-gray-700 hover:text-gray-900"
+                    aria-label="Previous asset"
+                    title="Previous asset (←)"
+                  >
+                    <ChevronLeft className="h-5 w-5" strokeWidth={2} />
+                  </button>
+                ) : (
+                  <div className="flex items-center justify-center w-9 h-9 rounded-full bg-gray-50 opacity-40">
+                    <ChevronLeft className="h-5 w-5 text-gray-400" strokeWidth={2} />
+                  </div>
+                )}
+                
+                {/* Asset counter */}
+                {currentIndex !== undefined && totalCount !== undefined && (
+                  <span className="text-sm font-medium text-gray-600 min-w-[3rem] text-center">
+                    {currentIndex + 1} / {totalCount}
+                  </span>
+                )}
+                
+                {canNavigateNext && onNavigateNext ? (
+                  <button
+                    onClick={onNavigateNext}
+                    className="flex items-center justify-center w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors text-gray-700 hover:text-gray-900"
+                    aria-label="Next asset"
+                    title="Next asset (→)"
+                  >
+                    <ChevronRight className="h-5 w-5" strokeWidth={2} />
+                  </button>
+                ) : (
+                  <div className="flex items-center justify-center w-9 h-9 rounded-full bg-gray-50 opacity-40">
+                    <ChevronRight className="h-5 w-5 text-gray-400" strokeWidth={2} />
+                  </div>
+                )}
+              </div>
+            )}
           </SheetHeader>
           {content}
         </SheetContent>

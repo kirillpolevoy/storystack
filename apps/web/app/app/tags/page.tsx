@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Plus, Search, Edit2, Trash2, Tag, Sparkles, RefreshCw } from 'lucide-react'
+import { Plus, Search, Edit2, Trash2, Tag, Sparkles, RefreshCw, CheckCircle2, Undo2 } from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -40,6 +40,14 @@ export default function TagsPage() {
   const [editTagName, setEditTagName] = useState('')
   const [deleteTagName, setDeleteTagName] = useState<string | null>(null)
   const [showNewTagDialog, setShowNewTagDialog] = useState(false)
+  
+  // Premium delete flow state
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteProgress, setDeleteProgress] = useState({ current: 0, total: 0 })
+  const [showDeleteSuccess, setShowDeleteSuccess] = useState(false)
+  const [deletedTagName, setDeletedTagName] = useState('')
+  const [deletedTagForUndo, setDeletedTagForUndo] = useState<TagConfig | null>(null)
+  
   const supabase = createClient()
   const queryClient = useQueryClient()
 
@@ -116,9 +124,9 @@ export default function TagsPage() {
         }
       }
 
-      // Combine used tags (custom_tags column doesn't exist, so we only use tags from assets)
-      const allTags = new Set([...tagCounts.keys()])
-      console.log('[TagManagement] All unique tags:', Array.from(allTags))
+      // Combine used tags from assets AND tags from auto_tags config (even if they have 0 photos)
+      const allTags = new Set([...tagCounts.keys(), ...autoTags])
+      console.log('[TagManagement] All unique tags (from assets + config):', Array.from(allTags))
       
       const tagConfigs: TagConfig[] = Array.from(allTags)
         .map((tag) => {
@@ -128,7 +136,7 @@ export default function TagsPage() {
           }
           return {
             name: tag,
-            usageCount: tagCounts.get(tag) || 0,
+            usageCount: tagCounts.get(tag) || 0, // Will be 0 if tag is only in auto_tags
             useWithAI,
           }
         })
@@ -161,11 +169,58 @@ export default function TagsPage() {
 
       if (!user) throw new Error('Not authenticated')
 
-      // Note: custom_tags column doesn't exist in tag_config table
-      // Tags are automatically discovered from assets, so no need to save custom_tags
+      // Get current tag_config to preserve existing auto_tags
+      const { data: existingConfig } = await supabase
+        .from('tag_config')
+        .select('auto_tags')
+        .eq('user_id', user.id)
+        .single()
+
+      const currentAutoTags = existingConfig?.auto_tags && Array.isArray(existingConfig.auto_tags) 
+        ? existingConfig.auto_tags 
+        : []
+
+      // Add new tag to auto_tags if it doesn't already exist
+      if (!currentAutoTags.includes(tagName)) {
+        const updatedAutoTags = [...currentAutoTags, tagName].sort()
+
+        // Upsert tag_config with the new tag added to auto_tags
+        const { error } = await supabase
+          .from('tag_config')
+          .upsert(
+            { 
+              user_id: user.id, 
+              auto_tags: updatedAutoTags 
+            },
+            { onConflict: 'user_id' }
+          )
+
+        if (error) {
+          // Try insert/update fallback
+          const insertResult = await supabase
+            .from('tag_config')
+            .insert({ user_id: user.id, auto_tags: updatedAutoTags })
+          
+          if (insertResult.error) {
+            if (insertResult.error.code === '23505' || insertResult.error.message?.includes('duplicate')) {
+              const updateResult = await supabase
+                .from('tag_config')
+                .update({ auto_tags: updatedAutoTags })
+                .eq('user_id', user.id)
+              
+              if (updateResult.error) {
+                throw updateResult.error
+              }
+            } else {
+              throw insertResult.error
+            }
+          }
+        }
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tags'] })
+      queryClient.invalidateQueries({ queryKey: ['availableTags'] })
       setNewTagName('')
       setShowNewTagDialog(false)
     },
@@ -240,13 +295,29 @@ export default function TagsPage() {
         await Promise.all(updates)
       }
 
-      // Note: custom_tags and deleted_tags columns don't exist in tag_config table
-      // Tag deletion removes tags from assets directly, no need to update tag_config
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tags'] })
-      queryClient.invalidateQueries({ queryKey: ['assets'] })
-      setDeleteTagName(null)
+      // Remove tag from tag_config.auto_tags if it exists there
+      const { data: config } = await supabase
+        .from('tag_config')
+        .select('auto_tags')
+        .eq('user_id', user.id)
+        .single()
+
+      if (config?.auto_tags && Array.isArray(config.auto_tags)) {
+        const updatedAutoTags = config.auto_tags.filter((tag: string) => tag !== tagName)
+        
+        // Update tag_config with the tag removed
+        const { error: configError } = await supabase
+          .from('tag_config')
+          .upsert(
+            { user_id: user.id, auto_tags: updatedAutoTags },
+            { onConflict: 'user_id' }
+          )
+
+        if (configError) {
+          console.error('[TagsPage] Failed to remove tag from auto_tags:', configError)
+          // Don't throw - tag removal from assets is more important
+        }
+      }
     },
   })
 
@@ -271,9 +342,82 @@ export default function TagsPage() {
     updateTagMutation.mutate({ oldName: editingTag, newName: editTagName.trim() })
   }
 
-  const handleDeleteTag = () => {
+  const handleDeleteTag = async () => {
     if (!deleteTagName) return
-    deleteTagMutation.mutate(deleteTagName)
+
+    const tagToDelete = tags?.find(t => t.name === deleteTagName)
+    if (!tagToDelete) return
+
+    setIsDeleting(true)
+    setDeleteProgress({ current: 0, total: 1 })
+
+    try {
+      // Optimistic update - remove from UI immediately
+      queryClient.setQueryData(['tags'], (oldData: TagConfig[] | undefined) => {
+        if (!oldData) return oldData
+        return oldData.filter((tag) => tag.name !== deleteTagName)
+      })
+
+      // Store for undo
+      setDeletedTagForUndo(tagToDelete)
+      setDeletedTagName(tagToDelete.name)
+
+      // Delete tag
+      await deleteTagMutation.mutateAsync(deleteTagName)
+      setDeleteProgress({ current: 1, total: 1 })
+
+      // Show success notification
+      setShowDeleteSuccess(true)
+
+      // Auto-dismiss success notification after 5 seconds
+      setTimeout(() => {
+        setShowDeleteSuccess(false)
+        setDeletedTagForUndo(null)
+      }, 5000)
+
+      // Invalidate queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ['tags'] })
+      queryClient.invalidateQueries({ queryKey: ['assets'] })
+      queryClient.invalidateQueries({ queryKey: ['availableTags'] })
+
+    } catch (error) {
+      console.error('[TagsPage] Delete failed:', error)
+
+      // Rollback optimistic update on error
+      queryClient.invalidateQueries({ queryKey: ['tags'] })
+
+      alert('Failed to delete tag. Please try again.')
+    } finally {
+      setIsDeleting(false)
+      setDeleteProgress({ current: 0, total: 0 })
+      setDeleteTagName(null)
+    }
+  }
+
+  const handleUndoDelete = async () => {
+    if (!deletedTagForUndo) return
+
+    try {
+      // Restore tag optimistically
+      queryClient.setQueryData(['tags'], (oldData: TagConfig[] | undefined) => {
+        if (!oldData) return [deletedTagForUndo]
+        const restored = [...oldData, deletedTagForUndo]
+        return restored.sort((a, b) => a.name.localeCompare(b.name))
+      })
+
+      setDeletedTagForUndo(null)
+      setShowDeleteSuccess(false)
+
+      // Refresh to sync with server
+      queryClient.invalidateQueries({ queryKey: ['tags'] })
+      queryClient.invalidateQueries({ queryKey: ['assets'] })
+      queryClient.invalidateQueries({ queryKey: ['availableTags'] })
+
+      alert('Tag restored. Note: If the tag was already removed from assets, you may need to re-add it manually.')
+    } catch (error) {
+      console.error('[TagsPage] Undo failed:', error)
+      alert('Unable to restore deleted tag.')
+    }
   }
 
   // Toggle AI usage for a tag - matches mobile app behavior exactly
@@ -460,40 +604,42 @@ export default function TagsPage() {
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="border-b border-gray-200 bg-white px-8 py-6">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-gray-900 mb-1">
-              Tag Management
-            </h1>
-            <p className="text-sm text-gray-500">Organize your content taxonomy</p>
+      <div className="border-b border-gray-200 bg-white">
+        <div className="px-8 pt-4">
+          <div className="flex items-center justify-between pb-4">
+            <div>
+              <h1 className="text-2xl font-semibold text-gray-900 mb-1">
+                Tag Management
+              </h1>
+              <p className="text-sm text-gray-500">Organize your content taxonomy</p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => clearPendingAssetsMutation.mutate()}
+                disabled={clearPendingAssetsMutation.isPending}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${clearPendingAssetsMutation.isPending ? 'animate-spin' : ''}`} />
+                Clear Stuck Pending
+              </Button>
+              <Button
+                onClick={() => setShowNewTagDialog(true)}
+              >
+                <Plus className="mr-2 h-5 w-5" />
+                New Tag
+              </Button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => clearPendingAssetsMutation.mutate()}
-              disabled={clearPendingAssetsMutation.isPending}
-            >
-              <RefreshCw className={`mr-2 h-4 w-4 ${clearPendingAssetsMutation.isPending ? 'animate-spin' : ''}`} />
-              Clear Stuck Pending
-            </Button>
-            <Button
-              onClick={() => setShowNewTagDialog(true)}
-            >
-              <Plus className="mr-2 h-5 w-5" />
-              New Tag
-            </Button>
+          <div className="relative pb-3">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <Input
+              type="text"
+              placeholder="Search tags..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
+            />
           </div>
-        </div>
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-          <Input
-            type="text"
-            placeholder="Search tags..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9"
-          />
         </div>
       </div>
 
@@ -664,26 +810,96 @@ export default function TagsPage() {
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
-      <AlertDialog open={!!deleteTagName} onOpenChange={(open) => !open && setDeleteTagName(null)}>
-        <AlertDialogContent>
+      <AlertDialog open={!!deleteTagName && !isDeleting} onOpenChange={() => !isDeleting && setDeleteTagName(null)}>
+        <AlertDialogContent className="sm:max-w-md">
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Tag?</AlertDialogTitle>
-            <AlertDialogDescription>
+            <div className="flex items-center gap-3 mb-1">
+              <div className="h-10 w-10 rounded-lg bg-red-50 flex items-center justify-center">
+                <Trash2 className="h-5 w-5 text-red-600" />
+              </div>
+              <div>
+                <AlertDialogTitle className="text-lg font-semibold text-gray-900">
+                  Delete Tag?
+                </AlertDialogTitle>
+              </div>
+            </div>
+            <AlertDialogDescription className="text-sm text-gray-600 mt-2">
               This will remove the tag "{deleteTagName}" from all photos. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogFooter className="sm:flex-row sm:justify-end gap-2 mt-6">
+            <AlertDialogCancel className="mt-0">Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteTag}
-              disabled={deleteTagMutation.isPending}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className="bg-red-600 hover:bg-red-700 text-white gap-2"
             >
-              {deleteTagMutation.isPending ? 'Deleting...' : 'Delete'}
+              <Trash2 className="h-4 w-4" />
+              Delete Tag
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Delete Progress Dialog */}
+      {isDeleting && (
+        <AlertDialog open={isDeleting}>
+          <AlertDialogContent className="sm:max-w-md">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="text-lg font-semibold text-gray-900">
+                Deleting Tag...
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-sm text-gray-600 mt-2">
+                Please wait while we remove this tag from all photos.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="py-4">
+              <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-red-600 h-2 rounded-full transition-all duration-300 ease-out"
+                  style={{
+                    width: `${(deleteProgress.current / deleteProgress.total) * 100}%`,
+                  }}
+                />
+              </div>
+              <p className="text-xs text-gray-500 mt-2 text-center">
+                {deleteProgress.current} of {deleteProgress.total} completed
+              </p>
+            </div>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+
+      {/* Delete Success Toast */}
+      {showDeleteSuccess && (
+        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-2 fade-in-0 duration-300">
+          <div className="rounded-lg border border-gray-200 bg-white shadow-lg p-4 min-w-[320px]">
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 rounded-full bg-green-50 flex items-center justify-center flex-shrink-0">
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-gray-900">
+                  Tag deleted
+                </p>
+                <p className="text-xs text-gray-600 mt-0.5">
+                  "{deletedTagName}" has been removed from all photos
+                </p>
+              </div>
+              {deletedTagForUndo && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleUndoDelete}
+                  className="h-8 px-3 text-xs font-medium text-accent hover:text-accent/80 hover:bg-accent/5 flex-shrink-0"
+                >
+                  <Undo2 className="h-3.5 w-3.5 mr-1.5" />
+                  Undo
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

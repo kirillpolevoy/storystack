@@ -15,11 +15,12 @@ import { Asset } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
-import { Upload, Image as ImageIcon, Plus, Sparkles } from 'lucide-react'
+import { Upload, Image as ImageIcon, Plus, Sparkles, Trash2, CheckCircle2, Undo2 } from 'lucide-react'
 import { useDeleteAsset } from '@/hooks/useDeleteAsset'
 import { useUpdateAssetTags } from '@/hooks/useUpdateAssetTags'
 import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
+import { initializeBatchPolling, stopBatchPolling, addBatchToPoll, startBatchPolling } from '@/utils/pollBatchStatus'
 
 export default function LibraryPage() {
   const [viewFilter, setViewFilter] = useState<AssetViewFilter>('all')
@@ -40,6 +41,14 @@ export default function LibraryPage() {
   const [showBulkRetagConfirm, setShowBulkRetagConfirm] = useState(false)
   const [pendingBulkRetagAssets, setPendingBulkRetagAssets] = useState<Asset[]>([])
   const [completedRetaggingAssetIds, setCompletedRetaggingAssetIds] = useState<Set<string>>(new Set())
+  
+  // Premium delete flow state
+  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteProgress, setDeleteProgress] = useState({ current: 0, total: 0 })
+  const [showDeleteSuccess, setShowDeleteSuccess] = useState(false)
+  const [deletedAssetsCount, setDeletedAssetsCount] = useState(0)
+  const [deletedAssetsForUndo, setDeletedAssetsForUndo] = useState<Asset[]>([])
 
   const { data: tagsData } = useAvailableTags()
   const availableTags = tagsData || []
@@ -175,51 +184,10 @@ export default function LibraryPage() {
     }
 
     try {
-      // Set all assets to pending status
       const assetIds = assetsWithUrls.map(asset => asset.id)
-      console.log('[LibraryPage] Updating assets to pending:', assetIds)
-      
-      const { data: updateData, error: updateError } = await supabase
-        .from('assets')
-        .update({ auto_tag_status: 'pending' })
-        .in('id', assetIds)
-        .select('id, auto_tag_status') // Return updated rows to verify
+      console.log('[LibraryPage] Starting bulk retag for', assetIds.length, 'assets')
 
-      if (updateError) {
-        console.error('[LibraryPage] Failed to update asset status:', updateError)
-        console.error('[LibraryPage] Update error details:', JSON.stringify(updateError, null, 2))
-        throw new Error(`Failed to update asset status: ${updateError.message}`)
-      }
-
-      console.log('[LibraryPage] Update response:', updateData)
-      console.log('[LibraryPage] Successfully set', updateData?.length || 0, 'assets to pending status')
-      
-      // Verify the update actually happened
-      if (updateData && updateData.length > 0) {
-        const allPending = updateData.every((a: any) => a.auto_tag_status === 'pending')
-        console.log('[LibraryPage] All updated assets have pending status:', allPending)
-        if (!allPending) {
-          console.warn('[LibraryPage] ⚠️ Some assets were not set to pending:', updateData)
-        }
-      } else {
-        console.warn('[LibraryPage] ⚠️ No assets were updated!')
-      }
-      
-      // Immediately verify by fetching the assets
-      const { data: verifyData, error: verifyError } = await supabase
-        .from('assets')
-        .select('id, auto_tag_status')
-        .in('id', assetIds)
-      
-      if (verifyError) {
-        console.error('[LibraryPage] Failed to verify update:', verifyError)
-      } else {
-        console.log('[LibraryPage] Verification query result:', verifyData)
-        const pendingCount = verifyData?.filter((a: any) => a.auto_tag_status === 'pending').length || 0
-        console.log('[LibraryPage] Verified pending count:', pendingCount, 'out of', assetIds.length)
-      }
-
-      // Track which assets are being retagged
+      // Track which assets are being retagged (for UI feedback)
       setRetaggingAssetIds(new Set(assetIds))
 
       // Prepare batch request
@@ -241,64 +209,57 @@ export default function LibraryPage() {
       if (error) {
         console.error('[LibraryPage] Bulk retag error:', error)
         console.error('[LibraryPage] Error details:', JSON.stringify(error, null, 2))
+        // Clear retagging state on error
         setRetaggingAssetIds(new Set())
         throw error
       }
 
       console.log('[LibraryPage] Bulk retag response:', data)
 
-      // Force immediate refetch to show pending status
-      // Invalidate first, then refetch
-      queryClient.invalidateQueries({ queryKey: ['assets'] })
-      
-      // Refetch after a short delay to ensure DB update has propagated
-      setTimeout(async () => {
-        console.log('[LibraryPage] Refetching assets to show pending status...')
+      // Check if this is a batch API response (async) or immediate processing (sync)
+      if (data?.batchId) {
+        // Batch API: Async processing - add to polling queue
+        console.log('[LibraryPage] ✅ Batch API job created:', data.batchId)
+        console.log('[LibraryPage] Batch will be processed asynchronously')
         
-        // Refetch all asset queries
-        const refetchResult = await queryClient.refetchQueries({ queryKey: ['assets'] })
-        console.log('[LibraryPage] queryClient.refetchQueries result:', refetchResult)
+        // Add batch to polling queue immediately
+        addBatchToPoll(data.batchId)
         
-        // Also trigger refetch on the useAssets hook
-        if (refetch) {
-          const result = await refetch()
-          console.log('[LibraryPage] useAssets refetch completed')
-          console.log('[LibraryPage] useAssets refetch data:', result.data)
-          
-          // Check the actual data structure
-          if (result.data?.pages) {
-            const allAssets = result.data.pages.flatMap((p: any) => p.assets || [])
-            const pending = allAssets.filter((a: any) => a.auto_tag_status === 'pending')
-            console.log('[LibraryPage] After useAssets refetch - Total assets:', allAssets.length, 'Pending:', pending.length)
-            if (pending.length > 0) {
-              console.log('[LibraryPage] Pending asset IDs:', pending.map((a: any) => a.id))
-              console.log('[LibraryPage] Pending asset statuses:', pending.map((a: any) => ({ id: a.id, status: a.auto_tag_status })))
-            } else {
-              console.warn('[LibraryPage] ⚠️ No pending assets found after refetch!')
-              // Check what statuses we do have
-              const statuses = allAssets.map((a: any) => ({ id: a.id, status: a.auto_tag_status }))
-              console.log('[LibraryPage] All asset statuses:', statuses)
-            }
-          }
+        // Ensure polling is running
+        startBatchPolling()
+        
+        console.log('[LibraryPage] ✅ Added batch to polling queue')
+        
+        // Refresh UI to show pending status (edge function sets status to pending)
+        queryClient.invalidateQueries({ queryKey: ['assets'] })
+        setTimeout(() => refetch(), 500)
+        
+      } else if (data?.results) {
+        // Immediate processing: Results already available
+        console.log('[LibraryPage] ✅ Immediate processing complete')
+        console.log('[LibraryPage] Results:', data.results)
+        
+        // Check if all results are empty (indicates no tags enabled)
+        const allEmpty = Array.isArray(data.results) && data.results.every((r: any) => !r.tags || r.tags.length === 0)
+        if (allEmpty && data.results.length > 0) {
+          console.warn('[LibraryPage] ⚠️  All results have empty tags - no tags may be enabled for auto-tagging')
+          console.warn('[LibraryPage] ⚠️  Please check tag configuration at /app/tags and ensure at least one tag is enabled for AI')
+          alert('Auto-tagging completed but no tags were applied. Please check your tag configuration and ensure at least one tag is enabled for AI auto-tagging.')
         }
         
-        // Also check query cache directly
-        const queryData = queryClient.getQueriesData({ queryKey: ['assets'] })
-        console.log('[LibraryPage] Found', queryData.length, 'asset queries in cache')
-        queryData.forEach(([key, data]: any, index) => {
-          if (data?.pages) {
-            const allAssets = data.pages.flatMap((p: any) => p.assets || [])
-            const pending = allAssets.filter((a: any) => a.auto_tag_status === 'pending')
-            console.log(`[LibraryPage] Query ${index} - Total:`, allAssets.length, 'Pending:', pending.length)
-            if (pending.length > 0) {
-              console.log(`[LibraryPage] Query ${index} - Pending IDs:`, pending.map((a: any) => a.id))
-            }
-          }
-        })
-      }, 500)
+        // Results are already saved to DB by edge function
+        // Refresh UI to show updated tags (even if empty)
+        queryClient.invalidateQueries({ queryKey: ['assets'] })
+        setTimeout(() => refetch(), 500)
+        
+      } else {
+        console.warn('[LibraryPage] ⚠️ Unexpected response format:', data)
+        // Still refresh to be safe
+        queryClient.invalidateQueries({ queryKey: ['assets'] })
+        setTimeout(() => refetch(), 500)
+      }
 
-      // Show success message
-      console.log(`[LibraryPage] Successfully started retagging for ${assetsWithUrls.length} assets`)
+      console.log(`[LibraryPage] ✅ Successfully started retagging for ${assetsWithUrls.length} assets`)
 
       // Don't clear selection immediately - let user see the pending status
     } catch (error) {
@@ -309,6 +270,28 @@ export default function LibraryPage() {
     }
   }, [pendingBulkRetagAssets, supabase, queryClient, refetch])
   
+  // Initialize batch polling on mount
+  useEffect(() => {
+    console.log('[LibraryPage] Initializing batch polling...')
+    initializeBatchPolling()
+
+    // Listen for batch completion events
+    const handleBatchCompleted = (event: CustomEvent) => {
+      console.log('[LibraryPage] Batch completed event received:', event.detail)
+      // Refresh assets to show updated tags
+      queryClient.invalidateQueries({ queryKey: ['assets'] })
+      refetch()
+    }
+
+    window.addEventListener('batchCompleted', handleBatchCompleted as EventListener)
+
+    return () => {
+      console.log('[LibraryPage] Cleaning up batch polling...')
+      stopBatchPolling()
+      window.removeEventListener('batchCompleted', handleBatchCompleted as EventListener)
+    }
+  }, [queryClient, refetch])
+
   // Poll for retagging status updates
   useEffect(() => {
     if (retaggingAssetIds.size === 0) return
@@ -385,17 +368,124 @@ export default function LibraryPage() {
     return () => clearInterval(pollInterval)
   }, [retaggingAssetIds, supabase, queryClient, handleClearSelection])
 
-  const handleBulkDelete = useCallback(async () => {
-    if (!confirm(`Delete ${selectedAssetIds.size} assets? This cannot be undone.`)) {
-      return
+  const handleBulkDelete = useCallback(() => {
+    if (selectedAssetIds.size === 0) return
+    setShowDeleteConfirmation(true)
+  }, [selectedAssetIds.size])
+
+  const confirmBulkDelete = useCallback(async () => {
+    if (selectedAssetIds.size === 0) return
+    
+    setShowDeleteConfirmation(false)
+    setIsDeleting(true)
+    
+    const assetIdsArray = Array.from(selectedAssetIds)
+    const assetsToDelete = filteredAssets.filter(asset => selectedAssetIds.has(asset.id))
+    const count = assetIdsArray.length
+    
+    setDeleteProgress({ current: 0, total: count })
+    
+    try {
+      // Optimistic update: Remove from UI immediately
+      queryClient.setQueryData(['assets'], (oldData: any) => {
+        if (!oldData?.pages) return oldData
+        
+        return {
+          ...oldData,
+          pages: oldData.pages.map((page: any) => ({
+            ...page,
+            assets: page.assets.filter((asset: Asset) => !selectedAssetIds.has(asset.id)),
+            totalCount: Math.max(0, (page.totalCount || page.assets.length) - count),
+          })),
+        }
+      })
+      
+      // Clear selection immediately for smooth UX
+      handleClearSelection()
+      
+      // Delete assets with progress tracking
+      let completed = 0
+      const deletePromises = assetIdsArray.map(async (id, index) => {
+        try {
+          await deleteAsset.mutateAsync(id)
+          completed++
+          setDeleteProgress({ current: completed, total: count })
+        } catch (error) {
+          console.error(`[LibraryPage] Failed to delete asset ${id}:`, error)
+          throw error
+        }
+      })
+      
+      await Promise.all(deletePromises)
+      
+      // Store for undo (clear after 5 seconds)
+      setDeletedAssetsForUndo(assetsToDelete)
+      setTimeout(() => {
+        setDeletedAssetsForUndo([])
+      }, 5000)
+      
+      // Show success notification
+      setDeletedAssetsCount(count)
+      setShowDeleteSuccess(true)
+      
+      // Auto-dismiss success notification after 3 seconds
+      setTimeout(() => {
+        setShowDeleteSuccess(false)
+      }, 3000)
+      
+      // Invalidate queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ['assets'] })
+      
+    } catch (error) {
+      console.error('[LibraryPage] Bulk delete failed:', error)
+      
+      // Rollback optimistic update on error
+      queryClient.invalidateQueries({ queryKey: ['assets'] })
+      
+      alert('Failed to delete some assets. Please try again.')
+    } finally {
+      setIsDeleting(false)
+      setDeleteProgress({ current: 0, total: 0 })
     }
+  }, [selectedAssetIds, filteredAssets, deleteAsset, handleClearSelection, queryClient])
 
-    await Promise.all(
-      Array.from(selectedAssetIds).map((id) => deleteAsset.mutateAsync(id))
-    )
-
-    handleClearSelection()
-  }, [selectedAssetIds, deleteAsset, handleClearSelection])
+  const handleUndoDelete = useCallback(async () => {
+    if (deletedAssetsForUndo.length === 0) return
+    
+    try {
+      // Restore assets optimistically
+      queryClient.setQueryData(['assets'], (oldData: any) => {
+        if (!oldData?.pages) return oldData
+        
+        const restoredAssets = deletedAssetsForUndo
+        return {
+          ...oldData,
+          pages: oldData.pages.map((page: any, index: number) => {
+            if (index === 0) {
+              return {
+                ...page,
+                assets: [...restoredAssets, ...page.assets],
+                totalCount: (page.totalCount || page.assets.length) + restoredAssets.length,
+              }
+            }
+            return page
+          }),
+        }
+      })
+      
+      setDeletedAssetsForUndo([])
+      setShowDeleteSuccess(false)
+      
+      // Refresh to sync with server
+      queryClient.invalidateQueries({ queryKey: ['assets'] })
+      await refetch()
+      
+      alert('Assets restored. Note: Files may need to be re-uploaded if they were already deleted from storage.')
+    } catch (error) {
+      console.error('[LibraryPage] Undo failed:', error)
+      alert('Unable to restore deleted assets.')
+    }
+  }, [deletedAssetsForUndo, queryClient, refetch])
 
   const handleAddToStory = useCallback((asset: Asset) => {
     setSelectedAssetIds(new Set([asset.id]))
@@ -406,6 +496,41 @@ export default function LibraryPage() {
     setSelectedAsset(asset)
   }, [])
 
+  // Navigation functions for asset detail panel
+  // Navigate through all assets matching current filters (search/tags/location/viewFilter), not date-filtered subset
+  const handleNavigatePrevious = useCallback(() => {
+    if (!selectedAsset) return
+    const currentIndex = assets.findIndex(a => a.id === selectedAsset.id)
+    if (currentIndex > 0) {
+      setSelectedAsset(assets[currentIndex - 1])
+    }
+  }, [selectedAsset, assets])
+
+  const handleNavigateNext = useCallback(() => {
+    if (!selectedAsset) return
+    const currentIndex = assets.findIndex(a => a.id === selectedAsset.id)
+    if (currentIndex < assets.length - 1) {
+      setSelectedAsset(assets[currentIndex + 1])
+    }
+  }, [selectedAsset, assets])
+
+  const canNavigatePrevious = useMemo(() => {
+    if (!selectedAsset) return false
+    const currentIndex = assets.findIndex(a => a.id === selectedAsset.id)
+    return currentIndex > 0
+  }, [selectedAsset, assets])
+
+  const canNavigateNext = useMemo(() => {
+    if (!selectedAsset) return false
+    const currentIndex = assets.findIndex(a => a.id === selectedAsset.id)
+    return currentIndex < assets.length - 1
+  }, [selectedAsset, assets])
+
+  const currentAssetIndex = useMemo(() => {
+    if (!selectedAsset) return undefined
+    return assets.findIndex(a => a.id === selectedAsset.id)
+  }, [selectedAsset, assets])
+
   const handleAddToStorySuccess = useCallback(() => {
     handleClearSelection()
   }, [handleClearSelection])
@@ -414,23 +539,19 @@ export default function LibraryPage() {
 
   return (
     <div className="flex h-screen flex-col bg-white">
-      {/* Header */}
+      {/* Header - Reduced height, two-row structure */}
       <div className="border-b border-gray-200 bg-white">
-        <div className="px-8">
-          <div className="flex items-center justify-between py-6">
-            <div className="flex-1">
-              <h1 className="text-3xl font-semibold text-gray-900 tracking-tight mb-2">
-                Library
-              </h1>
-              <p className="text-sm text-gray-500 font-medium">
-                {filteredAssets.length} {filteredAssets.length === 1 ? 'asset' : 'assets'}
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
+        <div className="px-8 pt-4">
+          {/* Row 1: Title + Actions */}
+          <div className="flex items-center justify-between pb-4">
+            <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">
+              Library
+            </h1>
+            <div className="flex items-center gap-2">
               <Button
                 onClick={handleBulkAddToStory}
                 disabled={selectedAssetIds.size === 0}
-                className="h-10 px-5 text-sm font-semibold"
+                className="h-9 px-4 text-sm font-semibold bg-accent hover:bg-accent/90 shadow-sm"
               >
                 <Plus className="mr-2 h-4 w-4" />
                 Add to Story
@@ -438,7 +559,7 @@ export default function LibraryPage() {
               <Button
                 onClick={() => setShowUploadDialog(true)}
                 variant="outline"
-                className="h-10 px-5 text-sm font-semibold"
+                className="h-9 px-4 text-sm font-medium border-gray-300 text-gray-700 hover:bg-gray-50"
               >
                 <Upload className="mr-2 h-4 w-4" />
                 Upload
@@ -446,21 +567,47 @@ export default function LibraryPage() {
             </div>
           </div>
 
-          {/* View Tabs */}
-          <Tabs value={viewFilter} onValueChange={(v) => setViewFilter(v as AssetViewFilter)} className="pb-4">
-            <TabsList>
-              <TabsTrigger value="all">All Assets</TabsTrigger>
-              <TabsTrigger value="in-stories">Used in Stories</TabsTrigger>
-              <TabsTrigger value="not-in-stories">Not in Stories</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          {/* Row 2: Tabs + Count */}
+          <div className="flex items-center justify-between pb-3">
+            <Tabs value={viewFilter} onValueChange={(v) => setViewFilter(v as AssetViewFilter)}>
+              <TabsList className="h-9">
+                <TabsTrigger value="all" className="text-sm px-4">
+                  All Assets
+                </TabsTrigger>
+                <TabsTrigger value="in-stories" className="text-sm px-4">
+                  Used in Stories
+                </TabsTrigger>
+                <TabsTrigger value="not-in-stories" className="text-sm px-4">
+                  Not in Stories
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <span className="text-sm text-gray-500 font-medium">
+              {(() => {
+                // Use backend count, adjusted for date filter if active
+                const backendCount = data?.pages[0]?.totalCount || 0
+                if (dateRange.from || dateRange.to) {
+                  // Date filter is client-side, so count filtered assets
+                  return filteredAssets.length
+                }
+                return backendCount
+              })()} {(() => {
+                const backendCount = data?.pages[0]?.totalCount || 0
+                if (dateRange.from || dateRange.to) {
+                  return filteredAssets.length === 1 ? 'asset' : 'assets'
+                }
+                return backendCount === 1 ? 'asset' : 'assets'
+              })()}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Filter Bar */}
-      <div className="border-b border-gray-200 bg-white">
+      {/* Contained Control Surface */}
+      <div className="border-b border-gray-200 bg-gray-50/50">
         <div className="px-8 py-4">
-          <FilterBar
+          <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+            <FilterBar
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
             selectedTags={selectedTags}
@@ -474,6 +621,7 @@ export default function LibraryPage() {
             tagCounts={tagCounts}
             locationCounts={locationCounts}
           />
+          </div>
         </div>
       </div>
 
@@ -509,26 +657,30 @@ export default function LibraryPage() {
           </div>
         ) : isEmpty ? (
           <div className="flex h-full items-center justify-center px-8">
-            <div className="text-center max-w-sm">
-              <div className="h-12 w-12 rounded-lg bg-gray-100 flex items-center justify-center mx-auto mb-4">
-                <ImageIcon className="h-6 w-6 text-gray-400" />
+            <div className="text-center max-w-md">
+              <div className="h-16 w-16 rounded-xl bg-gray-100 flex items-center justify-center mx-auto mb-5">
+                <ImageIcon className="h-8 w-8 text-gray-400" />
               </div>
-              <h3 className="text-base font-semibold text-gray-900 mb-1">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">
                 {viewFilter === 'in-stories'
                   ? 'No assets in stories'
                   : viewFilter === 'not-in-stories'
                   ? 'All assets are in stories'
+                  : searchQuery || selectedTags.length > 0 || selectedLocation || dateRange.from || dateRange.to
+                  ? 'No assets match your filters'
                   : 'Your library is empty'}
               </h3>
-              <p className="text-sm text-gray-500 mb-6">
+              <p className="text-sm text-gray-500 mb-6 leading-relaxed">
                 {viewFilter === 'all'
-                  ? 'Upload your first asset to start building your content library'
+                  ? searchQuery || selectedTags.length > 0 || selectedLocation || dateRange.from || dateRange.to
+                    ? 'Try adjusting your search or filters to find what you\'re looking for'
+                    : 'Upload your first asset to start building your content library'
                   : 'Try a different view or upload new assets'}
               </p>
-              {viewFilter === 'all' && (
+              {viewFilter === 'all' && !searchQuery && selectedTags.length === 0 && !selectedLocation && !dateRange.from && !dateRange.to && (
                 <Button
-                  onClick={() => setShowUploadZone(true)}
-                  className="h-9"
+                  onClick={() => setShowUploadDialog(true)}
+                  className="h-10 px-5 font-semibold bg-accent hover:bg-accent/90 shadow-sm"
                 >
                   <Upload className="mr-2 h-4 w-4" />
                   Upload assets
@@ -637,6 +789,12 @@ export default function LibraryPage() {
           }}
           retaggingAssetIds={retaggingAssetIds}
           completedRetaggingAssetIds={completedRetaggingAssetIds}
+          onNavigatePrevious={handleNavigatePrevious}
+          onNavigateNext={handleNavigateNext}
+          canNavigatePrevious={canNavigatePrevious}
+          canNavigateNext={canNavigateNext}
+          currentIndex={currentAssetIndex}
+          totalCount={assets.length}
         />
       )}
 
@@ -652,6 +810,96 @@ export default function LibraryPage() {
           }
         }}
       />
+
+      {/* Premium Delete Confirmation Modal */}
+      {showDeleteConfirmation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="mx-4 w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex flex-col items-center">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-50">
+                <Trash2 className="h-8 w-8 text-red-600" />
+              </div>
+              <h3 className="mb-2 text-center text-2xl font-semibold text-gray-900">
+                Delete {selectedAssetIds.size} {selectedAssetIds.size === 1 ? 'asset' : 'assets'}?
+              </h3>
+              <p className="text-center text-sm leading-relaxed text-gray-600">
+                This action cannot be undone. The selected assets will be permanently deleted.
+              </p>
+            </div>
+            <div className="mt-6 flex gap-3">
+              <Button
+                onClick={() => setShowDeleteConfirmation(false)}
+                variant="outline"
+                className="flex-1 border-gray-300"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={confirmBulkDelete}
+                className="flex-1 bg-red-600 hover:bg-red-700"
+              >
+                Delete
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Progress Overlay */}
+      {isDeleting && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="mx-4 w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex flex-col items-center">
+              <div className="mb-4 h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-red-600" />
+              <h3 className="mb-2 text-center text-lg font-semibold text-gray-900">
+                Deleting Assets...
+              </h3>
+              <p className="text-center text-sm text-gray-600">
+                {deleteProgress.current} of {deleteProgress.total}
+              </p>
+            </div>
+            {/* Progress bar */}
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-gray-200">
+              <div
+                className="h-full rounded-full bg-red-600 transition-all duration-300"
+                style={{ width: `${(deleteProgress.current / deleteProgress.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Premium Success Toast Notification */}
+      {showDeleteSuccess && (
+        <div className="fixed left-1/2 top-6 z-50 -translate-x-1/2 animate-in slide-in-from-top-5 fade-in-0">
+          <div className="mx-4 flex items-center gap-3 rounded-2xl bg-white p-4 shadow-lg ring-1 ring-gray-200">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-50">
+              <CheckCircle2 className="h-6 w-6 text-green-600" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-gray-900">
+                {deletedAssetsCount} {deletedAssetsCount === 1 ? 'asset' : 'assets'} deleted
+              </p>
+              {deletedAssetsForUndo.length > 0 && (
+                <p className="mt-0.5 text-xs text-gray-600">
+                  Tap undo to restore
+                </p>
+              )}
+            </div>
+            {deletedAssetsForUndo.length > 0 && (
+              <Button
+                onClick={handleUndoDelete}
+                variant="outline"
+                size="sm"
+                className="ml-2 border-gray-200 bg-gray-50 hover:bg-gray-100"
+              >
+                <Undo2 className="mr-1.5 h-3.5 w-3.5" />
+                Undo
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

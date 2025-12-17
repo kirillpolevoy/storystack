@@ -131,37 +131,49 @@ export function AddAssetsModal({
   }, [])
   
   const handleAssetSelect = useCallback((assetId: string, index: number, event: React.MouseEvent) => {
+    // Ensure assetId is a string for consistent comparison
+    const assetIdString = String(assetId)
     // Skip if asset is already in story
-    if (currentStoryAssetIds.includes(assetId)) {
+    if (currentStoryAssetIds.includes(assetIdString)) {
       return
     }
     
     const isShiftClick = event.shiftKey
     const isModifierClick = event.metaKey || event.ctrlKey
     
-    if (isShiftClick && lastSelectedIndex !== null) {
-      // Range selection
+    if (isShiftClick && lastSelectedIndex !== null && lastSelectedIndex >= 0) {
+      // Range selection: select all images from lastSelectedIndex to current index
       const start = Math.min(lastSelectedIndex, index)
       const end = Math.max(lastSelectedIndex, index)
-      const rangeIds = availableAssets.slice(start, end + 1).map(a => a.id)
       
-      setSelectedAssetIds((prev) => {
-        const next = new Set(prev)
-        rangeIds.forEach(id => {
-          if (!currentStoryAssetIds.includes(id)) {
+      // Range selection: select all images from lastSelectedIndex to current index
+      // Ensure we're working with valid indices
+      if (start >= 0 && end < availableAssets.length) {
+        const rangeIds = availableAssets
+          .slice(start, end + 1)
+          .map(a => String(a.id)) // Ensure IDs are strings for consistent comparison
+          .filter(id => !currentStoryAssetIds.includes(String(id))) // Filter out assets already in story
+        
+        setSelectedAssetIds((prev) => {
+          // Create a new Set to ensure React detects the change
+          const next = new Set(prev)
+          // Add all IDs in the range
+          rangeIds.forEach(id => {
             next.add(id)
-          }
+          })
+          return next
         })
-        return next
-      })
+      }
+      // Update lastSelectedIndex to the current index for future range selections
+      setLastSelectedIndex(index)
     } else if (isModifierClick) {
       // Toggle single selection
       setSelectedAssetIds((prev) => {
         const next = new Set(prev)
-        if (next.has(assetId)) {
-          next.delete(assetId)
+        if (next.has(assetIdString)) {
+          next.delete(assetIdString)
         } else {
-          next.add(assetId)
+          next.add(assetIdString)
         }
         return next
       })
@@ -170,10 +182,10 @@ export function AddAssetsModal({
       // Single selection (toggle)
       setSelectedAssetIds((prev) => {
         const next = new Set(prev)
-        if (next.has(assetId)) {
-          next.delete(assetId)
+        if (next.has(assetIdString)) {
+          next.delete(assetIdString)
         } else {
-          next.add(assetId)
+          next.add(assetIdString)
         }
         return next
       })
@@ -297,7 +309,9 @@ export function AddAssetsModal({
             ) : (
               <div className="grid grid-cols-4 gap-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8">
                 {availableAssets.map((asset, index) => {
-                  const isSelected = selectedAssetIds.has(asset.id)
+                  // Ensure consistent ID comparison (convert to string)
+                  const assetIdString = String(asset.id)
+                  const isSelected = selectedAssetIds.has(assetIdString)
                   const isInCurrentStory = currentStoryAssetIds.includes(asset.id)
                   
                   return (
@@ -306,21 +320,32 @@ export function AddAssetsModal({
                       className={`relative group ${
                         isInCurrentStory ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
                       }`}
-                      onClick={(e) => handleAssetSelect(asset.id, index, e)}
+                      onClick={(e) => handleAssetSelect(String(asset.id), index, e)}
                     >
-                      {/* Checkbox overlay */}
-                      <div className="absolute top-1 left-1 z-10">
+                      {/* Checkbox overlay - positioned at top-left, above all AssetTile overlays */}
+                      <div 
+                        className="absolute top-2 left-2 z-[100] pointer-events-auto"
+                        style={{ zIndex: 100 }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleAssetSelect(asset.id, index, e)
+                        }}
+                      >
                         <div
-                          className={`h-5 w-5 rounded border-2 flex items-center justify-center transition-all shadow-sm ${
+                          className={`h-5 w-5 rounded border-2 flex items-center justify-center transition-all shadow-lg ${
                             isSelected
                               ? 'bg-accent border-accent'
                               : 'bg-white/95 border-gray-300 group-hover:border-accent'
                           }`}
                         >
                           {isSelected && (
-                            <Check className="h-3 w-3 text-white" />
+                            <Check className="h-3 w-3 text-white font-bold" />
                           )}
                         </div>
+                      </div>
+                      
+                      <div className={`${isSelected ? 'ring-2 ring-accent' : ''} aspect-square`}>
+                        <AssetTile asset={asset} onClick={() => {}} />
                       </div>
                       
                       {/* Story membership badge - component handles null check internally */}
@@ -337,10 +362,6 @@ export function AddAssetsModal({
                           </div>
                         </div>
                       )}
-                      
-                      <div className={`${isSelected ? 'ring-2 ring-accent' : ''} aspect-square`}>
-                        <AssetTile asset={asset} onClick={() => {}} />
-                      </div>
                     </div>
                   )
                 })}
