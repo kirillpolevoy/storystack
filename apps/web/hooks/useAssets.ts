@@ -28,7 +28,7 @@ export function useAssets(
 ) {
   const supabase = createClient()
 
-  return useInfiniteQuery({
+  const query = useInfiniteQuery({
     queryKey: ['assets', searchQuery, selectedFilters, viewFilter],
     queryFn: async ({ pageParam = 0 }) => {
       try {

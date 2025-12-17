@@ -31,8 +31,8 @@ export function AssetPicker({
   } = useAssets(searchQuery)
 
   const assets =
-    data?.pages.flatMap((page) => page.assets).filter(
-      (asset) => !excludeAssetIds.includes(asset.id)
+    data?.pages.flatMap((page: { assets: Asset[] }) => page.assets).filter(
+      (asset: Asset) => !excludeAssetIds.includes(asset.id)
     ) || []
 
   return (
@@ -54,7 +54,7 @@ export function AssetPicker({
           </div>
           <div className="max-h-[60vh] overflow-y-auto">
             <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
-              {assets.map((asset) => (
+              {assets.map((asset: Asset) => (
                 <div
                   key={asset.id}
                   onClick={() => {

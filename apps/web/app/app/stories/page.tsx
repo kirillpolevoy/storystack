@@ -448,7 +448,7 @@ export default function StoriesPage() {
                   Story deleted
                 </p>
                 <p className="text-xs text-gray-600 mt-0.5">
-                  "{deletedStoryName}" has been deleted
+                  &quot;{deletedStoryName}&quot; has been deleted
                 </p>
               </div>
               {deletedStoryForUndo && (

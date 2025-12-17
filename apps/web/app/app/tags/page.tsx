@@ -149,7 +149,7 @@ export default function TagsPage() {
       return tagConfigs
     },
     staleTime: 0, // Always fetch fresh data
-    cacheTime: 0, // Don't cache
+    gcTime: 0, // Don't cache
   })
 
   // Filter tags based on search
@@ -824,7 +824,7 @@ export default function TagsPage() {
               </div>
             </div>
             <AlertDialogDescription className="text-sm text-gray-600 mt-2">
-              This will remove the tag "{deleteTagName}" from all photos. This action cannot be undone.
+              This will remove the tag &quot;{deleteTagName}&quot; from all photos. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="sm:flex-row sm:justify-end gap-2 mt-6">
@@ -882,7 +882,7 @@ export default function TagsPage() {
                   Tag deleted
                 </p>
                 <p className="text-xs text-gray-600 mt-0.5">
-                  "{deletedTagName}" has been removed from all photos
+                  &quot;{deletedTagName}&quot; has been removed from all photos
                 </p>
               </div>
               {deletedTagForUndo && (

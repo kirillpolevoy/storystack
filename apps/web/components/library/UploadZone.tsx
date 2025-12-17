@@ -330,7 +330,7 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
       
       // Fallback: Monitor upload queue state to detect completion
       // This ensures we trigger batch tagging even if some callbacks don't fire
-      let queueCheckInterval: NodeJS.Timeout | null = null
+      let queueCheckInterval: ReturnType<typeof setInterval> | null = null
       const startQueueMonitoring = () => {
         queueCheckInterval = setInterval(() => {
           // Use a callback to read current queue state without modifying it

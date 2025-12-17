@@ -12,7 +12,7 @@ const MAX_POLL_ATTEMPTS = 360 // Stop after 1 hour (360 * 10s = 3600s)
 
 interface PollingState {
   batchIds: Set<string>
-  pollInterval: NodeJS.Timeout | null
+  pollInterval: ReturnType<typeof setInterval> | null
   attemptCount: number
 }
 

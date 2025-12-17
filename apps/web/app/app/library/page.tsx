@@ -82,13 +82,13 @@ export default function LibraryPage() {
     console.error('[LibraryPage] Error loading assets:', error)
   }
 
-  const assets = data?.pages.flatMap((page) => page.assets) || []
+  const assets = data?.pages.flatMap((page: { assets: Asset[] }) => page.assets) || []
 
   // Apply date range filter client-side (based on date_taken, fallback to created_at)
   const filteredAssets = useMemo(() => {
     if (!dateRange.from && !dateRange.to) return assets
 
-    return assets.filter((asset) => {
+    return assets.filter((asset: Asset) => {
       // Use date_taken if available, otherwise fall back to created_at
       const dateToUse = asset.date_taken || asset.created_at
       const assetDate = new Date(dateToUse)
@@ -106,7 +106,7 @@ export default function LibraryPage() {
   // Calculate tag and location counts
   const tagCounts = useMemo(() => {
     const counts = new Map<string, number>()
-    filteredAssets.forEach((asset) => {
+    filteredAssets.forEach((asset: Asset) => {
       (asset.tags ?? []).forEach((tag) => {
         if (tag) {
           counts.set(tag, (counts.get(tag) || 0) + 1)
@@ -118,7 +118,7 @@ export default function LibraryPage() {
 
   const locationCounts = useMemo(() => {
     const counts = new Map<string, number>()
-    filteredAssets.forEach((asset) => {
+    filteredAssets.forEach((asset: Asset) => {
       if (asset.location && asset.location.trim()) {
         const location = asset.location.trim()
         counts.set(location, (counts.get(location) || 0) + 1)
@@ -160,8 +160,8 @@ export default function LibraryPage() {
     if (selectedAssetIds.size === 0) return
 
     // Get selected assets with their public URLs
-    const selectedAssets = filteredAssets.filter(asset => selectedAssetIds.has(asset.id))
-    const assetsWithUrls = selectedAssets.filter(asset => asset.publicUrl)
+    const selectedAssets = filteredAssets.filter((asset: Asset) => selectedAssetIds.has(asset.id))
+    const assetsWithUrls = selectedAssets.filter((asset: Asset) => asset.publicUrl)
 
     if (assetsWithUrls.length === 0) {
       alert('No assets with valid URLs found')
@@ -380,7 +380,7 @@ export default function LibraryPage() {
     setIsDeleting(true)
     
     const assetIdsArray = Array.from(selectedAssetIds)
-    const assetsToDelete = filteredAssets.filter(asset => selectedAssetIds.has(asset.id))
+    const assetsToDelete = filteredAssets.filter((asset: Asset) => selectedAssetIds.has(asset.id))
     const count = assetIdsArray.length
     
     setDeleteProgress({ current: 0, total: count })
@@ -500,7 +500,7 @@ export default function LibraryPage() {
   // Navigate through all assets matching current filters (search/tags/location/viewFilter), not date-filtered subset
   const handleNavigatePrevious = useCallback(() => {
     if (!selectedAsset) return
-    const currentIndex = assets.findIndex(a => a.id === selectedAsset.id)
+    const currentIndex = assets.findIndex((a: Asset) => a.id === selectedAsset.id)
     if (currentIndex > 0) {
       setSelectedAsset(assets[currentIndex - 1])
     }
@@ -508,7 +508,7 @@ export default function LibraryPage() {
 
   const handleNavigateNext = useCallback(() => {
     if (!selectedAsset) return
-    const currentIndex = assets.findIndex(a => a.id === selectedAsset.id)
+    const currentIndex = assets.findIndex((a: Asset) => a.id === selectedAsset.id)
     if (currentIndex < assets.length - 1) {
       setSelectedAsset(assets[currentIndex + 1])
     }
@@ -516,19 +516,19 @@ export default function LibraryPage() {
 
   const canNavigatePrevious = useMemo(() => {
     if (!selectedAsset) return false
-    const currentIndex = assets.findIndex(a => a.id === selectedAsset.id)
+    const currentIndex = assets.findIndex((a: Asset) => a.id === selectedAsset.id)
     return currentIndex > 0
   }, [selectedAsset, assets])
 
   const canNavigateNext = useMemo(() => {
     if (!selectedAsset) return false
-    const currentIndex = assets.findIndex(a => a.id === selectedAsset.id)
+    const currentIndex = assets.findIndex((a: Asset) => a.id === selectedAsset.id)
     return currentIndex < assets.length - 1
   }, [selectedAsset, assets])
 
   const currentAssetIndex = useMemo(() => {
     if (!selectedAsset) return undefined
-    return assets.findIndex(a => a.id === selectedAsset.id)
+    return assets.findIndex((a: Asset) => a.id === selectedAsset.id)
   }, [selectedAsset, assets])
 
   const handleAddToStorySuccess = useCallback(() => {

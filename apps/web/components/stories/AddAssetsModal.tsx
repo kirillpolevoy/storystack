@@ -89,19 +89,19 @@ export function AddAssetsModal({
   
   const addAssets = useAddStoryAssets()
   
-  const allAssets = data?.pages.flatMap((page) => page.assets) || []
+  const allAssets = data?.pages.flatMap((page: { assets: Asset[] }) => page.assets) || []
   
   // Filter out assets already in this story
   // Note: useAssets already does server-side ILIKE on storage_path, so we don't need to filter again
   // But we keep matchesSearch for additional client-side filename parsing if needed
   const availableAssets = useMemo(() => {
-    return allAssets.filter((asset) => !currentStoryAssetIds.includes(asset.id))
+    return allAssets.filter((asset: Asset) => !currentStoryAssetIds.includes(asset.id))
   }, [allAssets, currentStoryAssetIds])
   
   // Calculate tag and location counts for search bar
   const tagCounts = useMemo(() => {
     const counts = new Map<string, number>()
-    availableAssets.forEach((asset) => {
+    availableAssets.forEach((asset: Asset) => {
       (asset.tags ?? []).forEach((tag) => {
         if (tag) {
           counts.set(tag, (counts.get(tag) || 0) + 1)
@@ -113,7 +113,7 @@ export function AddAssetsModal({
   
   const locationCounts = useMemo(() => {
     const counts = new Map<string, number>()
-    availableAssets.forEach((asset) => {
+    availableAssets.forEach((asset: Asset) => {
       if (asset.location && asset.location.trim()) {
         const location = asset.location.trim()
         counts.set(location, (counts.get(location) || 0) + 1)
@@ -151,14 +151,14 @@ export function AddAssetsModal({
       if (start >= 0 && end < availableAssets.length) {
         const rangeIds = availableAssets
           .slice(start, end + 1)
-          .map(a => String(a.id)) // Ensure IDs are strings for consistent comparison
-          .filter(id => !currentStoryAssetIds.includes(String(id))) // Filter out assets already in story
+          .map((a: Asset) => String(a.id)) // Ensure IDs are strings for consistent comparison
+          .filter((id: string) => !currentStoryAssetIds.includes(String(id))) // Filter out assets already in story
         
         setSelectedAssetIds((prev) => {
           // Create a new Set to ensure React detects the change
           const next = new Set(prev)
           // Add all IDs in the range
-          rangeIds.forEach(id => {
+          rangeIds.forEach((id: string) => {
             next.add(id)
           })
           return next
@@ -194,7 +194,7 @@ export function AddAssetsModal({
   }, [currentStoryAssetIds, lastSelectedIndex, availableAssets])
   
   const handleSelectAll = useCallback(() => {
-    const allIds = new Set(availableAssets.map(a => a.id))
+    const allIds = new Set<string>(availableAssets.map((a: Asset) => String(a.id)))
     setSelectedAssetIds(allIds)
   }, [availableAssets])
   
@@ -308,7 +308,7 @@ export function AddAssetsModal({
               </div>
             ) : (
               <div className="grid grid-cols-4 gap-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8">
-                {availableAssets.map((asset, index) => {
+                {availableAssets.map((asset: Asset, index: number) => {
                   // Ensure consistent ID comparison (convert to string)
                   const assetIdString = String(asset.id)
                   const isSelected = selectedAssetIds.has(assetIdString)
