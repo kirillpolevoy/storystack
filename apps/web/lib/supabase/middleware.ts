@@ -9,15 +9,24 @@ export async function updateSession(request: NextRequest) {
 
     if (!supabaseUrl || !supabaseAnonKey) {
       console.error('[Middleware] Missing Supabase environment variables')
-      // If env vars are missing, allow public routes but block protected routes
+      // If env vars are missing, handle routing manually
       const pathname = request.nextUrl.pathname
-      if (pathname.startsWith('/app')) {
-        // Redirect to login if trying to access protected route without env vars
+      
+      // Redirect root to login
+      if (pathname === '/') {
         const url = request.nextUrl.clone()
         url.pathname = '/login'
         return NextResponse.redirect(url)
       }
-      // Allow public routes to proceed
+      
+      // Block protected routes
+      if (pathname.startsWith('/app')) {
+        const url = request.nextUrl.clone()
+        url.pathname = '/login'
+        return NextResponse.redirect(url)
+      }
+      
+      // Allow public routes (login, logout, static assets) to proceed
       return NextResponse.next({ request })
     }
 
