@@ -1,8 +1,6 @@
 {
-  "version": 2,
-  "buildCommand": "npm ci && npm run build",
-  "installCommand": "npm ci",
-  "framework": "nextjs",
-  "rootDirectory": "apps/web"
+  "buildCommand": "cd apps/web && npm ci && npm run build",
+  "installCommand": "cd apps/web && npm ci",
+  "framework": "nextjs"
 }
 
