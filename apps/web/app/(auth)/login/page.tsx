@@ -5,14 +5,21 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 
-export default async function LoginPage() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+export const dynamic = 'force-dynamic'
 
-  if (user) {
-    redirect('/app/library')
+export default async function LoginPage() {
+  try {
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (user) {
+      redirect('/app/library')
+    }
+  } catch (error) {
+    // If there's an error checking auth, still show login page
+    console.error('[LoginPage] Error checking auth:', error)
   }
 
   return (
