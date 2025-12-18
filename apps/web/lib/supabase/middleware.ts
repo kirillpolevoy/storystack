@@ -57,26 +57,38 @@ export async function updateSession(request: NextRequest) {
     }
 
   // Allow access to login page, logout, static assets, and root
-  if (
-    request.nextUrl.pathname === '/' ||
-    request.nextUrl.pathname.startsWith('/login') ||
-    request.nextUrl.pathname.startsWith('/logout') ||
-    request.nextUrl.pathname.startsWith('/_next') ||
-    request.nextUrl.pathname.startsWith('/api') ||
-    request.nextUrl.pathname.match(/\.(ico|png|jpg|jpeg|svg|css|js)$/)
-  ) {
-    // Redirect root to login if not authenticated
-    if (request.nextUrl.pathname === '/' && !user) {
+  const pathname = request.nextUrl.pathname
+  
+  // Handle root path
+  if (pathname === '/') {
+    if (!user) {
       const url = request.nextUrl.clone()
       url.pathname = '/login'
       return NextResponse.redirect(url)
-    }
-    // Redirect root to app if authenticated
-    if (request.nextUrl.pathname === '/' && user) {
+    } else {
       const url = request.nextUrl.clone()
       url.pathname = '/app/library'
       return NextResponse.redirect(url)
     }
+  }
+  
+  // Allow login and logout pages
+  if (pathname === '/login' || pathname.startsWith('/logout')) {
+    // Redirect authenticated users away from login
+    if (user && pathname === '/login') {
+      const url = request.nextUrl.clone()
+      url.pathname = '/app/library'
+      return NextResponse.redirect(url)
+    }
+    return supabaseResponse
+  }
+  
+  // Allow static assets and Next.js internals
+  if (
+    pathname.startsWith('/_next') ||
+    pathname.startsWith('/api') ||
+    pathname.match(/\.(ico|png|jpg|jpeg|svg|css|js|woff|woff2|ttf|eot)$/)
+  ) {
     return supabaseResponse
   }
 
