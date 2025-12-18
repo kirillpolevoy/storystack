@@ -2,7 +2,6 @@
 
 // Force dynamic rendering to avoid SSR issues with window object
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useAssets, AssetViewFilter } from '@/hooks/useAssets'
