@@ -21,7 +21,15 @@ export function LoginForm() {
     setLoading(true)
 
     try {
+      // Check if Supabase URL is available
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+      if (!supabaseUrl) {
+        throw new Error('Supabase configuration is missing. Please check your environment variables.')
+      }
+      
       console.log('[LoginForm] Attempting login for:', email)
+      console.log('[LoginForm] Supabase URL:', supabaseUrl.substring(0, 30) + '...')
+      
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -29,6 +37,8 @@ export function LoginForm() {
 
       if (error) {
         console.error('[LoginForm] Login error:', error)
+        console.error('[LoginForm] Error message:', error.message)
+        console.error('[LoginForm] Error status:', error.status)
         throw error
       }
 
