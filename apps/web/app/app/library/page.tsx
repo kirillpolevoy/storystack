@@ -1,5 +1,9 @@
 'use client'
 
+// Force dynamic rendering to avoid SSR issues with window object
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useAssets, AssetViewFilter } from '@/hooks/useAssets'
 import { useAvailableTags } from '@/hooks/useAvailableTags'
@@ -283,12 +287,16 @@ export default function LibraryPage() {
       refetch()
     }
 
-    window.addEventListener('batchCompleted', handleBatchCompleted as EventListener)
+    if (typeof window !== 'undefined') {
+      window.addEventListener('batchCompleted', handleBatchCompleted as EventListener)
+    }
 
     return () => {
       console.log('[LibraryPage] Cleaning up batch polling...')
       stopBatchPolling()
-      window.removeEventListener('batchCompleted', handleBatchCompleted as EventListener)
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('batchCompleted', handleBatchCompleted as EventListener)
+      }
     }
   }, [queryClient, refetch])
 
@@ -640,7 +648,11 @@ export default function LibraryPage() {
                 {error instanceof Error ? error.message : 'An unexpected error occurred'}
               </p>
               <Button
-                onClick={() => window.location.reload()}
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    window.location.reload()
+                  }
+                }}
                 variant="outline"
                 className="h-9"
               >
