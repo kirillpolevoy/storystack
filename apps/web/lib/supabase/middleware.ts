@@ -56,12 +56,27 @@ export async function updateSession(request: NextRequest) {
       // Continue with unauthenticated user
     }
 
-  // Allow access to login page and static assets
+  // Allow access to login page, logout, static assets, and root
   if (
+    request.nextUrl.pathname === '/' ||
     request.nextUrl.pathname.startsWith('/login') ||
+    request.nextUrl.pathname.startsWith('/logout') ||
     request.nextUrl.pathname.startsWith('/_next') ||
-    request.nextUrl.pathname.startsWith('/api')
+    request.nextUrl.pathname.startsWith('/api') ||
+    request.nextUrl.pathname.match(/\.(ico|png|jpg|jpeg|svg|css|js)$/)
   ) {
+    // Redirect root to login if not authenticated
+    if (request.nextUrl.pathname === '/' && !user) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/login'
+      return NextResponse.redirect(url)
+    }
+    // Redirect root to app if authenticated
+    if (request.nextUrl.pathname === '/' && user) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/app/library'
+      return NextResponse.redirect(url)
+    }
     return supabaseResponse
   }
 
