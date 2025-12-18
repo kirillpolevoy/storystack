@@ -7,12 +7,16 @@ For monorepo setups, you **must** configure the Root Directory in Vercel's proje
 ### Steps to Fix:
 
 1. Go to your Vercel project dashboard
-2. Navigate to **Settings** → **General**
-3. Scroll down to **Root Directory**
-4. Click **Edit**
+2. Navigate to **Settings** → **Build and Development Settings**
+3. Scroll down to find **Root Directory** field
+4. Click **Edit** or enter the path
 5. Set Root Directory to: `apps/web`
 6. Click **Save**
 7. Redeploy your project
+
+**Note:** If you don't see "Build and Development Settings", look for:
+- **Settings** → Scroll down to find build-related settings
+- Or check if there's a **Build & Development** section
 
 ### Why?
 
