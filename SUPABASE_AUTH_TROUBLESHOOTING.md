@@ -11,20 +11,33 @@
 2. **Redeploy** (this rebuilds with the env vars)
 3. Clear browser cache and try again
 
-### 2. CORS Configuration
+### 2. CORS Configuration (YOUR CURRENT ISSUE)
 
-Supabase might be blocking requests from your Vercel domain.
+Supabase is blocking requests from your Vercel domain. The error shows:
+```
+Access to fetch at 'https://[project].functions.supabase.co/auth/v1/token' 
+from origin 'https://web-1zy5w5uxm-kirills-projects-39b715a7.vercel.app' 
+has been blocked by CORS policy
+```
 
-**Check Supabase Settings:**
-1. Go to Supabase Dashboard → Your Project
+**Fix CORS in Supabase:**
+1. Go to Supabase Dashboard → Your Project (`myoqdmtcgqejqknxgdjz`)
 2. Settings → API
-3. Under "CORS", make sure your Vercel domain is allowed
-4. Or add `*` temporarily for testing (not recommended for production)
+3. Scroll down to **"CORS"** section
+4. Add your Vercel domains (one per line):
+   ```
+   https://web-1zy5w5uxm-kirills-projects-39b715a7.vercel.app
+   https://web-eight-jet-39.vercel.app
+   https://*.vercel.app
+   ```
+   Or add `*` temporarily for testing (allows all origins - not recommended for production)
+5. Click **Save**
+6. Wait a few seconds for changes to propagate
+7. Try logging in again
 
-**Vercel domains to allow:**
-- `https://web-eight-jet-39.vercel.app`
-- `https://web-[your-project].vercel.app`
-- `https://[your-custom-domain].com` (if you have one)
+**Important:** Vercel uses preview URLs with random hashes. To allow all preview deployments, use:
+- `https://*.vercel.app` (allows all Vercel preview URLs)
+- Or add your production domain specifically
 
 ### 3. Verify Environment Variables Are Set
 
