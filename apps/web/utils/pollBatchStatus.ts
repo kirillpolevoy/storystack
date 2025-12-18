@@ -218,7 +218,9 @@ async function pollBatch(batchId: string): Promise<void> {
       // Trigger a refresh of assets to show updated tags
       // Dispatch custom event that components can listen to
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('batchCompleted', { detail: { batchId } }))
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('batchCompleted', { detail: { batchId } }))
+        }
       }
     } else if (result.error) {
       // Edge function returned an error

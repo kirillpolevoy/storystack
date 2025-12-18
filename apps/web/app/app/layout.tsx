@@ -2,6 +2,9 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { Sidebar } from '@/components/app/Sidebar'
 
+// Force dynamic rendering for all app routes
+export const dynamic = 'force-dynamic'
+
 export default async function AppLayout({
   children,
 }: {

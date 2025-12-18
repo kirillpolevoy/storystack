@@ -134,16 +134,14 @@ export function AssetDetailPanel({
   }, [open, completedRetaggingAssetIds, asset.tags, asset.id, queryClient])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    
     const checkMobile = () => {
-      if (typeof window !== 'undefined') {
-        setIsMobile(window.innerWidth < 768)
-      }
+      setIsMobile(window.innerWidth < 768)
     }
     checkMobile()
-    if (typeof window !== 'undefined') {
-      window.addEventListener('resize', checkMobile)
-      return () => window.removeEventListener('resize', checkMobile)
-    }
+    window.addEventListener('resize', checkMobile)
+    return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
   // Keyboard navigation
@@ -168,10 +166,10 @@ export function AssetDetailPanel({
       }
     }
 
-    if (typeof window !== 'undefined') {
-      window.addEventListener('keydown', handleKeyDown)
-      return () => window.removeEventListener('keydown', handleKeyDown)
-    }
+    if (typeof window === 'undefined') return
+    
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [open, canNavigatePrevious, canNavigateNext, onNavigatePrevious, onNavigateNext, onClose])
 
   const handleAddTag = (tagToAdd?: string) => {

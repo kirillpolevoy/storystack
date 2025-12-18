@@ -1,8 +1,5 @@
 'use client'
 
-// Force dynamic rendering to avoid SSR issues with window object
-export const dynamic = 'force-dynamic'
-
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useAssets, AssetViewFilter } from '@/hooks/useAssets'
 import { useAvailableTags } from '@/hooks/useAvailableTags'
@@ -26,6 +23,12 @@ import { createClient } from '@/lib/supabase/client'
 import { initializeBatchPolling, stopBatchPolling, addBatchToPoll, startBatchPolling } from '@/utils/pollBatchStatus'
 
 export default function LibraryPage() {
+  const [mounted, setMounted] = useState(false)
+  
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+  
   const [viewFilter, setViewFilter] = useState<AssetViewFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
@@ -273,8 +276,10 @@ export default function LibraryPage() {
     }
   }, [pendingBulkRetagAssets, supabase, queryClient, refetch])
   
-  // Initialize batch polling on mount
+  // Initialize batch polling on mount (only on client)
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    
     console.log('[LibraryPage] Initializing batch polling...')
     initializeBatchPolling()
 
@@ -286,16 +291,12 @@ export default function LibraryPage() {
       refetch()
     }
 
-    if (typeof window !== 'undefined') {
-      window.addEventListener('batchCompleted', handleBatchCompleted as EventListener)
-    }
+    window.addEventListener('batchCompleted', handleBatchCompleted as EventListener)
 
     return () => {
       console.log('[LibraryPage] Cleaning up batch polling...')
       stopBatchPolling()
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('batchCompleted', handleBatchCompleted as EventListener)
-      }
+      window.removeEventListener('batchCompleted', handleBatchCompleted as EventListener)
     }
   }, [queryClient, refetch])
 
@@ -543,6 +544,11 @@ export default function LibraryPage() {
   }, [handleClearSelection])
 
   const isEmpty = !isLoading && filteredAssets.length === 0
+
+  // Prevent SSR issues - only render on client
+  if (!mounted) {
+    return null
+  }
 
   return (
     <div className="flex h-screen flex-col bg-white">
