@@ -8,18 +8,25 @@ import { createClient } from '@/lib/supabase/server'
 export const dynamic = 'force-dynamic'
 
 export default async function LoginPage() {
-  try {
-    const supabase = await createClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+  // Check environment variables first
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    console.error('[LoginPage] Missing Supabase environment variables')
+    // Still show login page even if env vars are missing
+    // The client-side components will handle the error
+  } else {
+    try {
+      const supabase = await createClient()
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
 
-    if (user) {
-      redirect('/app/library')
+      if (user) {
+        redirect('/app/library')
+      }
+    } catch (error) {
+      // If there's an error checking auth, still show login page
+      console.error('[LoginPage] Error checking auth:', error)
     }
-  } catch (error) {
-    // If there's an error checking auth, still show login page
-    console.error('[LoginPage] Error checking auth:', error)
   }
 
   return (
