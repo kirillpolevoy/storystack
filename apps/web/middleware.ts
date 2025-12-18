@@ -2,10 +2,14 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { updateSession } from './lib/supabase/middleware'
 
 export async function middleware(request: NextRequest) {
+  console.log(`[Middleware] Top-level - Path: ${request.nextUrl.pathname}, Method: ${request.method}`)
   try {
-    return await updateSession(request)
+    const response = await updateSession(request)
+    console.log(`[Middleware] Top-level - Response status: ${response.status}, Redirect: ${response.headers.get('location') || 'none'}`)
+    return response
   } catch (error) {
     console.error('[Middleware] Top-level error:', error)
+    console.error('[Middleware] Top-level error pathname:', request.nextUrl.pathname)
     // Return a response to prevent middleware failure
     return NextResponse.next({ request })
   }
