@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     siteName: 'StoryStack',
     images: [
       {
-        url: '/og-image.png', // You'll need to add this image
+        url: '/logo.png',
         width: 1200,
         height: 630,
         alt: 'StoryStack - Asset and Content Management',
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: 'StoryStack',
     description: 'Centralized hub for asset and content management',
-    images: ['/og-image.png'],
+    images: ['/logo.png'],
   },
   robots: {
     index: true,
