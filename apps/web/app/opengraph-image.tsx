@@ -18,7 +18,7 @@ export default async function Image() {
     (
       <div
         style={{
-          background: 'linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%)',
+          background: 'linear-gradient(135deg, #f9fafb 0%, #ffffff 100%)',
           width: '100%',
           height: '100%',
           display: 'flex',
@@ -36,22 +36,23 @@ export default async function Image() {
             gap: '24px',
           }}
         >
-          {/* Logo/Icon placeholder - using text for now */}
+          {/* Logo/Icon placeholder - using app accent color (gold) */}
           <div
             style={{
               width: '120px',
               height: '120px',
               borderRadius: '24px',
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              background: 'linear-gradient(135deg, #b38f5b 0%, #c2a073 100%)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               fontSize: '64px',
               fontWeight: 'bold',
               color: 'white',
+              boxShadow: '0 10px 15px -3px rgba(179, 143, 91, 0.15), 0 0 40px rgba(179, 143, 91, 0.1)',
             }}
           >
-            SS
+            S
           </div>
           
           {/* Title */}
@@ -59,7 +60,7 @@ export default async function Image() {
             style={{
               fontSize: '72px',
               fontWeight: 'bold',
-              color: 'white',
+              color: '#111827',
               margin: 0,
               letterSpacing: '-0.02em',
             }}
@@ -71,7 +72,7 @@ export default async function Image() {
           <p
             style={{
               fontSize: '28px',
-              color: '#a0a0a0',
+              color: '#6b7280',
               margin: 0,
               fontWeight: '400',
             }}

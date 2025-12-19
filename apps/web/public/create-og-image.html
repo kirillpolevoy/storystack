@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create OG Image - StoryStack</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            margin-top: 0;
+        }
+        .preview {
+            width: 1200px;
+            height: 630px;
+            background: linear-gradient(135deg, #f9fafb 0%, #ffffff 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 24px;
+            margin: 20px 0;
+            border: 2px solid #e5e7eb;
+            position: relative;
+        }
+        .logo-placeholder {
+            width: 120px;
+            height: 120px;
+            border-radius: 24px;
+            background: linear-gradient(135deg, #b38f5b 0%, #c2a073 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 64px;
+            font-weight: bold;
+            color: white;
+            box-shadow: 0 10px 15px -3px rgba(179, 143, 91, 0.15), 0 0 40px rgba(179, 143, 91, 0.1);
+        }
+        .title {
+            font-size: 72px;
+            font-weight: bold;
+            color: #111827;
+            margin: 0;
+            letter-spacing: -0.02em;
+        }
+        .subtitle {
+            font-size: 28px;
+            color: #6b7280;
+            margin: 0;
+            font-weight: 400;
+        }
+        .instructions {
+            background: #f9f9f9;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        .instructions ol {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .instructions li {
+            margin: 8px 0;
+        }
+        .button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        .button:hover {
+            background: #5568d3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Create Open Graph Image for StoryStack</h1>
+        <p>This tool helps you create a 1200x630 Open Graph image. Right-click the preview below and save it, or use the download button.</p>
+        
+        <div class="preview" id="preview">
+            <div class="logo-placeholder">S</div>
+            <h1 class="title">StoryStack</h1>
+            <p class="subtitle">storystackstudios.com</p>
+        </div>
+        
+        <button class="button" onclick="downloadImage()">Download as PNG</button>
+        
+        <div class="instructions">
+            <h3>Instructions:</h3>
+            <ol>
+                <li>Click "Download as PNG" or right-click the preview and "Save Image As"</li>
+                <li>Save the image as <code>og-image.png</code> in the <code>apps/web/public/</code> folder</li>
+                <li>The image should be exactly 1200x630 pixels</li>
+                <li>After saving, commit and push the file to your repository</li>
+            </ol>
+            <p><strong>Alternative:</strong> Use online tools like <a href="https://www.canva.com/" target="_blank">Canva</a> or <a href="https://og-image.vercel.app/" target="_blank">OG Image Generator</a> to create a custom design.</p>
+        </div>
+    </div>
+
+    <script>
+        function downloadImage() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1200;
+            canvas.height = 630;
+            const ctx = canvas.getContext('2d');
+            
+            // Create gradient background (light gray to white - app background)
+            const gradient = ctx.createLinearGradient(0, 0, 1200, 630);
+            gradient.addColorStop(0, '#f9fafb');
+            gradient.addColorStop(1, '#ffffff');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 1200, 630);
+            
+            // Draw logo placeholder with gold gradient (app accent color)
+            const logoGradient = ctx.createLinearGradient(540, 200, 660, 320);
+            logoGradient.addColorStop(0, '#b38f5b');
+            logoGradient.addColorStop(1, '#c2a073');
+            ctx.fillStyle = logoGradient;
+            ctx.beginPath();
+            ctx.roundRect(540, 200, 120, 120, 24);
+            ctx.fill();
+            
+            // Add subtle shadow to logo
+            ctx.shadowColor = 'rgba(179, 143, 91, 0.3)';
+            ctx.shadowBlur = 20;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 10;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            
+            // Draw "S" text
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 64px system-ui';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('S', 600, 260);
+            
+            // Draw title (dark gray - app foreground color)
+            ctx.fillStyle = '#111827';
+            ctx.font = 'bold 72px system-ui';
+            ctx.fillText('StoryStack', 600, 380);
+            
+            // Draw subtitle (medium gray)
+            ctx.fillStyle = '#6b7280';
+            ctx.font = '400 28px system-ui';
+            ctx.fillText('storystackstudios.com', 600, 440);
+            
+            // Download
+            canvas.toBlob(function(blob) {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'og-image.png';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            });
+        }
+        
+        // Polyfill for roundRect if needed
+        if (!CanvasRenderingContext2D.prototype.roundRect) {
+            CanvasRenderingContext2D.prototype.roundRect = function(x, y, width, height, radius) {
+                this.beginPath();
+                this.moveTo(x + radius, y);
+                this.lineTo(x + width - radius, y);
+                this.quadraticCurveTo(x + width, y, x + width, y + radius);
+                this.lineTo(x + width, y + height - radius);
+                this.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+                this.lineTo(x + radius, y + height);
+                this.quadraticCurveTo(x, y + height, x, y + height - radius);
+                this.lineTo(x, y + radius);
+                this.quadraticCurveTo(x, y, x + radius, y);
+                this.closePath();
+            };
+        }
+    </script>
+</body>
+</html>
+
