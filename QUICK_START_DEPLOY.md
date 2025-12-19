@@ -67,3 +67,4 @@ vercel --prod
 
 Check `VERCEL_DEPLOYMENT.md` for detailed troubleshooting and configuration options.
 
+

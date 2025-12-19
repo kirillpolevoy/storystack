@@ -7,3 +7,4 @@ export async function POST() {
   return NextResponse.redirect(new URL('/login', process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'))
 }
 
+

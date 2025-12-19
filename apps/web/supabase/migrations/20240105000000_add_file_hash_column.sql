@@ -10,3 +10,4 @@ CREATE INDEX IF NOT EXISTS idx_assets_user_file_hash ON assets(user_id, file_has
 
 COMMENT ON COLUMN assets.file_hash IS 'SHA-256 hash of the image file for duplicate detection';
 
+

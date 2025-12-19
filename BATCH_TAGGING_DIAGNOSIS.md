@@ -94,3 +94,4 @@ Show user feedback when batch tagging fails, allow manual retry.
 4. Add retry logic in frontend for 404 errors
 5. Add user feedback for failures
 
+

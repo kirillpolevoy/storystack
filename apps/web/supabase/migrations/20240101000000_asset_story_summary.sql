@@ -18,3 +18,4 @@ CREATE INDEX IF NOT EXISTS idx_asset_story_summary_asset_id ON story_assets(asse
 -- Note: Views inherit RLS from underlying tables, but we need to ensure the view is accessible
 COMMENT ON VIEW asset_story_summary IS 'Provides aggregated story membership data per asset';
 
+

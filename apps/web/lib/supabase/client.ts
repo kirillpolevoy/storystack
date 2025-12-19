@@ -13,6 +13,9 @@ export function createClient() {
   }
 
   console.log('[createClient] Creating Supabase client with URL:', supabaseUrl.substring(0, 30) + '...')
+  console.log('[createClient] Full Supabase URL:', supabaseUrl)
+  console.log('[createClient] Expected format: https://[project-ref].supabase.co')
+  console.log('[createClient] Current origin:', typeof window !== 'undefined' ? window.location.origin : 'server')
 
   return createBrowserClient(supabaseUrl, supabaseAnonKey)
 }

@@ -10,3 +10,4 @@ WHERE location IS NOT NULL;
 -- Add comment
 COMMENT ON COLUMN assets.location IS 'City name where the photo was taken, extracted from EXIF metadata or manually entered by user';
 
+

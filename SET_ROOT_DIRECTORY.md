@@ -57,3 +57,4 @@ Detected Next.js version: 14.2.35
 
 If you still see "No Next.js version detected", the Root Directory is not set correctly.
 
+

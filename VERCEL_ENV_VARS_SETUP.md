@@ -65,3 +65,4 @@ If you see those errors, the variables aren't set correctly or you need to redep
 - ❌ Never use the `service_role` key in frontend code
 - ❌ Never commit these values to git (use `.env.local` locally)
 
+

@@ -9,3 +9,4 @@ CREATE INDEX IF NOT EXISTS idx_assets_original_filename ON assets(original_filen
 
 COMMENT ON COLUMN assets.original_filename IS 'Original filename from upload (before renaming for storage). Used for display purposes.';
 
+

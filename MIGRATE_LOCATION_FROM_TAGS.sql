@@ -79,3 +79,4 @@ SELECT
   COUNT(*) AS total_assets
 FROM assets;
 
+

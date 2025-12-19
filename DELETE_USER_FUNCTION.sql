@@ -34,3 +34,4 @@ GRANT EXECUTE ON FUNCTION delete_auth_user(UUID) TO authenticated;
 
 
 
+

@@ -10,3 +10,4 @@ CREATE INDEX IF NOT EXISTS idx_assets_date_taken ON assets(date_taken);
 -- Add comment
 COMMENT ON COLUMN assets.date_taken IS 'Date when the photo was taken (from EXIF metadata). Falls back to created_at if not available.';
 
+
