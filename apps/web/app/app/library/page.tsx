@@ -55,6 +55,10 @@ export default function LibraryPage() {
   const [showDeleteSuccess, setShowDeleteSuccess] = useState(false)
   const [deletedAssetsCount, setDeletedAssetsCount] = useState(0)
   const [deletedAssetsForUndo, setDeletedAssetsForUndo] = useState<Asset[]>([])
+  
+  // Bulk delete last X photos state
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false)
+  const [bulkDeleteCount, setBulkDeleteCount] = useState<string>('10')
 
   const { data: tagsData } = useAvailableTags()
   const availableTags = tagsData || []
@@ -285,10 +289,14 @@ export default function LibraryPage() {
 
     // Listen for batch completion events
     const handleBatchCompleted = (event: CustomEvent) => {
-      console.log('[LibraryPage] Batch completed event received:', event.detail)
-      // Refresh assets to show updated tags
+      console.log('[LibraryPage] 📢 Batch completed event received:', event.detail)
+      // Refresh assets to show updated tags - use both invalidation and refetch
       queryClient.invalidateQueries({ queryKey: ['assets'] })
-      refetch()
+      // Add a small delay to ensure database is updated
+      setTimeout(() => {
+        console.log('[LibraryPage] 🔄 Refreshing assets after batch completion...')
+        refetch()
+      }, 500)
     }
 
     window.addEventListener('batchCompleted', handleBatchCompleted as EventListener)
@@ -380,6 +388,107 @@ export default function LibraryPage() {
     if (selectedAssetIds.size === 0) return
     setShowDeleteConfirmation(true)
   }, [selectedAssetIds.size])
+
+  const handleBulkDeleteLastX = useCallback(() => {
+    setShowBulkDeleteModal(true)
+  }, [])
+
+  const confirmBulkDeleteLastX = useCallback(async () => {
+    const count = parseInt(bulkDeleteCount, 10)
+    if (isNaN(count) || count <= 0) {
+      alert('Please enter a valid number greater than 0')
+      return
+    }
+
+    if (count > filteredAssets.length) {
+      alert(`You only have ${filteredAssets.length} photos. Please enter a number less than or equal to ${filteredAssets.length}`)
+      return
+    }
+
+    setShowBulkDeleteModal(false)
+    
+    // Get the most recent X photos (they're already sorted by created_at descending)
+    const assetsToDelete = filteredAssets.slice(0, count)
+    const assetIds = assetsToDelete.map((a) => a.id)
+    
+    if (assetIds.length === 0) {
+      return
+    }
+
+    // Show confirmation
+    const confirmed = window.confirm(
+      `Are you sure you want to delete the last ${count} photo${count === 1 ? '' : 's'}? This action cannot be undone.`
+    )
+    
+    if (!confirmed) {
+      return
+    }
+
+    setIsDeleting(true)
+    setDeleteProgress({ current: 0, total: count })
+    
+    try {
+      // Optimistic update: Remove from UI immediately
+      queryClient.setQueryData(['assets'], (oldData: any) => {
+        if (!oldData?.pages) return oldData
+        
+        const assetIdsSet = new Set(assetIds)
+        return {
+          ...oldData,
+          pages: oldData.pages.map((page: any) => ({
+            ...page,
+            assets: page.assets.filter((asset: Asset) => !assetIdsSet.has(asset.id)),
+            totalCount: Math.max(0, (page.totalCount || page.assets.length) - count),
+          })),
+        }
+      })
+      
+      // Store for undo
+      setDeletedAssetsForUndo(assetsToDelete)
+      setTimeout(() => {
+        setDeletedAssetsForUndo([])
+      }, 5000)
+      
+      // Delete assets with progress tracking
+      let completed = 0
+      const deletePromises = assetIds.map(async (id, index) => {
+        try {
+          await deleteAsset.mutateAsync(id)
+          completed++
+          setDeleteProgress({ current: completed, total: count })
+        } catch (error) {
+          console.error(`[LibraryPage] Failed to delete asset ${id}:`, error)
+          throw error
+        }
+      })
+      
+      await Promise.all(deletePromises)
+      
+      // Show success notification
+      setDeletedAssetsCount(count)
+      setShowDeleteSuccess(true)
+      
+      // Auto-dismiss success notification after 3 seconds
+      setTimeout(() => {
+        setShowDeleteSuccess(false)
+      }, 3000)
+      
+      // Invalidate queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ['assets'] })
+      
+    } catch (error) {
+      console.error('[LibraryPage] Bulk delete last X failed:', error)
+      
+      // Rollback optimistic update on error
+      queryClient.invalidateQueries({ queryKey: ['assets'] })
+      
+      alert('Failed to delete some assets. Please try again.')
+    } finally {
+      setIsDeleting(false)
+      setDeleteProgress({ current: 0, total: 0 })
+      setBulkDeleteCount('10') // Reset to default
+    }
+  }, [bulkDeleteCount, filteredAssets, deleteAsset, queryClient])
 
   const confirmBulkDelete = useCallback(async () => {
     if (selectedAssetIds.size === 0) return
@@ -568,6 +677,14 @@ export default function LibraryPage() {
               >
                 <Plus className="mr-2 h-4 w-4" />
                 Add to Story
+              </Button>
+              <Button
+                onClick={handleBulkDeleteLastX}
+                variant="outline"
+                className="h-9 px-4 text-sm font-medium border-gray-300 text-gray-700 hover:bg-gray-50"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete Last X
               </Button>
               <Button
                 onClick={() => setShowUploadDialog(true)}
@@ -881,6 +998,61 @@ export default function LibraryPage() {
                 className="h-full rounded-full bg-red-600 transition-all duration-300"
                 style={{ width: `${(deleteProgress.current / deleteProgress.total) * 100}%` }}
               />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Last X Modal */}
+      {showBulkDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="mx-4 w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex flex-col items-center">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-50">
+                <Trash2 className="h-8 w-8 text-red-600" />
+              </div>
+              <h3 className="mb-2 text-center text-2xl font-semibold text-gray-900">
+                Delete Last X Photos
+              </h3>
+              <p className="mb-4 text-center text-sm leading-relaxed text-gray-600">
+                Enter how many of the most recent photos you want to delete.
+              </p>
+              <div className="w-full">
+                <label className="mb-2 block text-sm font-medium text-gray-700">
+                  Number of photos to delete
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max={filteredAssets.length}
+                  value={bulkDeleteCount}
+                  onChange={(e) => setBulkDeleteCount(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-4 py-2 text-center text-lg font-semibold focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+                  placeholder="10"
+                  autoFocus
+                />
+                <p className="mt-2 text-center text-xs text-gray-500">
+                  You have {filteredAssets.length} photo{filteredAssets.length === 1 ? '' : 's'} total
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex gap-3">
+              <Button
+                onClick={() => {
+                  setShowBulkDeleteModal(false)
+                  setBulkDeleteCount('10')
+                }}
+                variant="outline"
+                className="flex-1 border-gray-300"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={confirmBulkDeleteLastX}
+                className="flex-1 bg-red-600 hover:bg-red-700"
+              >
+                Delete
+              </Button>
             </div>
           </div>
         </div>

@@ -856,747 +856,69 @@ async function getSuggestedTagsBatch(
     return [];
   }
   
-  console.log(`[auto_tag_asset] Processing batch of ${requests.length} images`);
+  console.log(`[auto_tag_asset] Processing batch of ${requests.length} images individually (for consistency with one-off tagging)`);
   console.log('[auto_tag_asset] Tag vocabulary for GPT-4:', tagVocabulary);
   
-  // Prepare all images (using A2 versions for AI tagging)
-  // Use Promise.allSettled so individual failures don't kill the entire batch
-  console.log(`[auto_tag_asset] 🔄 Preparing ${requests.length} images for OpenAI...`);
-  const imagePromises = requests.map((req, idx) => {
-    console.log(`[auto_tag_asset]   Preparing image ${idx + 1}/${requests.length}: ${req.assetId}`);
-    return ensureSupportedImageFormat(req.imageUrl, supabaseClient)
-      .then(url => ({ success: true, url, index: idx, assetId: req.assetId }))
-      .catch((error) => {
-        console.error(`[auto_tag_asset] ❌ Failed to prepare image ${idx + 1} (${req.assetId}):`, error);
-        console.error(`[auto_tag_asset] Error message:`, error instanceof Error ? error.message : String(error));
-        console.error(`[auto_tag_asset] Error stack:`, error instanceof Error ? error.stack : 'N/A');
-        return { success: false, error, index: idx, assetId: req.assetId };
-      });
+  // Process each image individually using getSuggestedTags for consistency
+  // This ensures each image is analyzed independently without cross-image context
+  console.log(`[auto_tag_asset] 🔄 Processing ${requests.length} images individually...`);
+  
+  const processingPromises = requests.map(async (req, idx) => {
+    console.log(`[auto_tag_asset]   Processing image ${idx + 1}/${requests.length}: ${req.assetId}`);
+    try {
+      const tags = await getSuggestedTags(req, apiKey, tagVocabulary, supabaseClient);
+      return { 
+        success: true, 
+        assetId: req.assetId, 
+        tags,
+        index: idx 
+      };
+    } catch (error) {
+      console.error(`[auto_tag_asset] ❌ Failed to process image ${idx + 1} (${req.assetId}):`, error);
+      console.error(`[auto_tag_asset] Error message:`, error instanceof Error ? error.message : String(error));
+      console.error(`[auto_tag_asset] Error stack:`, error instanceof Error ? error.stack : 'N/A');
+      return { 
+        success: false, 
+        assetId: req.assetId, 
+        tags: [] as string[],
+        index: idx,
+        error 
+      };
+    }
   });
   
-  const preparationResults = await Promise.allSettled(imagePromises);
+  const processingResults = await Promise.allSettled(processingPromises);
   
-  // Process results - separate successful and failed
-  const successful: Array<{ url: string; index: number; assetId: string }> = [];
-  const failed: Array<{ index: number; assetId: string; error: any }> = [];
+  // Process results - map to TagResult format
+  const results: TagResult[] = [];
   
-  preparationResults.forEach((result, idx) => {
+  processingResults.forEach((result, idx) => {
     if (result.status === 'fulfilled') {
-      const prepResult = result.value;
-      if (prepResult.success) {
-        successful.push({ url: prepResult.url, index: prepResult.index, assetId: prepResult.assetId });
+      const processResult = result.value;
+      results.push({
+        assetId: processResult.assetId,
+        tags: processResult.tags,
+      });
+      
+      if (processResult.success) {
+        console.log(`[auto_tag_asset] ✅ Image ${idx + 1} (${processResult.assetId}): [${processResult.tags.join(', ')}]`);
       } else {
-        failed.push({ index: prepResult.index, assetId: prepResult.assetId, error: prepResult.error });
+        console.warn(`[auto_tag_asset] ⚠️  Image ${idx + 1} (${processResult.assetId}): Failed - empty tags`);
       }
     } else {
       // Promise.allSettled shouldn't have rejected promises, but handle it anyway
-      failed.push({ index: idx, assetId: requests[idx].assetId, error: result.reason });
+      console.error(`[auto_tag_asset] ❌ Image ${idx + 1} (${requests[idx].assetId}): Promise rejected:`, result.reason);
+      results.push({
+        assetId: requests[idx].assetId,
+        tags: [],
+      });
     }
   });
   
-  console.log(`[auto_tag_asset] ✅ Prepared ${successful.length}/${requests.length} images successfully`);
-  if (failed.length > 0) {
-    console.warn(`[auto_tag_asset] ⚠️  ${failed.length} images failed to prepare:`, failed.map(f => f.assetId));
-    failed.forEach(f => {
-      console.warn(`[auto_tag_asset]   - Asset ${f.assetId} (index ${f.index}): ${f.error instanceof Error ? f.error.message : String(f.error)}`);
-    });
-  }
+  const successCount = results.filter(r => r.tags.length > 0).length;
+  console.log(`[auto_tag_asset] ✅✅✅ Batch processing complete: ${successCount}/${requests.length} succeeded ✅✅✅`);
   
-  // If ALL images failed, throw error with detailed information
-  if (successful.length === 0) {
-    console.error(`[auto_tag_asset] ❌❌❌ ALL IMAGES FAILED PREPARATION ❌❌❌`);
-    console.error(`[auto_tag_asset] Total requests: ${requests.length}`);
-    console.error(`[auto_tag_asset] Failed images:`, failed.map(f => ({
-      assetId: f.assetId,
-      index: f.index,
-      error: f.error instanceof Error ? f.error.message : String(f.error),
-    })));
-    
-    // Provide more detailed error message
-    const errorMessages = failed.map(f => 
-      `Asset ${f.assetId}: ${f.error instanceof Error ? f.error.message : String(f.error)}`
-    ).join('; ');
-    
-    throw new Error(`All ${requests.length} images failed preparation. Errors: ${errorMessages}`);
-  }
-  
-  // If some failed, we'll process only the successful ones and return empty tags for failed ones
-  // Sort successful by original index to maintain order
-  successful.sort((a, b) => a.index - b.index);
-  const supportedImageUrls = successful.map(s => s.url);
-  const successfulIndices = new Set(successful.map(s => s.index));
-  
-  console.log(`[auto_tag_asset] ✅✅✅ Processing ${successful.length} successful images (${failed.length} failed) ✅✅✅`);
-  
-  // Build content array with text prompt and all images
-  // Only include successful images in the OpenAI request
-  const content: any[] = [
-    {
-      type: 'text',
-      text: `Analyze ${successful.length} photos objectively and return tags for each photo from this vocabulary: ${tagVocabulary.join(', ')}.
-
-AVAILABLE TAGS (you MUST use only these tags): ${JSON.stringify(tagVocabulary)}.
-
-CRITICAL: Only tag what you ACTUALLY see in each image. Do NOT default to "Product" unless the image clearly shows a product photo.
-
-PHOTO TYPE ANALYSIS:
-1. Look at each image carefully - what does it actually show?
-2. Is there a person visible? → Use "Lifestyle" tag
-3. Is it just jewelry on a plain background? → Use "Product" tag
-4. What jewelry is visible? (Necklace, Earrings, Rings, Bracelets)
-5. What style/aesthetic? (Bright, Moody, Studio, Onyx, etc.)
-
-TAGGING GUIDELINES:
-- Person wearing jewelry → ["Lifestyle", "Necklace", ...]
-- Product shot on plain background → ["Product", "Necklace", ...]
-- Studio/lifestyle scene → ["Lifestyle", "Necklace", "Studio", ...]
-- Only use "Product" if it's clearly a product photo, not a lifestyle photo
-
-DO NOT:
-- Default to "Product" if unsure
-- Assume it's a product photo
-- Add tags you cannot see
-
-Return tags for each image in order (image 1, image 2, etc.). Each image should have 1-5 tags that accurately reflect what is in that specific image.`,
-    },
-  ];
-  
-  // Add only successful images to the content array and capture their sizes
-  const imageSizes: Array<{ index: number; sizeKB: number; sizeMB: number; isA2: boolean; type: string; assetId: string }> = [];
-  
-  for (let i = 0; i < supportedImageUrls.length; i++) {
-    const imageUrl = supportedImageUrls[i];
-    const originalIndex = successful[i].index;
-    const assetId = successful[i].assetId;
-    const isA2 = imageUrl.includes('/ai/');
-    const isBase64 = imageUrl.startsWith('data:');
-    
-    // Get image size
-    let sizeKB = 0;
-    let sizeMB = 0;
-    
-    if (isBase64) {
-      // Calculate size from base64: base64 is ~33% larger than binary
-      const base64Data = imageUrl.split(',')[1] || '';
-      const binarySize = (base64Data.length * 3) / 4;
-      sizeKB = binarySize / 1024;
-      sizeMB = sizeKB / 1024;
-    } else {
-      // Fetch image to get actual size
-      try {
-        const headResponse = await fetch(imageUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
-        if (headResponse.ok) {
-          const contentLength = headResponse.headers.get('content-length');
-          if (contentLength) {
-            sizeKB = parseInt(contentLength) / 1024;
-            sizeMB = sizeKB / 1024;
-            console.log(`[auto_tag_asset] 📏 Image ${i + 1} size from HEAD: ${sizeKB.toFixed(0)} KB (${sizeMB.toFixed(2)} MB)`);
-          } else {
-            console.warn(`[auto_tag_asset] ⚠️  No content-length header for image ${i + 1}, size unknown`);
-          }
-        } else {
-          console.warn(`[auto_tag_asset] ⚠️  HEAD request failed for image ${i + 1}: ${headResponse.status}`);
-        }
-      } catch (sizeError) {
-        console.warn(`[auto_tag_asset] ⚠️  Could not get size for image ${i + 1}:`, sizeError);
-        // If we can't get size, assume it might be large and convert to base64 to be safe
-        console.warn(`[auto_tag_asset] ⚠️  Will convert to base64 as safety measure since size is unknown`);
-        sizeMB = 999; // Force conversion to base64
-      }
-    }
-    
-    console.log(`[auto_tag_asset] 📤 Adding image ${i + 1} (original index ${originalIndex + 1}, asset ${assetId}) to OpenAI request:`);
-    console.log(`[auto_tag_asset]    URL: ${imageUrl.substring(0, 100)}...`);
-    console.log(`[auto_tag_asset]    Is A2? ${isA2 ? 'YES ✅' : 'NO ⚠️'}`);
-    console.log(`[auto_tag_asset]    Type: ${isBase64 ? 'base64' : 'URL'}`);
-    console.log(`[auto_tag_asset]    Size: ${sizeKB > 0 ? `${sizeKB.toFixed(0)} KB (${sizeMB.toFixed(2)} MB)` : 'unknown'}`);
-    console.log(`[auto_tag_asset]    Target range: ${sizeKB > 0 ? (sizeKB >= 200 && sizeKB <= 500 ? '✅ IN RANGE' : '⚠️ OUT OF RANGE') : 'unknown'}`);
-    
-    // Final size check before adding to content - convert to base64 if still too large
-    // This is a safety net in case ensureSupportedImageFormat didn't catch it
-    const OPENAI_MAX_URL_SIZE_MB = 1.5;
-    let finalImageUrl = imageUrl;
-    let finalType = isBase64 ? 'base64' : 'URL';
-    let finalIsA2 = isA2;
-    
-    if (!isBase64 && sizeMB && sizeMB > OPENAI_MAX_URL_SIZE_MB) {
-      console.warn(`[auto_tag_asset] ⚠️⚠️⚠️ CRITICAL: Image ${i + 1} is ${sizeMB.toFixed(2)} MB, exceeds ${OPENAI_MAX_URL_SIZE_MB} MB limit!`);
-      console.warn(`[auto_tag_asset] ⚠️  Converting to base64 as final safety check...`);
-      try {
-        finalImageUrl = await convertToBase64(imageUrl);
-        finalType = 'base64';
-        // Recalculate size for base64
-        const base64Data = finalImageUrl.split(',')[1] || '';
-        const binarySize = (base64Data.length * 3) / 4;
-        sizeKB = binarySize / 1024;
-        sizeMB = sizeKB / 1024;
-        console.log(`[auto_tag_asset] ✅ Image ${i + 1} converted to base64, new size: ${sizeMB.toFixed(2)} MB`);
-      } catch (base64Error) {
-        console.error(`[auto_tag_asset] ❌❌❌ Failed to convert image ${i + 1} to base64 ❌❌❌`);
-        console.error(`[auto_tag_asset] Error:`, base64Error);
-        throw new Error(`Failed to convert oversized image ${i + 1} to base64: ${base64Error instanceof Error ? base64Error.message : String(base64Error)}`);
-      }
-    } else if (!isBase64 && (!sizeMB || sizeMB === 0)) {
-      // If we couldn't get size, convert to base64 to be safe
-      console.warn(`[auto_tag_asset] ⚠️  Image ${i + 1} size unknown, converting to base64 for safety...`);
-      try {
-        finalImageUrl = await convertToBase64(imageUrl);
-        finalType = 'base64';
-        const base64Data = finalImageUrl.split(',')[1] || '';
-        const binarySize = (base64Data.length * 3) / 4;
-        sizeKB = binarySize / 1024;
-        sizeMB = sizeKB / 1024;
-        console.log(`[auto_tag_asset] ✅ Image ${i + 1} converted to base64 (size was unknown), new size: ${sizeMB.toFixed(2)} MB`);
-      } catch (base64Error) {
-        console.error(`[auto_tag_asset] ❌ Failed to convert image ${i + 1} to base64:`, base64Error);
-        // Continue with URL if base64 conversion fails
-      }
-    }
-    
-    // Update imageSizes with final values (after potential base64 conversion)
-    imageSizes.push({ index: originalIndex + 1, sizeKB, sizeMB, isA2: finalIsA2, type: finalType, assetId });
-    
-    content.push({
-      type: 'image_url',
-      image_url: {
-        url: finalImageUrl,
-      },
-    });
-    
-    console.log(`[auto_tag_asset] ✅ Image ${i + 1} added to content array (type: ${finalType}, size: ${sizeMB > 0 ? `${sizeMB.toFixed(2)} MB` : 'unknown'})`);
-  }
-  
-  // Summary of images being sent
-  const a2Count = supportedImageUrls.filter(url => url.includes('/ai/')).length;
-  const totalSizeKB = imageSizes.reduce((sum, img) => sum + img.sizeKB, 0);
-  const avgSizeKB = imageSizes.length > 0 ? totalSizeKB / imageSizes.length : 0;
-  
-  console.log(`[auto_tag_asset] 📊 Summary: ${a2Count} of ${supportedImageUrls.length} images are A2 versions`);
-  console.log(`[auto_tag_asset] 📊 Total size: ${totalSizeKB > 0 ? `${totalSizeKB.toFixed(0)} KB (${(totalSizeKB / 1024).toFixed(2)} MB)` : 'unknown'}`);
-  console.log(`[auto_tag_asset] 📊 Average size: ${avgSizeKB > 0 ? `${avgSizeKB.toFixed(0)} KB` : 'unknown'} per image`);
-  
-  // Verify images are in content array
-  const imageItems = content.filter(item => item.type === 'image_url');
-  console.log(`[auto_tag_asset] ✅ VERIFICATION: ${imageItems.length} images added to content array`);
-  console.log(`[auto_tag_asset] ✅ VERIFICATION: Content array has ${content.length} items (1 text + ${imageItems.length} images)`);
-  console.log(`[auto_tag_asset] ✅ VERIFICATION: Expected ${successful.length} successful images, got ${imageItems.length} images`);
-  console.log(`[auto_tag_asset] ✅ VERIFICATION: ${failed.length} images failed preparation and will get empty tags`);
-  
-  if (imageItems.length !== successful.length) {
-    console.error(`[auto_tag_asset] ❌ CRITICAL ERROR: Image count mismatch! Expected ${successful.length} successful images, got ${imageItems.length}`);
-    console.error(`[auto_tag_asset] Content array structure:`, JSON.stringify(content.map((item: any) => ({
-      type: item.type,
-      hasUrl: !!item.image_url?.url,
-      urlPreview: item.image_url?.url?.substring(0, 100) || 'NO URL'
-    })), null, 2));
-    throw new Error(`Image count mismatch: expected ${successful.length} successful images, got ${imageItems.length}`);
-  }
-  
-  // Verify each image has a valid URL
-  imageItems.forEach((item: any, idx: number) => {
-    if (!item.image_url?.url) {
-      console.error(`[auto_tag_asset] ❌ CRITICAL ERROR: Image ${idx + 1} is missing URL!`);
-      throw new Error(`Image ${idx + 1} is missing URL`);
-    }
-  });
-  console.log(`[auto_tag_asset] ✅ VERIFICATION: All ${imageItems.length} images have valid URLs`);
-  
-  // Verify tag vocabulary is included
-  const promptText = content.find(item => item.type === 'text')?.text || '';
-  const tagsInPrompt = tagVocabulary.every(tag => promptText.includes(tag));
-  console.log(`[auto_tag_asset] ✅ VERIFICATION: Tag vocabulary length: ${tagVocabulary.length}`);
-  console.log(`[auto_tag_asset] ✅ VERIFICATION: All tags in prompt? ${tagsInPrompt ? 'YES' : 'NO'}`);
-  console.log(`[auto_tag_asset] ✅ VERIFICATION: Tag vocabulary in prompt: ${promptText.includes(tagVocabulary.join(', ')) ? 'YES' : 'NO'}`);
-  if (!tagsInPrompt) {
-    console.error(`[auto_tag_asset] ❌ ERROR: Some tags missing from prompt!`);
-    tagVocabulary.forEach(tag => {
-      if (!promptText.includes(tag)) {
-        console.error(`[auto_tag_asset] ❌ Missing tag: ${tag}`);
-      }
-    });
-  }
-  
-  const payload = {
-    model: 'gpt-4o-mini',
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You are an expert photo analyzer for a jewelry brand. Analyze each image objectively and return tags that accurately describe what you actually see. Do NOT default to "Product" - only use it if the image is clearly a product photo. Be honest about what each image shows.',
-      },
-      {
-        role: 'user',
-        content,
-      },
-    ],
-    response_format: {
-      type: 'json_schema',
-      json_schema: {
-        name: 'batch_tag_response',
-        schema: {
-          type: 'object',
-          properties: {
-            results: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  tags: {
-                    type: 'array',
-                    items: {
-                      type: 'string',
-                      enum: tagVocabulary,
-                    },
-                    minItems: 1,
-                    maxItems: 5,
-                    description: `Array of 1-5 tags that accurately describe what is shown in the image. Must be from: ${tagVocabulary.join(', ')}`,
-                  },
-                },
-                required: ['tags'],
-                additionalProperties: false,
-              },
-              description: `Array of ${successful.length} tag results, one for each image in order.`,
-            },
-          },
-          required: ['results'],
-          additionalProperties: false,
-        },
-        strict: true,
-      },
-    },
-    temperature: 0.3,
-    max_tokens: 1000, // Increased for batch responses
-  };
-
-  let response: Response;
-  try {
-    console.log(`[auto_tag_asset] Making OpenAI batch API request for ${requests.length} images...`);
-    console.log(`[auto_tag_asset] 📋 Tag vocabulary being sent to OpenAI:`, JSON.stringify(tagVocabulary, null, 2));
-    console.log(`[auto_tag_asset] 📋 Tag vocabulary length: ${tagVocabulary.length}`);
-    console.log(`[auto_tag_asset] 📋 Number of images in content array:`, content.filter(item => item.type === 'image_url').length);
-    console.log(`[auto_tag_asset] 📋 Total content items (text + images):`, content.length);
-    
-    // Verify payload structure
-    const payloadImages = payload.messages[1].content.filter((item: any) => item.type === 'image_url').length;
-    const payloadText = payload.messages[1].content.find((item: any) => item.type === 'text')?.text || '';
-    console.log(`[auto_tag_asset] ✅ VERIFICATION: Payload has ${payloadImages} images`);
-    console.log(`[auto_tag_asset] ✅ VERIFICATION: Payload text includes tags: ${payloadText.includes(tagVocabulary.join(', ')) ? 'YES' : 'NO'}`);
-    console.log(`[auto_tag_asset] ✅ VERIFICATION: JSON schema enum has ${payload.response_format.json_schema.schema.properties.results.items.properties.tags.items.enum.length} tags`);
-    
-    if (tagVocabulary.length === 0) {
-      console.error(`[auto_tag_asset] ❌ CRITICAL ERROR: Tag vocabulary is EMPTY! Cannot proceed with tagging.`);
-      throw new Error('Tag vocabulary is empty - no tags enabled for autotagging');
-    }
-    
-    if (payloadImages === 0) {
-      console.error(`[auto_tag_asset] ❌ CRITICAL ERROR: No images in payload!`);
-      throw new Error('No images in payload');
-    }
-    
-    // Calculate payload size before sending
-    const payloadString = JSON.stringify(payload);
-    const payloadSizeKB = payloadString.length / 1024;
-    const payloadSizeMB = payloadSizeKB / 1024;
-    
-    console.log(`[auto_tag_asset] 📋 Payload size: ${payloadSizeKB.toFixed(0)} KB (${payloadSizeMB.toFixed(2)} MB)`);
-    console.log(`[auto_tag_asset] 📋 Payload preview (first 1000 chars):`, payloadString.substring(0, 1000));
-    
-    // Log actual image URLs being sent (for verification)
-    const imageUrlsInPayload = payload.messages[1].content
-      .filter((item: any) => item.type === 'image_url')
-      .map((item: any) => item.image_url?.url?.substring(0, 150) || 'MISSING URL');
-    console.log(`[auto_tag_asset] 📋 Image URLs being sent to OpenAI (${imageUrlsInPayload.length} images):`);
-    imageUrlsInPayload.forEach((url: string, idx: number) => {
-      console.log(`[auto_tag_asset]   Image ${idx + 1}: ${url}...`);
-    });
-    
-    // Verify we're actually sending the request
-    console.log(`[auto_tag_asset] 🚀🚀🚀 SENDING REQUEST TO OPENAI NOW 🚀🚀🚀`);
-    console.log(`[auto_tag_asset] 🚀 URL: ${OPENAI_API_URL}`);
-    console.log(`[auto_tag_asset] 🚀 Method: POST`);
-    console.log(`[auto_tag_asset] 🚀 Images in payload: ${payloadImages}`);
-    console.log(`[auto_tag_asset] 🚀 Total content items: ${payload.messages[1].content.length}`);
-    console.log(`[auto_tag_asset] 🚀 API Key present: ${!!apiKey}`);
-    console.log(`[auto_tag_asset] 🚀 API Key length: ${apiKey?.length || 0}`);
-    
-    const requestStartTime = Date.now();
-    try {
-      response = await fetch(OPENAI_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: payloadString,
-      });
-      const requestDuration = Date.now() - requestStartTime;
-      console.log(`[auto_tag_asset] ✅✅✅ OpenAI request completed in ${requestDuration}ms ✅✅✅`);
-      console.log(`[auto_tag_asset] ✅ Response status: ${response.status} ${response.statusText}`);
-      console.log(`[auto_tag_asset] ✅ Response ok: ${response.ok}`);
-    } catch (fetchError) {
-      const requestDuration = Date.now() - requestStartTime;
-      console.error(`[auto_tag_asset] ❌❌❌ FETCH FAILED after ${requestDuration}ms ❌❌❌`);
-      console.error(`[auto_tag_asset] Fetch error:`, fetchError);
-      console.error(`[auto_tag_asset] Fetch error message:`, fetchError instanceof Error ? fetchError.message : String(fetchError));
-      console.error(`[auto_tag_asset] Fetch error stack:`, fetchError instanceof Error ? fetchError.stack : 'N/A');
-      throw fetchError;
-    }
-  } catch (networkError) {
-    console.error('[auto_tag_asset] Network error calling OpenAI:', networkError);
-    throw new Error(`Network error: ${networkError instanceof Error ? networkError.message : String(networkError)}`);
-  }
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    let errorJson: any = {};
-    try {
-      errorJson = JSON.parse(errorText);
-    } catch {
-      // Not JSON, use text as-is
-    }
-    
-    console.error('[auto_tag_asset] OpenAI API error - Status:', response.status);
-    console.error('[auto_tag_asset] OpenAI API error - Response:', errorText);
-    
-    // Handle specific error types
-    if (response.status === 429) {
-      const retryAfter = response.headers.get('Retry-After');
-      const errorType = errorJson?.error?.type || 'unknown';
-      const errorCode = errorJson?.error?.code || 'unknown';
-      
-      if (errorCode === 'insufficient_quota' || errorType === 'insufficient_quota') {
-        console.error('[auto_tag_asset] ❌ QUOTA EXCEEDED - OpenAI API key has exceeded its quota/billing limit.');
-        console.error('[auto_tag_asset] Please check your OpenAI account billing and add payment method if needed.');
-        throw new Error('OpenAI quota exceeded - please check billing');
-      } else {
-        // Rate limit - retryable, return proper response so queue can handle it
-        console.error('[auto_tag_asset] Rate limit exceeded - too many requests');
-        const rateLimitError: any = new Error('OpenAI rate limit exceeded - please try again later');
-        rateLimitError.isRateLimit = true;
-        rateLimitError.retryAfter = retryAfter;
-        throw rateLimitError;
-      }
-    } else if (response.status === 401) {
-      console.error('[auto_tag_asset] ❌ UNAUTHORIZED - Invalid OpenAI API key');
-      throw new Error('Invalid OpenAI API key');
-    } else if (response.status === 400) {
-      // 400 errors often indicate a problem with a specific image (e.g., "Image size exceeds the limit")
-      // If we have multiple images, try processing them individually as fallback
-      const errorMessage = errorJson?.error?.message || errorText;
-      const errorCode = errorJson?.error?.code || '';
-      const isImageError = errorMessage?.toLowerCase().includes('image') || 
-                          errorMessage?.toLowerCase().includes('invalid_image') ||
-                          errorMessage?.includes('Image size') ||
-                          errorCode === 'image_parse_error' ||
-                          errorMessage?.toLowerCase().includes('unsupported image') ||
-                          errorMessage?.toLowerCase().includes('image_parse');
-      
-      if (isImageError && successful.length > 1) {
-        console.warn(`[auto_tag_asset] ⚠️  Batch failed with image error (${response.status}), falling back to individual processing`);
-        console.warn(`[auto_tag_asset] Error message: ${errorMessage}`);
-        console.warn(`[auto_tag_asset] Attempting to process ${successful.length} images individually...`);
-        
-        // Process each successful image individually
-        const individualResults: TagResult[] = [];
-        const failedAssetIds = new Set(failed.map(f => f.assetId));
-        
-        for (let i = 0; i < successful.length; i++) {
-          const successItem = successful[i];
-          const originalRequest = requests.find(r => r.assetId === successItem.assetId);
-          
-          if (!originalRequest) {
-            console.error(`[auto_tag_asset] Could not find original request for ${successItem.assetId}`);
-            individualResults.push({ assetId: successItem.assetId, tags: [] });
-            continue;
-          }
-          
-          try {
-            console.log(`[auto_tag_asset] 🔄 Processing image ${i + 1}/${successful.length} individually: ${successItem.assetId}`);
-            console.log(`[auto_tag_asset] Image URL: ${originalRequest.imageUrl.substring(0, 100)}...`);
-            
-            // Ensure image format is supported before processing individually
-            const supportedUrl = await ensureSupportedImageFormat(originalRequest.imageUrl, supabaseClient);
-            const updatedRequest = { ...originalRequest, imageUrl: supportedUrl };
-            
-            const singleResult = await getSuggestedTagsBatch(
-              [updatedRequest],
-              apiKey,
-              tagVocabulary,
-              supabaseClient
-            );
-            
-            if (singleResult.length > 0 && singleResult[0].tags.length > 0) {
-              individualResults.push(singleResult[0]);
-              console.log(`[auto_tag_asset] ✅ Individual processing succeeded for ${successItem.assetId}: [${singleResult[0].tags.join(', ')}]`);
-            } else {
-              individualResults.push({ assetId: successItem.assetId, tags: [] });
-              console.warn(`[auto_tag_asset] ⚠️  Individual processing returned empty tags for ${successItem.assetId}`);
-            }
-          } catch (individualError) {
-            console.error(`[auto_tag_asset] ❌ Individual processing failed for ${successItem.assetId}:`, individualError);
-            console.error(`[auto_tag_asset] Error details:`, individualError instanceof Error ? individualError.message : String(individualError));
-            console.error(`[auto_tag_asset] Error stack:`, individualError instanceof Error ? individualError.stack : 'N/A');
-            // Add empty tags for this failed image, but continue processing others
-            individualResults.push({ assetId: successItem.assetId, tags: [] });
-          }
-        }
-        
-        // Combine individual results with failed images (which already have empty tags)
-        const finalResults: TagResult[] = [];
-        const individualResultsMap = new Map(individualResults.map(r => [r.assetId, r]));
-        
-        for (let i = 0; i < requests.length; i++) {
-          const assetId = requests[i].assetId;
-          
-          if (failedAssetIds.has(assetId)) {
-            // Image failed preparation - already handled
-            finalResults.push({ assetId, tags: [] });
-          } else if (individualResultsMap.has(assetId)) {
-            // Image was processed individually
-            finalResults.push(individualResultsMap.get(assetId)!);
-          } else {
-            // Shouldn't happen, but handle it
-            console.warn(`[auto_tag_asset] ⚠️  Missing result for ${assetId}, adding empty tags`);
-            finalResults.push({ assetId, tags: [] });
-          }
-        }
-        
-        const successCount = finalResults.filter(r => r.tags.length > 0).length;
-        console.log(`[auto_tag_asset] ✅ Fallback processing complete: ${successCount}/${requests.length} succeeded`);
-        console.log(`[auto_tag_asset] ✅ Returning ${finalResults.length} results (some may have empty tags)`);
-        // Always return results, never throw - even if some failed
-        return finalResults;
-      } else {
-        // Single image or non-image error - for single images, return empty tags instead of throwing
-        if (successful.length === 1) {
-          console.warn(`[auto_tag_asset] ⚠️  Single image failed with 400 error, returning empty tags`);
-          const failedAssetIds = new Set(failed.map(f => f.assetId));
-          const results: TagResult[] = [];
-          for (let i = 0; i < requests.length; i++) {
-            const assetId = requests[i].assetId;
-            if (failedAssetIds.has(assetId)) {
-              results.push({ assetId, tags: [] });
-            } else {
-              // The single successful image failed - return empty tags
-              results.push({ assetId, tags: [] });
-            }
-          }
-          return results;
-        }
-        // Multiple images but non-image error - throw normally
-        throw new Error(`OpenAI API failed: ${response.status} - ${errorText}`);
-      }
-    } else {
-      // Non-400 errors - if we have multiple images, try individual processing as last resort
-      if (successful.length > 1) {
-        console.warn(`[auto_tag_asset] ⚠️  Batch failed with ${response.status} error, falling back to individual processing`);
-        const individualResults: TagResult[] = [];
-        const failedAssetIds = new Set(failed.map(f => f.assetId));
-        
-        for (let i = 0; i < successful.length; i++) {
-          const successItem = successful[i];
-          const originalRequest = requests.find(r => r.assetId === successItem.assetId);
-          
-          if (!originalRequest) {
-            individualResults.push({ assetId: successItem.assetId, tags: [] });
-            continue;
-          }
-          
-          try {
-            console.log(`[auto_tag_asset] 🔄 Processing image ${i + 1}/${successful.length} individually: ${successItem.assetId}`);
-            const singleResult = await getSuggestedTagsBatch(
-              [originalRequest],
-              apiKey,
-              tagVocabulary,
-              supabaseClient
-            );
-            
-            if (singleResult.length > 0 && singleResult[0].tags.length > 0) {
-              individualResults.push(singleResult[0]);
-            } else {
-              individualResults.push({ assetId: successItem.assetId, tags: [] });
-            }
-          } catch (individualError) {
-            console.error(`[auto_tag_asset] ❌ Individual processing failed for ${successItem.assetId}:`, individualError);
-            individualResults.push({ assetId: successItem.assetId, tags: [] });
-          }
-        }
-        
-        const finalResults: TagResult[] = [];
-        const individualResultsMap = new Map(individualResults.map(r => [r.assetId, r]));
-        
-        for (let i = 0; i < requests.length; i++) {
-          const assetId = requests[i].assetId;
-          if (failedAssetIds.has(assetId)) {
-            finalResults.push({ assetId, tags: [] });
-          } else if (individualResultsMap.has(assetId)) {
-            finalResults.push(individualResultsMap.get(assetId)!);
-          } else {
-            finalResults.push({ assetId, tags: [] });
-          }
-        }
-        
-        const successCount = finalResults.filter(r => r.tags.length > 0).length;
-        console.log(`[auto_tag_asset] ✅ Fallback processing complete: ${successCount}/${requests.length} succeeded`);
-        return finalResults;
-      }
-      throw new Error(`OpenAI API failed: ${response.status} - ${errorText}`);
-    }
-  }
-
-  const json = await response.json();
-  const responseContent = json.choices?.[0]?.message?.content ?? '{}';
-  console.log('[auto_tag_asset] Raw OpenAI batch response:', JSON.stringify(json, null, 2));
-  console.log('[auto_tag_asset] Parsed content:', responseContent);
-  
-  // Check if response is empty or malformed
-  if (!responseContent || responseContent === '{}' || responseContent.trim() === '') {
-    console.error('[auto_tag_asset] ❌ Empty or invalid response content from OpenAI');
-    console.error('[auto_tag_asset] Full response:', JSON.stringify(json, null, 2));
-    throw new Error('Empty response from OpenAI');
-  }
-  
-  let parsed;
-  try {
-    parsed = JSON.parse(responseContent);
-  } catch (e) {
-    console.error('[auto_tag_asset] Failed to parse JSON:', e);
-    console.error('[auto_tag_asset] Raw content:', responseContent);
-    console.error('[auto_tag_asset] Content type:', typeof responseContent);
-    console.error('[auto_tag_asset] Content length:', responseContent.length);
-    throw new Error('Invalid JSON response from OpenAI');
-  }
-  
-  console.log('[auto_tag_asset] Parsed JSON structure:', JSON.stringify(parsed, null, 2));
-  const results = Array.isArray(parsed.results) ? parsed.results : [];
-  
-  // Results should match the number of successful images, not all requests
-  const expectedResults = successful.length;
-  if (results.length !== expectedResults) {
-    console.error(`[auto_tag_asset] ❌ Expected ${expectedResults} results (for ${successful.length} successful images), got ${results.length}`);
-    console.error(`[auto_tag_asset] Total requests: ${requests.length}, Successful: ${successful.length}, Failed: ${failed.length}`);
-    console.error(`[auto_tag_asset] Parsed object keys:`, Object.keys(parsed));
-    console.error(`[auto_tag_asset] Results array:`, JSON.stringify(results, null, 2));
-    
-    // Instead of throwing, process partial results to avoid losing all progress
-    // This handles cases where OpenAI returns fewer results than expected
-    console.warn(`[auto_tag_asset] ⚠️  Processing partial results: got ${results.length} of ${expectedResults} expected results`);
-    // Continue with partial results - we'll handle missing results in the mapping loop
-  }
-  
-  // Check if all results have empty tags
-  const emptyResults = results.filter((r: any) => !r?.tags || !Array.isArray(r.tags) || r.tags.length === 0);
-  if (emptyResults.length === results.length) {
-    console.warn(`[auto_tag_asset] ⚠️  All ${results.length} results have empty tags arrays!`);
-    console.warn(`[auto_tag_asset] This suggests OpenAI returned empty tags or the response format is wrong`);
-  }
-  
-  console.log(`[auto_tag_asset] 📊 Processing ${results.length} results from OpenAI...`);
-  console.log(`[auto_tag_asset] Tag vocabulary: [${tagVocabulary.join(', ')}]`);
-  console.log(`[auto_tag_asset] Tag vocabulary length: ${tagVocabulary.length}`);
-  console.log(`[auto_tag_asset] Full results array:`, JSON.stringify(results, null, 2));
-  
-  // Map results back to asset IDs
-  // Note: results array corresponds to successful images only, in the order they were sent
-  // We need to map them back to the original request order
-  const tagResults: TagResult[] = [];
-  const failedAssetIds = new Set(failed.map(f => f.assetId));
-  
-  // Create a map of successful images by their original index
-  const successfulByIndex = new Map(successful.map(s => [s.index, s]));
-  
-  // Process all requests in order, using results for successful ones
-  let resultIndex = 0; // Index into results array (only successful images)
-  
-  for (let i = 0; i < requests.length; i++) {
-    const assetId = requests[i].assetId;
-    
-    if (failedAssetIds.has(assetId)) {
-      // This image failed preparation - return empty tags
-      console.warn(`[auto_tag_asset] ⚠️  Asset ${assetId} (index ${i}) failed preparation, returning empty tags`);
-      tagResults.push({
-        assetId: assetId,
-        tags: [],
-      });
-      continue;
-    }
-    
-    // This image succeeded - get its result from OpenAI
-    // Handle case where OpenAI returned fewer results than expected
-    if (resultIndex >= results.length) {
-      console.error(`[auto_tag_asset] ❌ CRITICAL: Result index ${resultIndex} out of bounds (results.length=${results.length}) for asset ${assetId}`);
-      console.error(`[auto_tag_asset] This means OpenAI returned fewer results than expected`);
-      console.error(`[auto_tag_asset] Expected ${successful.length} results, got ${results.length}`);
-      // Add empty tags for this asset and continue
-      tagResults.push({
-        assetId: assetId,
-        tags: [],
-      });
-      continue;
-    }
-    
-    const result = results[resultIndex];
-    resultIndex++;
-    
-    console.log(`[auto_tag_asset] Processing result ${resultIndex}/${results.length} for asset ${assetId} (original index ${i}):`, JSON.stringify(result, null, 2));
-    
-    // Defensive check: ensure result exists and has expected structure
-    if (!result || typeof result !== 'object') {
-      console.error(`[auto_tag_asset] ❌ Invalid result object for asset ${assetId}:`, result);
-      tagResults.push({
-        assetId: assetId,
-        tags: [],
-      });
-      continue;
-    }
-    
-    const rawTags = Array.isArray(result?.tags) ? result.tags : [];
-    console.log(`[auto_tag_asset] Image ${i + 1} (${assetId}): raw tags from OpenAI: [${rawTags.join(', ')}]`);
-    console.log(`[auto_tag_asset] Raw tags array length: ${rawTags.length}`);
-    console.log(`[auto_tag_asset] Raw tags type check: Array.isArray=${Array.isArray(rawTags)}, typeof=${typeof rawTags}`);
-    
-    if (rawTags.length === 0) {
-      console.error(`[auto_tag_asset] ❌ Image ${i + 1} (${assetId}) has EMPTY tags array from OpenAI!`);
-      console.error(`[auto_tag_asset] This violates the schema requirement of minItems: 1`);
-      console.error(`[auto_tag_asset] Result object:`, JSON.stringify(result, null, 2));
-    }
-    
-    // Validate tags are in the vocabulary
-    const validTags = rawTags.filter(tag => tagVocabulary.includes(tag)).slice(0, 5);
-    const invalidTags = rawTags.filter(tag => !tagVocabulary.includes(tag));
-    
-    if (invalidTags.length > 0) {
-      console.warn(`[auto_tag_asset] ⚠️  Image ${i + 1} (${assetId}) has invalid tags (not in vocabulary): [${invalidTags.join(', ')}]`);
-      console.warn(`[auto_tag_asset]   Vocabulary contains: [${tagVocabulary.join(', ')}]`);
-    }
-    
-    if (validTags.length === 0) {
-      console.error(`[auto_tag_asset] ❌ No valid tags for image ${i + 1} (${assetId}) after filtering`);
-      console.error(`[auto_tag_asset]   Raw tags were: [${rawTags.join(', ')}]`);
-      console.error(`[auto_tag_asset]   Vocabulary has: [${tagVocabulary.join(', ')}]`);
-      console.error(`[auto_tag_asset]   This means OpenAI either returned empty tags OR all tags were filtered out`);
-    } else {
-      console.log(`[auto_tag_asset] ✅ Image ${i + 1} (${assetId}): valid tags: [${validTags.join(', ')}]`);
-    }
-    
-    tagResults.push({
-      assetId: assetId,
-      tags: validTags,
-    });
-  }
-  
-  // Verify we have results for all requests
-  if (tagResults.length !== requests.length) {
-    console.error(`[auto_tag_asset] ❌ CRITICAL: Expected ${requests.length} results, got ${tagResults.length}!`);
-    console.error(`[auto_tag_asset] Successful: ${successful.length}, Failed: ${failed.length}, Results processed: ${resultIndex}`);
-    throw new Error(`Result count mismatch: expected ${requests.length}, got ${tagResults.length}`);
-  }
-  
-  console.log(`[auto_tag_asset] ✅ Mapped ${tagResults.length} results (${successful.length} successful, ${failed.length} failed)`);
-  
-  const totalTags = tagResults.reduce((sum, r) => sum + r.tags.length, 0);
-  console.log(`[auto_tag_asset] ✅ Batch processing complete: ${tagResults.length} results, ${totalTags} total tags`);
-  return tagResults;
+  return results;
 }
 
 // OpenAI Batch API: Create batch job for 20+ images (async, 50% cost savings)
@@ -1667,13 +989,28 @@ async function createOpenAIBatch(
     const content: any[] = [
       {
         type: 'text',
-        text: `Analyze this photo and return tags from this vocabulary: ${tagVocabulary.join(', ')}.
+        text: `Analyze this photo objectively and return 1-5 tags from this vocabulary: ${tagVocabulary.join(', ')}.
 
-AVAILABLE TAGS (you MUST use only these tags): ${JSON.stringify(tagVocabulary)}.
+CRITICAL: Only tag what you ACTUALLY see in the image. Only use tags from the provided vocabulary.
 
-CRITICAL: Only tag what you ACTUALLY see in the image. Do NOT default to "Product" unless the image clearly shows a product photo.
+ANALYSIS GUIDELINES:
+1. Look at the image carefully - what does it actually show?
+2. Identify the main subject(s) and context
+3. Note the style, setting, and composition
+4. Select tags that accurately describe what is visible
 
-Return tags for this image. The image should have 1-5 tags that accurately reflect what is in the image.`,
+TAGGING RULES:
+- Use only tags from the provided vocabulary
+- Select 1-5 tags that best describe the image
+- Be specific and accurate
+- If a tag doesn't clearly apply, don't use it
+
+DO NOT:
+- Use tags that aren't in the vocabulary
+- Add tags you cannot see
+- Make assumptions about what might be in the image
+
+Return tags that accurately reflect what is in the image.`,
       },
       {
         type: 'image_url',
@@ -1690,7 +1027,7 @@ Return tags for this image. The image should have 1-5 tags that accurately refle
         messages: [
           {
             role: 'system',
-            content: 'You are an expert photo analyzer for a jewelry brand. Analyze each image objectively and return tags that accurately describe what you actually see. Do NOT default to "Product" - only use it if the image is clearly a product photo.',
+            content: 'You are an expert photo analyzer. Analyze the image objectively and return tags that accurately describe what you actually see. Only use tags from the provided vocabulary. Be honest and accurate about what the image shows.',
           },
           {
             role: 'user',
@@ -1844,128 +1181,77 @@ async function processBatchResults(
   }
   
   const batchStatus = await statusResponse.json();
-  console.log(`[auto_tag_asset] Batch status: ${batchStatus.status}`);
   
   if (batchStatus.status !== 'completed') {
-    console.log(`[auto_tag_asset] Batch not yet completed (status: ${batchStatus.status}), skipping processing`);
-    return;
+    console.log(`[auto_tag_asset] Batch ${batchId} status: ${batchStatus.status}`);
+    return; // Not completed yet, will be polled again
   }
   
-  if (!batchStatus.output_file_id) {
-    console.error(`[auto_tag_asset] ❌ Batch completed but no output_file_id`);
-    throw new Error('Batch completed but no output file');
+  // Step 2: Download results file
+  const outputFileId = batchStatus.output_file_id;
+  if (!outputFileId) {
+    throw new Error('Batch completed but no output file ID');
   }
   
-  // Step 2: Download output file
-  console.log(`[auto_tag_asset] 📥 Downloading batch results from file: ${batchStatus.output_file_id}`);
-  const outputResponse = await fetch(`${OPENAI_FILES_API_URL}/${batchStatus.output_file_id}/content`, {
+  const fileResponse = await fetch(`${OPENAI_FILES_API_URL}/${outputFileId}/content`, {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
     },
   });
   
-  if (!outputResponse.ok) {
-    const errorText = await outputResponse.text();
-    throw new Error(`Failed to download batch results: ${outputResponse.status} ${errorText}`);
+  if (!fileResponse.ok) {
+    const errorText = await fileResponse.text();
+    throw new Error(`Failed to download results file: ${fileResponse.status} ${errorText}`);
   }
   
-  const outputText = await outputResponse.text();
-  const outputLines = outputText.trim().split('\n').filter(line => line.trim());
-  console.log(`[auto_tag_asset] ✅ Downloaded ${outputLines.length} results`);
+  const fileContent = await fileResponse.text();
+  const lines = fileContent.trim().split('\n');
   
-  // Step 3: Process results and update assets
-  const resultsMap = new Map<string, string[]>(); // assetId -> tags
-  
-  for (const line of outputLines) {
+  // Step 3: Parse results and update database
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    
     try {
       const result = JSON.parse(line);
-      const customId = result.custom_id; // This is the assetId we set
-      const response = result.response;
+      const customId = result.custom_id;
+      const responseBody = result.response?.body;
       
-      if (!customId) {
-        console.warn(`[auto_tag_asset] ⚠️  Result missing custom_id:`, result);
+      if (!customId || !responseBody) {
+        console.warn(`[auto_tag_asset] Skipping invalid result line: ${line.substring(0, 100)}`);
         continue;
       }
       
-      if (response?.status_code !== 200) {
-        console.error(`[auto_tag_asset] ❌ Request failed for asset ${customId}:`, response);
-        resultsMap.set(customId, []); // Empty tags for failed requests
+      const content = responseBody.choices?.[0]?.message?.content;
+      if (!content) {
+        console.warn(`[auto_tag_asset] No content in result for ${customId}`);
         continue;
       }
       
-      // Parse tags from response body
-      const responseBody = response.body;
-      let tags: string[] = [];
+      const parsed = JSON.parse(content);
+      const tags = Array.isArray(parsed.tags) ? parsed.tags : [];
       
-      if (typeof responseBody === 'string') {
-        const parsed = JSON.parse(responseBody);
-        const content = parsed.choices?.[0]?.message?.content;
-        if (content) {
-          const tagData = JSON.parse(content);
-          tags = Array.isArray(tagData.tags) ? tagData.tags : [];
-        }
-      } else if (responseBody?.choices?.[0]?.message?.content) {
-        const content = responseBody.choices[0].message.content;
-        const tagData = JSON.parse(content);
-        tags = Array.isArray(tagData.tags) ? tagData.tags : [];
-      }
-      
-      resultsMap.set(customId, tags);
-      console.log(`[auto_tag_asset] ✅ Processed result for asset ${customId}: [${tags.join(', ')}]`);
-    } catch (error) {
-      console.error(`[auto_tag_asset] ❌ Failed to process result line:`, error);
-      console.error(`[auto_tag_asset] Line:`, line.substring(0, 200));
-    }
-  }
-  
-  // Step 4: Update assets in database
-  console.log(`[auto_tag_asset] 💾 Updating ${resultsMap.size} assets with tags...`);
-  
-  for (const [assetId, aiTags] of resultsMap.entries()) {
-    // Location is now stored in separate column, so we just update tags directly
-    // No need to preserve location from tags anymore
-    const { error } = await supabaseClient
-      .from('assets')
-      .update({
-        tags: aiTags,
-        auto_tag_status: aiTags.length > 0 ? 'completed' : 'failed',
-        openai_batch_id: null, // Clear batch_id after processing
-      })
-      .eq('id', assetId);
-    
-    if (error) {
-      console.error(`[auto_tag_asset] ❌ Failed to update asset ${assetId}:`, error);
-    } else {
-      console.log(`[auto_tag_asset] ✅ Updated asset ${assetId} with ${aiTags.length} AI tags`);
-    }
-  }
-  
-  // Mark any assets with batch_id but no results as failed
-  const { data: assetsWithBatchId } = await supabaseClient
-    .from('assets')
-    .select('id')
-    .eq('openai_batch_id', batchId);
-  
-  if (assetsWithBatchId) {
-    const processedAssetIds = new Set(resultsMap.keys());
-    const unprocessedAssets = assetsWithBatchId
-      .filter((a: any) => !processedAssetIds.has(a.id))
-      .map((a: any) => a.id);
-    
-    if (unprocessedAssets.length > 0) {
-      console.warn(`[auto_tag_asset] ⚠️  ${unprocessedAssets.length} assets in batch but no results, marking as failed`);
-      await supabaseClient
+      // Update asset in database
+      const { error: updateError } = await supabaseClient
         .from('assets')
         .update({
-          auto_tag_status: 'failed',
-          openai_batch_id: null,
+          tags: tags,
+          auto_tag_status: 'completed',
         })
-        .in('id', unprocessedAssets);
+        .eq('id', customId);
+      
+      if (updateError) {
+        console.error(`[auto_tag_asset] Failed to update asset ${customId}:`, updateError);
+      } else {
+        console.log(`[auto_tag_asset] ✅ Updated asset ${customId} with tags: [${tags.join(', ')}]`);
+      }
+    } catch (parseError) {
+      console.error(`[auto_tag_asset] Failed to parse result line:`, parseError);
+      console.error(`[auto_tag_asset] Line: ${line.substring(0, 200)}`);
     }
   }
   
-  console.log(`[auto_tag_asset] ✅ Batch processing complete for batch: ${batchId}`);
+  console.log(`[auto_tag_asset] ✅ Processed ${lines.length} batch results`);
 }
 
 // Single image processing (kept for backward compatibility)
@@ -1988,174 +1274,111 @@ async function getSuggestedTags(
   
   console.log('[auto_tag_asset] Tag vocabulary for GPT-4:', tagVocabulary);
   
-  // Ensure image format is supported (using A2 version for AI tagging)
+  // Ensure image format is supported
   const supportedImageUrl = await ensureSupportedImageFormat(imageUrl, supabaseClient);
+  
+  const response = await fetch(OPENAI_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are an expert photo analyzer. Analyze the image objectively and return tags that accurately describe what you actually see. Only use tags from the provided vocabulary. Be honest and accurate about what the image shows.',
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `Analyze this photo objectively and return 1-5 tags from this vocabulary: ${tagVocabulary.join(', ')}.
 
-  const payload = {
-    model: 'gpt-4o-mini',
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You are an expert photo analyzer for a jewelry brand. Analyze the image objectively and return tags that accurately describe what you actually see. Do NOT default to "Product" - only use it if the image is clearly a product photo. Be honest about what the image shows.',
-      },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: `Analyze this photo objectively and return 1-5 tags from this vocabulary: ${tagVocabulary.join(', ')}.
+CRITICAL: Only tag what you ACTUALLY see in the image. Only use tags from the provided vocabulary.
 
-CRITICAL: Only tag what you ACTUALLY see in the image. Do NOT default to "Product" unless the image clearly shows a product photo.
-
-PHOTO TYPE ANALYSIS:
+ANALYSIS GUIDELINES:
 1. Look at the image carefully - what does it actually show?
-2. Is there a person visible? → Use "Lifestyle" tag
-3. Is it just jewelry on a plain background? → Use "Product" tag
-4. What jewelry is visible? (Necklace, Earrings, Rings, Bracelets)
-5. What style/aesthetic? (Bright, Moody, Studio, Onyx, etc.)
+2. Identify the main subject(s) and context
+3. Note the style, setting, and composition
+4. Select tags that accurately describe what is visible
 
-TAGGING GUIDELINES:
-- Person wearing jewelry → ["Lifestyle", "Necklace", ...]
-- Product shot on plain background → ["Product", "Necklace", ...]
-- Studio/lifestyle scene → ["Lifestyle", "Necklace", "Studio", ...]
-- Only use "Product" if it's clearly a product photo, not a lifestyle photo
+TAGGING RULES:
+- Use only tags from the provided vocabulary
+- Select 1-5 tags that best describe the image
+- Be specific and accurate
+- If a tag doesn't clearly apply, don't use it
 
 DO NOT:
-- Default to "Product" if unsure
-- Assume it's a product photo
+- Use tags that aren't in the vocabulary
 - Add tags you cannot see
+- Make assumptions about what might be in the image
 
 Return tags that accurately reflect what is in the image.`,
-          },
-          {
-            type: 'image_url',
-            image_url: {
-              // If it's a data URL, use it directly; otherwise use url property
-              ...(supportedImageUrl.startsWith('data:') 
-                ? { url: supportedImageUrl }
-                : { url: supportedImageUrl }
-              ),
             },
-          },
-        ],
-      },
-    ],
-    response_format: {
-      type: 'json_schema',
-      json_schema: {
-        name: 'tag_response',
-        schema: {
-          type: 'object',
-          properties: {
-            tags: {
-              type: 'array',
-                  items: {
-                    type: 'string',
-                    enum: tagVocabulary,
-                  },
-              minItems: 1,
-              maxItems: 5,
-              description: 'Array of 1-5 tags that accurately describe what is shown in the image. For product photos, include "Product" plus jewelry type. For lifestyle photos, include "Lifestyle" plus jewelry type.',
+            {
+              type: 'image_url',
+              image_url: {
+                // If it's a data URL, use it directly; otherwise use url property
+                ...(supportedImageUrl.startsWith('data:') 
+                  ? { url: supportedImageUrl }
+                  : { url: supportedImageUrl }
+                ),
+              },
             },
-          },
-          required: ['tags'],
-          additionalProperties: false,
+          ],
         },
-        strict: true,
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'tag_response',
+          schema: {
+            type: 'object',
+            properties: {
+              tags: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  enum: tagVocabulary,
+                },
+                minItems: 1,
+                maxItems: 5,
+                description: 'Array of 1-5 tags that accurately describe what is shown in the image. Tags must be from the provided vocabulary.',
+              },
+            },
+            required: ['tags'],
+            additionalProperties: false,
+          },
+          strict: true,
+        },
       },
-    },
-    temperature: 0.3, // Lower temperature for more consistent, structured responses
-    max_tokens: 200,
-  };
-
-  let response: Response;
-  try {
-    const isA2 = supportedImageUrl.includes('/ai/');
-    const isBase64 = supportedImageUrl.startsWith('data:');
-    const openaiStartTime = Date.now();
-    
-    // Get final image size being sent to OpenAI
-    let finalSizeKB = 0;
-    let finalSizeMB = 0;
-    
-    if (isBase64) {
-      // Calculate size from base64
-      const base64Data = supportedImageUrl.split(',')[1] || '';
-      const binarySize = (base64Data.length * 3) / 4;
-      finalSizeKB = binarySize / 1024;
-      finalSizeMB = finalSizeKB / 1024;
-    } else {
-      // Fetch image to get actual size
-      try {
-        const headResponse = await fetch(supportedImageUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
-        const contentLength = headResponse.headers.get('content-length');
-        if (contentLength) {
-          finalSizeKB = parseInt(contentLength) / 1024;
-          finalSizeMB = finalSizeKB / 1024;
-        }
-      } catch (sizeError) {
-        console.warn('[auto_tag_asset] Could not get final image size:', sizeError);
-      }
-    }
-    
-    console.log('[auto_tag_asset] 📤 Making OpenAI API request...');
-    console.log('[auto_tag_asset]    Image URL:', supportedImageUrl.substring(0, 150));
-    console.log('[auto_tag_asset]    Is A2?', isA2 ? 'YES ✅' : 'NO ⚠️ (PERFORMANCE IMPACT: Using larger A1 image)');
-    console.log('[auto_tag_asset]    Type:', isBase64 ? 'base64' : 'URL');
-    console.log('[auto_tag_asset]    Final size sent to OpenAI:', finalSizeKB > 0 ? `${finalSizeKB.toFixed(0)} KB (${finalSizeMB.toFixed(2)} MB)` : 'unknown');
-    console.log('[auto_tag_asset]    Target range: 200-500 KB -', finalSizeKB > 0 ? (finalSizeKB >= 200 && finalSizeKB <= 500 ? '✅ IN RANGE' : `⚠️ OUT OF RANGE (${finalSizeKB.toFixed(0)} KB)`) : 'unknown');
-    console.log('[auto_tag_asset]    API Key present:', !!apiKey);
-    console.log('[auto_tag_asset]    API Key length:', apiKey?.length || 0);
-    
-    if (!isA2) {
-      console.warn('[auto_tag_asset] ⚠️⚠️⚠️ PERFORMANCE WARNING: Not using A2 compression! This will be slower. ⚠️⚠️⚠️');
-    }
-    
-    if (finalSizeKB > 0 && finalSizeKB > 500) {
-      console.warn(`[auto_tag_asset] ⚠️  Image size (${finalSizeKB.toFixed(0)} KB) exceeds target range - may impact performance`);
-    }
-    
-    response = await fetch(OPENAI_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(payload),
-    });
-  } catch (networkError) {
-    console.error('[auto_tag_asset] Network error calling OpenAI:', networkError);
-    throw new Error(`Network error: ${networkError instanceof Error ? networkError.message : String(networkError)}`);
-  }
+      temperature: 0.3,
+      max_tokens: 200,
+    }),
+  });
 
   if (!response.ok) {
     const errorText = await response.text();
-    let errorJson: any = {};
-    try {
-      errorJson = JSON.parse(errorText);
-    } catch {
-      // Not JSON, use text as-is
-    }
+    console.error('[auto_tag_asset] OpenAI API error:', errorText);
     
-    console.error('[auto_tag_asset] OpenAI API error - Status:', response.status);
-    console.error('[auto_tag_asset] OpenAI API error - Response:', errorText);
-    
-    // Handle specific error types
     if (response.status === 429) {
-      const errorType = errorJson?.error?.type || 'unknown';
-      const errorCode = errorJson?.error?.code || 'unknown';
+      const retryAfter = response.headers.get('Retry-After');
+      const errorJson = JSON.parse(errorText);
+      const errorCode = errorJson?.error?.code || '';
       
-      if (errorCode === 'insufficient_quota' || errorType === 'insufficient_quota') {
-        console.error('[auto_tag_asset] ❌ QUOTA EXCEEDED - OpenAI API key has exceeded its quota/billing limit.');
-        console.error('[auto_tag_asset] Please check your OpenAI account billing and add payment method if needed.');
+      if (errorCode === 'insufficient_quota') {
         throw new Error('OpenAI quota exceeded - please check billing');
       } else {
-        console.error('[auto_tag_asset] Rate limit exceeded - too many requests');
-        throw new Error('OpenAI rate limit exceeded - please try again later');
+        const rateLimitError: any = new Error('OpenAI rate limit exceeded - please try again later');
+        rateLimitError.isRateLimit = true;
+        rateLimitError.retryAfter = retryAfter;
+        throw rateLimitError;
       }
     } else if (response.status === 401) {
-      console.error('[auto_tag_asset] ❌ UNAUTHORIZED - Invalid OpenAI API key');
       throw new Error('Invalid OpenAI API key');
     } else {
       throw new Error(`OpenAI API failed: ${response.status} - ${errorText}`);
@@ -2164,43 +1387,28 @@ Return tags that accurately reflect what is in the image.`,
 
   const json = await response.json();
   const content = json.choices?.[0]?.message?.content ?? '{}';
-  console.log('[auto_tag_asset] Raw OpenAI response:', JSON.stringify(json, null, 2));
-  console.log('[auto_tag_asset] Parsed content:', content);
   
   let parsed;
   try {
     parsed = JSON.parse(content);
   } catch (e) {
     console.error('[auto_tag_asset] Failed to parse JSON:', e);
-    console.error('[auto_tag_asset] Raw content:', content);
     throw new Error('Invalid JSON response from OpenAI');
   }
   
   const tags = Array.isArray(parsed.tags) ? parsed.tags : [];
-  
-  if (tags.length === 0) {
-    console.error('[auto_tag_asset] ❌ No tags returned from OpenAI');
-    console.error('[auto_tag_asset] Parsed object:', JSON.stringify(parsed, null, 2));
-    throw new Error('No tags returned from OpenAI');
-  }
   
   // Validate tags are in the vocabulary (strict mode should prevent this, but check anyway)
   const invalidTags = tags.filter(tag => !tagVocabulary.includes(tag));
   if (invalidTags.length > 0) {
     console.error('[auto_tag_asset] ❌ Invalid tags returned (not in vocabulary):', invalidTags);
     console.error('[auto_tag_asset] Valid vocabulary:', tagVocabulary);
-    console.error('[auto_tag_asset] Received tags:', tags);
-    // Filter out invalid tags instead of failing completely
+    // Filter out invalid tags
     const validTags = tags.filter(tag => tagVocabulary.includes(tag));
-    console.log('[auto_tag_asset] Filtered to valid tags:', validTags);
-    if (validTags.length === 0) {
-      throw new Error('No valid tags returned (all tags were invalid)');
-    }
-    return validTags.slice(0, 5);
+    return validTags;
   }
   
-  console.log('[auto_tag_asset] ✅ Final tags (all valid):', tags);
-  return tags.slice(0, 5); // Ensure max 5 tags
+  return tags;
 }
 
 Deno.serve(async (req) => {

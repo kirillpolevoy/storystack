@@ -4,6 +4,7 @@ import { Asset } from '@/types'
 import exifr from 'exifr'
 import { computeImageHash } from './duplicateDetection'
 import { getDefaultCampaignId } from './getDefaultCampaign'
+import { extractLocationFromEXIF } from './extractLocationFromEXIF'
 // @ts-ignore - heic2any doesn't have TypeScript types
 import convert from 'heic2any'
 
@@ -75,31 +76,27 @@ export async function uploadAsset(
 
   onProgress?.(5)
 
-  // Convert HEIC/HEIF files to JPEG before processing (matches mobile app)
-  const processedFile = await convertHeicToJpeg(file)
-  if (processedFile !== file) {
-    console.log('[upload] ✅ File converted from HEIC to JPEG')
-  }
-
-  // Compute file hash for duplicate detection (use processed file)
-  let fileHash: string | null = null
-  try {
-    fileHash = await computeImageHash(processedFile)
-  } catch (error) {
-    console.warn('[upload] Failed to compute file hash:', error)
-    // Continue without hash - duplicate check will be skipped
-  }
-
-  onProgress?.(10)
-
-  // Extract EXIF date (when photo was taken) - use processed file
+  // Extract EXIF data from ORIGINAL file BEFORE conversion
+  // HEIC conversion may strip EXIF data, so we need to extract it first
   let dateTaken: Date | null = null
+  let location: string | null = null
+
+  // Check if file is HEIC - if so, try to extract EXIF before conversion
+  const isHeic = file.name.toLowerCase().endsWith('.heic') || 
+                 file.name.toLowerCase().endsWith('.heif') || 
+                 file.type === 'image/heic' || 
+                 file.type === 'image/heif'
+
+  // Extract EXIF date and location from original file (before HEIC conversion)
   try {
-    const exifData = await exifr.parse(processedFile, {
-      pick: ['DateTimeOriginal', 'CreateDate', 'ModifyDate'],
+    console.log(`[upload] Extracting EXIF from ${isHeic ? 'HEIC' : 'regular'} file: ${file.name}`)
+    
+    const exifData = await exifr.parse(file, {
+      pick: ['DateTimeOriginal', 'CreateDate', 'ModifyDate', 'latitude', 'longitude', 'GPSLatitude', 'GPSLongitude', 'GPSLatitudeRef', 'GPSLongitudeRef', 'GPS'],
+      translateKeys: false,
     })
     
-    // Try DateTimeOriginal first (most accurate), then CreateDate, then ModifyDate
+    // Extract date
     const dateString = exifData?.DateTimeOriginal || exifData?.CreateDate || exifData?.ModifyDate
     
     if (dateString) {
@@ -111,14 +108,63 @@ export async function uploadAsset(
         const parsed = new Date(isoString)
         if (!isNaN(parsed.getTime())) {
           dateTaken = parsed
+          console.log(`[upload] ✅ Extracted date from EXIF: ${dateTaken.toISOString()}`)
         }
       } else if (dateString instanceof Date) {
         dateTaken = dateString
+        console.log(`[upload] ✅ Extracted date from EXIF: ${dateTaken.toISOString()}`)
       }
     }
+
+    // Extract location from EXIF using the same implementation as mobile app
+    // Extract from original file to preserve EXIF data
+    location = await extractLocationFromEXIF(file)
+    if (location) {
+      console.log(`[upload] ✅ Extracted location from EXIF: ${location}`)
+    } else {
+      console.log(`[upload] No location found in EXIF data from original file`)
+    }
   } catch (error) {
-    console.warn('Failed to extract EXIF date:', error)
-    // Continue without date_taken - will fall back to created_at
+    console.warn('[upload] Failed to extract EXIF data from original file:', error)
+    // Try to extract location separately if date extraction failed
+    try {
+      location = await extractLocationFromEXIF(file)
+    } catch (locError) {
+      console.warn('[upload] Failed to extract location from EXIF:', locError)
+    }
+  }
+
+  onProgress?.(10)
+
+  // Convert HEIC/HEIF files to JPEG before processing (matches mobile app)
+  // Do this AFTER extracting EXIF data, as conversion may strip EXIF
+  const processedFile = await convertHeicToJpeg(file)
+  if (processedFile !== file) {
+    console.log('[upload] ✅ File converted from HEIC to JPEG')
+    
+    // If we didn't get location from original HEIC file, try the converted JPEG
+    // Some HEIC converters preserve EXIF data
+    if (!location) {
+      console.log('[upload] Trying to extract location from converted JPEG file...')
+      try {
+        const fallbackLocation = await extractLocationFromEXIF(processedFile)
+        if (fallbackLocation) {
+          location = fallbackLocation
+          console.log(`[upload] ✅ Extracted location from converted JPEG: ${location}`)
+        }
+      } catch (error) {
+        console.warn('[upload] Failed to extract location from converted JPEG:', error)
+      }
+    }
+  }
+
+  // Compute file hash for duplicate detection (use processed file)
+  let fileHash: string | null = null
+  try {
+    fileHash = await computeImageHash(processedFile)
+  } catch (error) {
+    console.warn('[upload] Failed to compute file hash:', error)
+    // Continue without hash - duplicate check will be skipped
   }
 
   // Compress image to A2 format (1024px long edge) for AI tagging - matches mobile app
@@ -195,6 +241,8 @@ export async function uploadAsset(
   // Use 'local' as source to match mobile app behavior
   // The database constraint allows: 'local', 'imported', 'generated'
   // Set campaign_id to match mobile app's default campaign so assets appear in mobile app
+  console.log(`[upload] Preparing database insert with location: ${location || 'null'}`)
+  
   const insertData: any = {
     user_id: user.id,
     campaign_id: campaignId, // Set campaign_id so assets appear in mobile app
@@ -203,10 +251,13 @@ export async function uploadAsset(
     storage_path_thumb: thumbPath,
     source: 'local', // Use 'local' to match mobile app and ensure constraint compliance
     tags: [],
+    location: location || null, // Location extracted from EXIF GPS coordinates (explicitly set null if empty)
     date_taken: dateTaken ? dateTaken.toISOString() : null,
     auto_tag_status: 'pending', // Set to pending to trigger auto-tagging
     original_filename: originalFileName, // Store original filename for display
   }
+  
+  console.log(`[upload] Insert data location field:`, insertData.location)
 
   // Add file_hash if available (column may not exist yet)
   if (fileHash) {

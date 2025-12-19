@@ -1,11 +1,15 @@
 'use client'
 
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useStories, useCreateStory, useDeleteStory, useUpdateStory } from '@/hooks/useStories'
+import { useStoryAssets } from '@/hooks/useStoryAssets'
+import { downloadStoryAsZip } from '@/utils/downloadStory'
+import { createClient } from '@/lib/supabase/client'
+import { Asset } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Plus, Trash2, Search, X, Image as ImageIcon, Clock, CheckCircle2, Undo2 } from 'lucide-react'
+import { Plus, Trash2, Search, X, Image as ImageIcon, Clock, CheckCircle2, Undo2, Download, Loader2 } from 'lucide-react'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import Image from 'next/image'
@@ -34,7 +38,7 @@ dayjs.extend(relativeTime)
 export default function StoriesPage() {
   const router = useRouter()
   const queryClient = useQueryClient()
-  const { data: stories, isLoading } = useStories()
+  const { data: stories, isLoading, refetch } = useStories()
   const createStory = useCreateStory()
   const deleteStory = useDeleteStory()
   const [newStoryName, setNewStoryName] = useState('')
@@ -48,6 +52,20 @@ export default function StoriesPage() {
   const [showDeleteSuccess, setShowDeleteSuccess] = useState(false)
   const [deletedStoryName, setDeletedStoryName] = useState('')
   const [deletedStoryForUndo, setDeletedStoryForUndo] = useState<any>(null)
+  const [downloadingStoryId, setDownloadingStoryId] = useState<string | null>(null)
+
+  // Auto-refresh: Poll for story updates (thumbnails, asset counts, etc.)
+  useEffect(() => {
+    // Initial fetch
+    refetch()
+
+    // Poll every 3 seconds for updates (thumbnails, new stories, asset counts, etc.)
+    const pollInterval = setInterval(() => {
+      refetch()
+    }, 3000)
+
+    return () => clearInterval(pollInterval)
+  }, [refetch])
 
   // Filter stories based on search query
   const filteredStories = useMemo(() => {
@@ -149,6 +167,61 @@ export default function StoriesPage() {
       alert('Unable to restore deleted story.')
     }
   }, [deletedStoryForUndo, queryClient])
+
+  const handleDownloadStory = useCallback(async (storyId: string, storyName: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    
+    if (downloadingStoryId) return // Prevent multiple simultaneous downloads
+    
+    setDownloadingStoryId(storyId)
+    
+    try {
+      // Fetch story assets
+      const supabase = createClient()
+      const { data: storyAssetsData, error } = await supabase
+        .from('story_assets')
+        .select('*, assets(*)')
+        .eq('story_id', storyId)
+        .order('order_index', { ascending: true })
+
+      if (error) throw error
+
+      if (!storyAssetsData || storyAssetsData.length === 0) {
+        alert('No assets to download')
+        return
+      }
+
+      // Process assets to get URLs
+      const assets = storyAssetsData.map((item: any) => {
+        const asset = item.assets as any
+        const thumbUrl = asset.storage_path_thumb
+          ? supabase.storage.from('assets').getPublicUrl(asset.storage_path_thumb).data.publicUrl
+          : asset.storage_path_preview
+          ? supabase.storage.from('assets').getPublicUrl(asset.storage_path_preview).data.publicUrl
+          : supabase.storage.from('assets').getPublicUrl(asset.storage_path).data.publicUrl
+
+        const previewUrl = asset.storage_path_preview
+          ? supabase.storage.from('assets').getPublicUrl(asset.storage_path_preview).data.publicUrl
+          : supabase.storage.from('assets').getPublicUrl(asset.storage_path).data.publicUrl
+
+        const publicUrl = supabase.storage.from('assets').getPublicUrl(asset.storage_path).data.publicUrl
+
+        return {
+          ...asset,
+          publicUrl,
+          previewUrl,
+          thumbUrl,
+        } as Asset
+      })
+
+      await downloadStoryAsZip(assets, storyName)
+    } catch (error) {
+      console.error('Failed to download story:', error)
+      alert(error instanceof Error ? error.message : 'Failed to download story. Please try again.')
+    } finally {
+      setDownloadingStoryId(null)
+    }
+  }, [downloadingStoryId])
 
   if (isLoading) {
     return (
@@ -282,16 +355,36 @@ export default function StoriesPage() {
                   {/* Gradient overlay on hover */}
                   <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/0 to-black/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
                   
-                  {/* Delete button - visible on hover */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setDeleteStoryId(story.id)
-                    }}
-                    className="absolute top-3 right-3 h-8 w-8 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 hover:bg-white shadow-md hover:scale-110"
-                  >
-                    <Trash2 className="h-4 w-4 text-gray-700" />
-                  </button>
+                  {/* Action buttons - visible on hover */}
+                  <div className="absolute top-3 right-3 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                    {/* Download button */}
+                    {story.assetCount > 0 && (
+                      <button
+                        onClick={(e) => handleDownloadStory(story.id, story.name, e)}
+                        disabled={downloadingStoryId === story.id}
+                        className="h-8 w-8 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center hover:bg-white shadow-md hover:scale-110 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Download story"
+                      >
+                        {downloadingStoryId === story.id ? (
+                          <Loader2 className="h-4 w-4 text-gray-700 animate-spin" />
+                        ) : (
+                          <Download className="h-4 w-4 text-gray-700" />
+                        )}
+                      </button>
+                    )}
+                    
+                    {/* Delete button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setDeleteStoryId(story.id)
+                      }}
+                      className="h-8 w-8 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center hover:bg-white shadow-md hover:scale-110 transition-all duration-200"
+                      title="Delete story"
+                    >
+                      <Trash2 className="h-4 w-4 text-gray-700" />
+                    </button>
+                  </div>
 
                   {/* Asset count badge */}
                   {story.assetCount > 0 && (

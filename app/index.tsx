@@ -99,6 +99,10 @@ export default function LibraryScreen() {
   const [deletedAssetsForUndo, setDeletedAssetsForUndo] = useState<Asset[]>([]); // Store for undo
   const deleteSuccessOpacity = useRef(new Animated.Value(0)).current;
   const deleteSuccessTranslateY = useRef(new Animated.Value(-60)).current;
+  
+  // Bulk delete last X photos state
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [bulkDeleteCount, setBulkDeleteCount] = useState<string>('10');
 
   // Function to check for retries when overlay is dismissed
   const checkForRetriesOnOverlayDismiss = useCallback(async () => {

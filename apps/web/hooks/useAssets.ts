@@ -144,14 +144,19 @@ export function useAssets(
         if (searchTerms.length > 0) {
           filteredData = filteredData.filter((asset) => {
             // Extract searchable text from asset
-            const filename = asset.storage_path?.split('/').pop() || ''
+            // Use original_filename if available, otherwise extract from storage_path
+            const filenameFromPath = asset.storage_path?.split('/').pop() || ''
+            const originalFilename = asset.original_filename || ''
+            const filename = originalFilename || filenameFromPath
             const filenameLower = filename.toLowerCase()
             const locationLower = (asset.location || '').toLowerCase()
             const tagsLower = (asset.tags || []).map((tag: string) => tag.toLowerCase())
             
             // Combine all searchable text into a single string for quick searching
+            // Include both original_filename and storage_path filename for comprehensive search
             const searchableText = [
               filenameLower,
+              filenameFromPath.toLowerCase(), // Also search storage_path filename as fallback
               locationLower,
               ...tagsLower
             ].join(' ')
@@ -224,9 +229,9 @@ export function useAssets(
         if (searchQuery && searchQuery.trim()) {
           const searchTerms = searchQuery.trim().split(/\s+/).filter(term => term.length > 0)
           if (searchTerms.length > 0) {
-            // Use OR logic: match any search term in storage_path or location
+            // Use OR logic: match any search term in storage_path, original_filename, or location
             const searchConditions = searchTerms.map(term => 
-              `storage_path.ilike.%${term}%,location.ilike.%${term}%`
+              `storage_path.ilike.%${term}%,original_filename.ilike.%${term}%,location.ilike.%${term}%`
             ).join(',')
             countQuery = countQuery.or(searchConditions)
           }
@@ -264,7 +269,7 @@ export function useAssets(
             const searchTerms = searchQuery.trim().split(/\s+/).filter(term => term.length > 0)
             if (searchTerms.length > 0) {
               const searchConditions = searchTerms.map(term => 
-                `storage_path.ilike.%${term}%,location.ilike.%${term}%`
+                `storage_path.ilike.%${term}%,original_filename.ilike.%${term}%,location.ilike.%${term}%`
               ).join(',')
               viewCountQuery = viewCountQuery.or(searchConditions)
             }

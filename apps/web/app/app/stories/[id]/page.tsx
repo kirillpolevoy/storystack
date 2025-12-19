@@ -8,8 +8,10 @@ import { Story } from '@/types'
 import { StoryBuilder } from '@/components/stories/StoryBuilder'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { ArrowLeft, Edit2, Check, X as XIcon } from 'lucide-react'
+import { ArrowLeft, Edit2, Check, X as XIcon, Download, Loader2 } from 'lucide-react'
 import { useUpdateStory } from '@/hooks/useStories'
+import { useStoryAssets } from '@/hooks/useStoryAssets'
+import { downloadStoryAsZip } from '@/utils/downloadStory'
 
 export default function StoryDetailPage() {
   const params = useParams()
@@ -20,6 +22,9 @@ export default function StoryDetailPage() {
   const updateStory = useUpdateStory()
   const [isEditingDescription, setIsEditingDescription] = useState(false)
   const [editingDescription, setEditingDescription] = useState('')
+  const [isDownloading, setIsDownloading] = useState(false)
+  
+  const { data: storyAssets } = useStoryAssets(storyId)
 
   const { data: story, isLoading } = useQuery({
     queryKey: ['story', storyId],
@@ -66,6 +71,23 @@ export default function StoryDetailPage() {
     }
   }
 
+  const handleDownloadStory = async () => {
+    if (!story || !storyAssets || storyAssets.length === 0) {
+      alert('No assets to download')
+      return
+    }
+
+    setIsDownloading(true)
+    try {
+      await downloadStoryAsZip(storyAssets, story.name)
+    } catch (error) {
+      console.error('Failed to download story:', error)
+      alert(error instanceof Error ? error.message : 'Failed to download story. Please try again.')
+    } finally {
+      setIsDownloading(false)
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -91,7 +113,26 @@ export default function StoryDetailPage() {
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div className="flex-1">
-              <h1 className="text-2xl font-semibold text-gray-900 mb-3">{story.name}</h1>
+              <div className="flex items-center justify-between mb-3">
+                <h1 className="text-2xl font-semibold text-gray-900">{story.name}</h1>
+                <Button
+                  onClick={handleDownloadStory}
+                  disabled={isDownloading || !storyAssets || storyAssets.length === 0}
+                  className="h-9 px-4 text-sm font-medium bg-accent hover:bg-accent/90"
+                >
+                  {isDownloading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Downloading...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="h-4 w-4 mr-2" />
+                      Download Story
+                    </>
+                  )}
+                </Button>
+              </div>
               
               {/* Description - editable */}
               {isEditingDescription ? (

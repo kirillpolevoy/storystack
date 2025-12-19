@@ -7,6 +7,8 @@ import { useUpdateAssetTags } from '@/hooks/useUpdateAssetTags'
 import { useUpdateAssetLocation } from '@/hooks/useUpdateAssetLocation'
 import { useDeleteAsset } from '@/hooks/useDeleteAsset'
 import { useAvailableTags } from '@/hooks/useAvailableTags'
+import { useAvailableLocations } from '@/hooks/useAvailableLocations'
+import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -65,10 +67,20 @@ export function AssetDetailPanel({
   const [isRetagging, setIsRetagging] = useState(false)
   const [retagStatus, setRetagStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle')
   const [showTagSuggestions, setShowTagSuggestions] = useState(false)
+  const [showLocationSuggestions, setShowLocationSuggestions] = useState(false)
   const [localAvailableTags, setLocalAvailableTags] = useState<string[]>([])
   const lastAssetIdRef = useRef<string | null>(null)
 
   const { data: availableTags } = useAvailableTags()
+  const { data: availableLocations } = useAvailableLocations()
+  
+  // Fetch fresh asset data when panel is open - enables auto-refresh
+  const { data: freshAssetData, refetch: refetchAsset } = useAssetDetail(asset.id)
+  
+  // Use fresh asset data if available, otherwise fall back to prop
+  const currentAsset = useMemo(() => {
+    return freshAssetData || asset
+  }, [freshAssetData, asset])
   
   // Merge server tags with locally added tags
   const allAvailableTags = useMemo(() => {
@@ -82,24 +94,43 @@ export function AssetDetailPanel({
   const queryClient = useQueryClient()
   const supabase = createClient()
 
+  // Auto-refresh: Poll for asset updates when panel is open
+  useEffect(() => {
+    if (!open) return
+
+    // Initial fetch
+    refetchAsset()
+
+    // Poll every 2 seconds for updates (tags, location, auto_tag_status, etc.)
+    const pollInterval = setInterval(() => {
+      refetchAsset()
+    }, 2000)
+
+    return () => clearInterval(pollInterval)
+  }, [open, asset.id, refetchAsset])
+
   useEffect(() => {
     if (open) {
+      // Use currentAsset (which includes fresh data) instead of asset prop
+      const assetToUse = currentAsset
+      
       // Only reset tags if this is a different asset OR if mutation is not in progress
       // This prevents race conditions where useEffect resets tags after a successful mutation
-      const isDifferentAsset = lastAssetIdRef.current !== asset.id
+      const isDifferentAsset = lastAssetIdRef.current !== assetToUse.id
       if (isDifferentAsset || (!updateTagsMutation.isPending && isDifferentAsset)) {
-        setTags(asset.tags || [])
-        lastAssetIdRef.current = asset.id
+        setTags(assetToUse.tags || [])
+        lastAssetIdRef.current = assetToUse.id
       }
-      setLocation(asset.location || '')
+      setLocation(assetToUse.location || '')
       setIsEditingLocation(false)
       setRetagStatus('idle')
       setNewTag('')
       setShowTagSuggestions(false)
+      setShowLocationSuggestions(false)
       
       // Add any tags from this asset that aren't in available tags to both local list and query cache
-      if (asset.tags && availableTags) {
-        const newTags = asset.tags.filter(tag => !availableTags.includes(tag))
+      if (assetToUse.tags && availableTags) {
+        const newTags = assetToUse.tags.filter(tag => !availableTags.includes(tag))
         if (newTags.length > 0) {
           setLocalAvailableTags((prev) => {
             const updated = [...prev, ...newTags]
@@ -118,20 +149,20 @@ export function AssetDetailPanel({
       // Reset ref when panel closes
       lastAssetIdRef.current = null
     }
-  }, [asset.id, asset.tags, open, availableTags, queryClient, updateTagsMutation.isPending])
+  }, [currentAsset.id, currentAsset.tags, currentAsset.location, open, availableTags, queryClient, updateTagsMutation.isPending])
 
   // Update tags when asset completes retagging (parent polling handles status updates)
   useEffect(() => {
     if (!open) return
     
-    // When asset completes retagging, update tags
-    const isAssetCompleted = completedRetaggingAssetIds.has(asset.id)
-    if (isAssetCompleted && asset.tags) {
-      setTags(asset.tags)
+    // When asset completes retagging, update tags from fresh data
+    const isAssetCompleted = completedRetaggingAssetIds.has(currentAsset.id)
+    if (isAssetCompleted && currentAsset.tags) {
+      setTags(currentAsset.tags)
       queryClient.invalidateQueries({ queryKey: ['assets'] })
-      queryClient.invalidateQueries({ queryKey: ['asset', asset.id] })
+      queryClient.invalidateQueries({ queryKey: ['asset', currentAsset.id] })
     }
-  }, [open, completedRetaggingAssetIds, asset.tags, asset.id, queryClient])
+  }, [open, completedRetaggingAssetIds, currentAsset.tags, currentAsset.id, queryClient])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -181,8 +212,13 @@ export function AssetDetailPanel({
       const updatedTags = [...tags, trimmedTag]
       setTags(updatedTags)
       updateTagsMutation.mutate({
-        assetId: asset.id,
+        assetId: currentAsset.id,
         tags: updatedTags,
+      }, {
+        onSuccess: () => {
+          // Refresh asset data after successful tag update
+          refetchAsset()
+        }
       })
       
       // If this tag doesn't exist in available tags, add it to local list and update query cache
@@ -226,7 +262,7 @@ export function AssetDetailPanel({
     setTags(updatedTags)
     updateTagsMutation.mutate(
       {
-        assetId: asset.id,
+        assetId: currentAsset.id,
         tags: updatedTags,
       },
       {
@@ -236,16 +272,18 @@ export function AssetDetailPanel({
           if (data?.tags) {
             setTags(data.tags)
           }
+          // Refresh asset data after successful tag update
+          refetchAsset()
           // Invalidate queries to update Tag Management usage counts
           queryClient.invalidateQueries({ queryKey: ['tags'] })
           queryClient.invalidateQueries({ queryKey: ['availableTags'] })
           queryClient.invalidateQueries({ queryKey: ['assets'] })
-          queryClient.invalidateQueries({ queryKey: ['asset', asset.id] })
+          queryClient.invalidateQueries({ queryKey: ['asset', currentAsset.id] })
         },
         onError: (error) => {
           console.error('[AssetDetailPanel] Tag removal failed:', error)
           // Revert to original tags on error
-          setTags(asset.tags || [])
+          setTags(currentAsset.tags || [])
         },
       }
     )
@@ -254,19 +292,21 @@ export function AssetDetailPanel({
   const handleUpdateLocation = () => {
     updateLocationMutation.mutate(
       {
-        assetId: asset.id,
+        assetId: currentAsset.id,
         location: location.trim() || null,
       },
       {
         onSuccess: () => {
           setIsEditingLocation(false)
+          // Refresh asset data after successful location update
+          refetchAsset()
         },
       }
     )
   }
 
   const handleRetag = async () => {
-    if (!asset.publicUrl) {
+    if (!currentAsset.publicUrl) {
       console.error('[AssetDetailPanel] No public URL available for asset')
       alert('Error: No image URL available for retagging')
       return
@@ -274,13 +314,13 @@ export function AssetDetailPanel({
 
     setIsRetagging(true)
     try {
-      console.log('[AssetDetailPanel] Starting retag for asset:', asset.id)
+      console.log('[AssetDetailPanel] Starting retag for asset:', currentAsset.id)
       
       // Set status to pending first
       const { error: updateError } = await supabase
         .from('assets')
         .update({ auto_tag_status: 'pending' })
-        .eq('id', asset.id)
+        .eq('id', currentAsset.id)
 
       if (updateError) {
         console.error('[AssetDetailPanel] Failed to set pending status:', updateError)
@@ -296,16 +336,16 @@ export function AssetDetailPanel({
       }
 
       console.log('[AssetDetailPanel] Invoking auto_tag_asset:', {
-        assetId: asset.id,
-        imageUrl: asset.publicUrl?.substring(0, 100),
+        assetId: currentAsset.id,
+        imageUrl: currentAsset.publicUrl?.substring(0, 100),
       })
 
       // Use Supabase client's built-in function invocation
       // This handles CORS and authentication automatically
       const { data, error } = await supabase.functions.invoke('auto_tag_asset', {
         body: {
-          assetId: asset.id,
-          imageUrl: asset.publicUrl,
+          assetId: currentAsset.id,
+          imageUrl: currentAsset.publicUrl,
         },
       })
 
@@ -329,11 +369,14 @@ export function AssetDetailPanel({
       console.log('[AssetDetailPanel] Edge function response:', data)
 
       // Notify parent to track this asset (same as bulk retagging)
-      onRetagStart?.(asset.id)
+      onRetagStart?.(currentAsset.id)
 
       // Set pending state - polling will handle completion
       setIsRetagging(false)
       setRetagStatus('pending')
+      
+      // Refresh asset data immediately to show pending status
+      refetchAsset()
       
       // Polling useEffect will handle status updates and query invalidation
     } catch (error) {
@@ -344,7 +387,7 @@ export function AssetDetailPanel({
   }
 
   const handleDelete = () => {
-    deleteAssetMutation.mutate(asset.id, {
+    deleteAssetMutation.mutate(currentAsset.id, {
       onSuccess: () => {
         setShowDeleteConfirm(false)
         onClose()
@@ -352,26 +395,26 @@ export function AssetDetailPanel({
     })
   }
 
-  const imageUrl = asset.previewUrl || asset.publicUrl || ''
+  const imageUrl = currentAsset.previewUrl || currentAsset.publicUrl || ''
   // Use original_filename if available, otherwise fall back to storage_path filename
-  const filename = asset.original_filename || asset.storage_path?.split('/').pop() || 'Unknown'
-  const dateToDisplay = asset.date_taken || asset.created_at
+  const filename = currentAsset.original_filename || currentAsset.storage_path?.split('/').pop() || 'Unknown'
+  const dateToDisplay = currentAsset.date_taken || currentAsset.created_at
   
   // Use same logic as AssetTile: check both database status AND tracked retagging state
-  const isAssetRetagging = retaggingAssetIds.has(asset.id) || asset.auto_tag_status === 'pending' || retagStatus === 'pending'
-  const isAssetCompleted = completedRetaggingAssetIds.has(asset.id)
+  const isAssetRetagging = retaggingAssetIds.has(currentAsset.id) || currentAsset.auto_tag_status === 'pending' || retagStatus === 'pending'
+  const isAssetCompleted = completedRetaggingAssetIds.has(currentAsset.id)
   const isAutoTaggingPending = isAssetRetagging
 
   const content = (
-    <div className="space-y-6">
-      {/* Hero Image - Takes prominent space */}
-      {imageUrl && (
+    <div className="space-y-5">
+      {/* Hero Image - Compact but prominent */}
+          {imageUrl && (
         <div className="relative w-full aspect-square overflow-hidden rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200/50 shadow-sm group">
           <Image
             src={imageUrl}
-            alt={asset.tags[0] || 'Asset'}
+            alt={currentAsset.tags[0] || 'Asset'}
             fill
-            className="object-contain p-2 z-0"
+            className="object-contain p-2 z-0 transition-opacity duration-300"
             sizes="(max-width: 768px) 100vw, 420px"
             priority
             unoptimized
@@ -379,8 +422,8 @@ export function AssetDetailPanel({
           
           {/* Success Indicator - shows briefly after tagging completes (matches AssetTile) */}
           {isAssetCompleted && !isAssetRetagging && (
-            <div className="absolute inset-0 z-10 bg-green-50/80 flex items-center justify-center backdrop-blur-[2px]">
-              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-green-200 text-green-700 text-[10px] font-medium rounded-md shadow-card">
+            <div className="absolute inset-0 z-10 bg-green-50/90 flex items-center justify-center backdrop-blur-sm animate-in fade-in duration-200">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-green-200 text-green-700 text-[10px] font-medium rounded-md shadow-sm">
                 <CheckCircle2 className="h-3 w-3" />
                 <span>Tagged</span>
               </div>
@@ -389,8 +432,8 @@ export function AssetDetailPanel({
           
           {/* Tagging Status Indicator - matches AssetTile styling */}
           {isAssetRetagging && (
-            <div className="absolute inset-0 z-10 bg-accent/10 flex items-center justify-center backdrop-blur-[2px]">
-              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-accent/20 text-accent text-[10px] font-medium rounded-md shadow-card">
+            <div className="absolute inset-0 z-10 bg-accent/10 flex items-center justify-center backdrop-blur-sm animate-in fade-in duration-200">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-accent/20 text-accent text-[10px] font-medium rounded-md shadow-sm">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 <span>Tagging...</span>
               </div>
@@ -398,9 +441,9 @@ export function AssetDetailPanel({
           )}
           
           {/* Error Overlay - shows when tagging fails */}
-          {!isAssetRetagging && !isAssetCompleted && (asset.auto_tag_status === 'failed' || retagStatus === 'error') && (
-            <div className="absolute inset-0 z-10 bg-red-50/80 flex items-center justify-center backdrop-blur-[2px]">
-              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-200 text-red-700 text-[10px] font-medium rounded-md shadow-card">
+          {!isAssetRetagging && !isAssetCompleted && (currentAsset.auto_tag_status === 'failed' || retagStatus === 'error') && (
+            <div className="absolute inset-0 z-10 bg-red-50/90 flex items-center justify-center backdrop-blur-sm animate-in fade-in duration-200">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-200 text-red-700 text-[10px] font-medium rounded-md shadow-sm">
                 <AlertCircle className="h-3 w-3" />
                 <span>Tagging failed</span>
               </div>
@@ -410,23 +453,23 @@ export function AssetDetailPanel({
       )}
 
       {/* Content */}
-      <div className="space-y-6">
-        {/* Quick Actions Bar */}
+      <div className="space-y-5">
+        {/* Quick Actions Bar - Compact */}
         <div className="flex items-center gap-2 pb-4 border-b border-gray-100">
           <Button
             variant="outline"
             size="sm"
             onClick={handleRetag}
             disabled={isRetagging || isAssetRetagging}
-            className="flex-1 h-9 text-xs font-medium"
+            className="flex-1 h-9 text-xs font-medium border-gray-200 hover:bg-gray-50 transition-all duration-150"
           >
             <Sparkles className="h-3.5 w-3.5 mr-1.5" />
             Rerun AI Tagging
           </Button>
         </div>
 
-        {/* Tags Section - Airbnb-inspired design */}
-        <div className="space-y-4">
+        {/* Tags Section - Tight, efficient design */}
+        <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900">Tags</h3>
             {tags.length > 0 && (
@@ -436,13 +479,13 @@ export function AssetDetailPanel({
             )}
           </div>
           
-          {/* Existing Tags - Elegant, spacious design */}
+          {/* Existing Tags - Compact design */}
           {tags.length > 0 ? (
-            <div className="flex flex-wrap gap-2.5">
+            <div className="flex flex-wrap gap-2">
               {tags.map((tag) => (
                 <div
                   key={tag}
-                  className="group inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-lg hover:border-gray-300 hover:shadow-sm transition-all duration-150"
+                  className="group inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-gray-200 rounded-lg hover:border-gray-300 hover:shadow-sm transition-all duration-150"
                 >
                   <span className="text-sm font-medium text-gray-700">{tag}</span>
                   <button
@@ -457,12 +500,12 @@ export function AssetDetailPanel({
               ))}
             </div>
           ) : (
-            <div className="py-3 text-center">
+            <div className="py-3 text-center rounded-lg bg-gray-50/50 border border-gray-100">
               <p className="text-sm text-gray-400">No tags yet. Add tags to organize your assets.</p>
             </div>
           )}
 
-          {/* Add Tag Input - Premium autocomplete experience */}
+          {/* Add Tag Input - Compact autocomplete */}
           <div className="relative">
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
@@ -493,29 +536,29 @@ export function AssetDetailPanel({
                       setShowTagSuggestions(false)
                     }
                   }}
-                  className="h-10 text-sm border-gray-200 focus:border-gray-400 focus:ring-1 focus:ring-gray-400/20 pr-10 transition-all"
+                  className="h-9 text-sm border-gray-200 focus:border-gray-400 focus:ring-1 focus:ring-gray-400/20 pr-9 transition-all duration-150"
                 />
                 {/* Tag suggestions indicator - show when there are available tags */}
                 {allAvailableTags && allAvailableTags.filter((tag: string) => !tags.includes(tag)).length > 0 && (
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-                    <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform ${showTagSuggestions ? 'rotate-180' : ''}`} />
+                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+                    <ChevronDown className={`h-3.5 w-3.5 text-gray-400 transition-transform duration-150 ${showTagSuggestions ? 'rotate-180' : ''}`} />
                   </div>
                 )}
               </div>
               <Button 
                 onClick={() => handleAddTag()} 
                 size="sm"
-                className="h-10 px-4 shrink-0 font-medium"
+                className="h-9 px-3 shrink-0 font-medium bg-accent hover:bg-accent/90 transition-all duration-150"
                 disabled={!newTag.trim()}
               >
-                <Plus className="h-4 w-4 mr-1.5" />
+                <Plus className="h-3.5 w-3.5 mr-1" />
                 Add
               </Button>
             </div>
             
-            {/* Tag suggestions dropdown - Show all available tags when focused, filter when typing */}
+            {/* Tag suggestions dropdown - Compact design */}
             {showTagSuggestions && allAvailableTags && allAvailableTags.filter((tag: string) => !tags.includes(tag)).length > 0 && (
-              <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+              <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden animate-in fade-in slide-in-from-top-1 duration-150">
                 <div className="py-1 max-h-48 overflow-y-auto">
                   {allAvailableTags
                     .filter((tag: string) => {
@@ -527,7 +570,7 @@ export function AssetDetailPanel({
                       }
                       return true
                     })
-                    .slice(0, 12) // Show more tags when showing full list
+                    .slice(0, 10) // Show fewer suggestions
                     .map((tag: string) => (
                       <button
                         key={tag}
@@ -542,14 +585,14 @@ export function AssetDetailPanel({
                           e.preventDefault()
                           e.stopPropagation()
                         }}
-                        className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100 flex items-center gap-2 cursor-pointer"
+                        className="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100 flex items-center gap-2 cursor-pointer group"
                       >
-                        <span className="flex-1">{tag}</span>
-                        <Plus className="h-3.5 w-3.5 text-gray-400" />
+                        <span className="flex-1 font-medium">{tag}</span>
+                        <Plus className="h-3.5 w-3.5 text-gray-400 group-hover:text-accent transition-colors duration-100" />
                       </button>
                     ))}
                   {allAvailableTags.filter((tag: string) => !tags.includes(tag) && (!newTag.trim() || tag.toLowerCase().includes(newTag.toLowerCase()))).length === 0 && (
-                    <div className="px-4 py-3 text-sm text-gray-500 text-center">
+                    <div className="px-3 py-3 text-sm text-gray-500 text-center">
                       {newTag.trim() ? 'No matching tags' : 'No tags available'}
                     </div>
                   )}
@@ -559,109 +602,197 @@ export function AssetDetailPanel({
           </div>
         </div>
 
-        {/* Metadata Section - Grouped, Subtle */}
-        <div className="space-y-4 pt-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
+        {/* Metadata Section - Premium structured design */}
+        <div className="space-y-0 pt-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-4">
             Details
           </h3>
 
-          {/* Location - Editable, Prominent */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-gray-600 flex items-center gap-1.5">
-                <MapPin className="h-3.5 w-3.5 text-gray-400" />
-                Location
-              </label>
-              {!isEditingLocation && (
-                <Button
-                  variant="ghost"
-                  size="sm"
+          <div className="space-y-0 divide-y divide-gray-100">
+            {/* Location - Premium row design */}
+            <div className="py-3 first:pt-0">
+              {isEditingLocation ? (
+                <div className="space-y-2 animate-in fade-in slide-in-from-top-1 duration-150">
+                  <div className="relative">
+                    <Input
+                      type="text"
+                      value={location}
+                      onChange={(e) => {
+                        setLocation(e.target.value)
+                        setShowLocationSuggestions(true)
+                      }}
+                      placeholder="Enter location..."
+                      className="h-9 text-sm border-gray-200 focus:border-gray-400 focus:ring-1 focus:ring-gray-400/20 pr-9 transition-all duration-150"
+                      onFocus={() => {
+                        if (availableLocations && availableLocations.length > 0) {
+                          setShowLocationSuggestions(true)
+                        }
+                      }}
+                      onBlur={() => {
+                        // Delay closing to allow clicks on suggestions
+                        setTimeout(() => setShowLocationSuggestions(false), 200)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          handleUpdateLocation()
+                        } else if (e.key === 'Escape') {
+                          setLocation(currentAsset.location || '')
+                          setIsEditingLocation(false)
+                          setShowLocationSuggestions(false)
+                        }
+                      }}
+                      autoFocus
+                    />
+                    {/* Location suggestions indicator */}
+                    {availableLocations && availableLocations.length > 0 && (
+                      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+                        <ChevronDown className={`h-3.5 w-3.5 text-gray-400 transition-transform duration-150 ${showLocationSuggestions ? 'rotate-180' : ''}`} />
+                      </div>
+                    )}
+                    
+                    {/* Location suggestions dropdown */}
+                    {showLocationSuggestions && availableLocations && availableLocations.length > 0 && (
+                      <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden animate-in fade-in slide-in-from-top-1 duration-150">
+                        <div className="py-1 max-h-48 overflow-y-auto">
+                          {availableLocations
+                            .filter((loc: string) => {
+                              if (!location.trim()) return true
+                              return loc.toLowerCase().includes(location.toLowerCase())
+                            })
+                            .slice(0, 8)
+                            .map((loc: string) => (
+                              <button
+                                key={loc}
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  e.stopPropagation()
+                                  // Set the exact location value from the suggestion
+                                  const exactLocation = loc
+                                  setLocation(exactLocation)
+                                  setShowLocationSuggestions(false)
+                                  // Save immediately with the exact value
+                                  updateLocationMutation.mutate(
+                                    {
+                                      assetId: currentAsset.id,
+                                      location: exactLocation.trim() || null,
+                                    },
+                                    {
+                                      onSuccess: () => {
+                                        setIsEditingLocation(false)
+                                        // Refresh asset data after successful location update
+                                        refetchAsset()
+                                      },
+                                    }
+                                  )
+                                }}
+                                onMouseDown={(e) => {
+                                  e.preventDefault()
+                                  e.stopPropagation()
+                                }}
+                                className="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100 flex items-center gap-2 cursor-pointer group"
+                              >
+                                <MapPin className="h-3.5 w-3.5 text-gray-400 group-hover:text-accent transition-colors duration-100" />
+                                <span className="flex-1 font-medium">{loc}</span>
+                              </button>
+                            ))}
+                          {availableLocations.filter((loc: string) => 
+                            !location.trim() || loc.toLowerCase().includes(location.toLowerCase())
+                          ).length === 0 && (
+                            <div className="px-3 py-3 text-sm text-gray-500 text-center">
+                              No matching locations
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      onClick={handleUpdateLocation}
+                      className="h-8 px-3 text-xs font-medium bg-accent hover:bg-accent/90 transition-all duration-150"
+                      disabled={updateLocationMutation.isPending}
+                    >
+                      {updateLocationMutation.isPending ? (
+                        <>
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        'Save'
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setLocation(currentAsset.location || '')
+                        setIsEditingLocation(false)
+                        setShowLocationSuggestions(false)
+                      }}
+                      className="h-8 px-3 text-xs border-gray-200 hover:bg-gray-50 transition-all duration-150"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div 
                   onClick={() => setIsEditingLocation(true)}
-                  className="h-6 px-2 text-xs text-gray-500 hover:text-gray-700"
+                  className="group flex items-start justify-between cursor-pointer -mx-1 px-1 py-0.5 rounded-md hover:bg-gray-50/50 transition-colors duration-150"
                 >
-                  <Edit2 className="h-3 w-3 mr-1" />
-                  Edit
-                </Button>
+                  <div className="flex items-start gap-3 flex-1 min-w-0">
+                    <MapPin className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium text-gray-500 mb-1">Location</div>
+                      <p className={`text-sm font-semibold text-gray-900 transition-colors duration-150 ${
+                        location ? '' : 'text-gray-400 italic font-normal'
+                      }`}>
+                        {location || 'No location set'}
+                      </p>
+                    </div>
+                  </div>
+                  <Edit2 className="h-3.5 w-3.5 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shrink-0 mt-1" />
+                </div>
               )}
             </div>
-            {isEditingLocation ? (
-              <div className="flex gap-2">
-                <Input
-                  type="text"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  placeholder="Enter location..."
-                  className="flex-1 h-9 text-sm"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      handleUpdateLocation()
-                    } else if (e.key === 'Escape') {
-                      setLocation(asset.location || '')
-                      setIsEditingLocation(false)
-                    }
-                  }}
-                  autoFocus
-                />
-                <Button
-                  size="sm"
-                  onClick={handleUpdateLocation}
-                  className="h-9 px-3"
-                  disabled={updateLocationMutation.isPending}
-                >
-                  {updateLocationMutation.isPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    'Save'
-                  )}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setLocation(asset.location || '')
-                    setIsEditingLocation(false)
-                  }}
-                  className="h-9 px-3"
-                >
-                  Cancel
-                </Button>
+
+            {/* Date Taken - Premium row design */}
+            <div className="py-3">
+              <div className="flex items-start gap-3">
+                <Calendar className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium text-gray-500 mb-1">Date Taken</div>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {dayjs(dateToDisplay).format('MMMM D, YYYY [at] h:mm A')}
+                  </p>
+                </div>
               </div>
-            ) : (
-              <p className="text-sm text-gray-900 font-medium">
-                {location || <span className="text-gray-400 font-normal italic">No location set</span>}
-              </p>
-            )}
-          </div>
+            </div>
 
-          {/* Date Taken */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-gray-600 flex items-center gap-1.5">
-              <Calendar className="h-3.5 w-3.5 text-gray-400" />
-              Date Taken
-            </label>
-            <p className="text-sm text-gray-900 font-medium">
-              {dayjs(dateToDisplay).format('MMMM D, YYYY [at] h:mm A')}
-            </p>
-          </div>
-
-          {/* Filename - Less Prominent */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-gray-600 flex items-center gap-1.5">
-              <FileText className="h-3.5 w-3.5 text-gray-400" />
-              Filename
-            </label>
-            <p className="text-sm text-gray-600 font-mono break-all">{filename}</p>
+            {/* Filename - Premium row design */}
+            <div className="py-3">
+              <div className="flex items-start gap-3">
+                <FileText className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium text-gray-500 mb-1">Filename</div>
+                  <p className="text-sm font-medium text-gray-700 font-mono break-all">{filename}</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Destructive Action - Separated, Subtle */}
+        {/* Destructive Action - Compact, separated */}
         <div className="pt-4 border-t border-gray-100">
           <Button
             variant="outline"
             size="sm"
             onClick={() => setShowDeleteConfirm(true)}
             disabled={deleteAssetMutation.isPending}
-            className="h-9 text-xs font-medium text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-200 border-red-200/50"
+            className="w-full h-9 text-xs font-medium text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-200 border-red-200/50 transition-all duration-150"
           >
             {deleteAssetMutation.isPending ? (
               <>

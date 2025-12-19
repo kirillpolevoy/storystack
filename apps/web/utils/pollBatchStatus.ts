@@ -71,6 +71,8 @@ export function startBatchPolling(): void {
     
     pollPendingBatches()
   }, POLL_INTERVAL_MS)
+  
+  console.log('[BatchPolling] ✅ Polling started successfully')
 }
 
 /**
@@ -103,12 +105,10 @@ export function addBatchToPoll(batchId: string): void {
  */
 export function removeBatchFromPoll(batchId: string): void {
   pollingState.batchIds.delete(batchId)
-  console.log(`[BatchPolling] ➖ Removed batch ${batchId} from polling queue`)
+  console.log(`[BatchPolling] ➖ Removed batch ${batchId} from polling queue (${pollingState.batchIds.size} remaining)`)
   
-  // Stop polling if no batches left
-  if (pollingState.batchIds.size === 0 && pollingState.pollInterval) {
-    stopBatchPolling()
-  }
+  // Don't stop polling - keep checking database for new batches
+  // Polling will stop automatically after MAX_POLL_ATTEMPTS or when no pending batches found
 }
 
 /**
@@ -135,25 +135,29 @@ async function pollPendingBatches(): Promise<void> {
       return
     }
 
-    if (!assets || assets.length === 0) {
-      // No pending batches, stop polling
-      if (pollingState.batchIds.size === 0) {
-        stopBatchPolling()
-      }
-      return
-    }
-
-    // Get unique batch IDs
-    const batchIds = new Set(
-      assets
+    // Get unique batch IDs from database
+    const batchIdsFromDb = new Set(
+      (assets || [])
         .map(a => a.openai_batch_id)
         .filter((id): id is string => id !== null)
     )
 
-    console.log(`[BatchPolling] 🔍 Found ${batchIds.size} pending batches to check (polling every 10s)`)
+    // Merge with manually added batch IDs
+    const allBatchIds = new Set([...pollingState.batchIds, ...batchIdsFromDb])
+
+    // Add database batches to polling state (so they persist across polls)
+    batchIdsFromDb.forEach(batchId => pollingState.batchIds.add(batchId))
+
+    if (allBatchIds.size === 0) {
+      // No pending batches anywhere, but don't stop polling yet - might have batches completing
+      console.log('[BatchPolling] ⏸️  No pending batches found, but continuing to poll...')
+      return
+    }
+
+    console.log(`[BatchPolling] 🔍 Found ${allBatchIds.size} pending batches to check (${batchIdsFromDb.size} from DB, ${pollingState.batchIds.size} total tracked)`)
 
     // Poll each batch (in parallel for faster processing)
-    const pollPromises = Array.from(batchIds).map(batchId => pollBatch(batchId))
+    const pollPromises = Array.from(allBatchIds).map(batchId => pollBatch(batchId))
     await Promise.allSettled(pollPromises)
   } catch (error) {
     console.error('[BatchPolling] ❌ Error in pollPendingBatches:', error)
@@ -218,9 +222,8 @@ async function pollBatch(batchId: string): Promise<void> {
       // Trigger a refresh of assets to show updated tags
       // Dispatch custom event that components can listen to
       if (typeof window !== 'undefined') {
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('batchCompleted', { detail: { batchId } }))
-        }
+        console.log(`[BatchPolling] 📢 Dispatching batchCompleted event for batch ${batchId}`)
+        window.dispatchEvent(new CustomEvent('batchCompleted', { detail: { batchId } }))
       }
     } else if (result.error) {
       // Edge function returned an error
