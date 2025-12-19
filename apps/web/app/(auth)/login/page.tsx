@@ -20,6 +20,8 @@ export const metadata: Metadata = {
     description: 'Centralized hub for asset and content management',
     url: `${siteUrl}/login`,
     siteName: 'StoryStack',
+    type: 'website',
+    locale: 'en_US',
     images: [
       {
         url: `${siteUrl}/opengraph-image`,
@@ -29,8 +31,6 @@ export const metadata: Metadata = {
         type: 'image/png',
       },
     ],
-    locale: 'en_US',
-    type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
