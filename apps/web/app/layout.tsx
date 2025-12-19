@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     siteName: 'StoryStack',
     images: [
       {
-        url: `${siteUrl}/logo.png`,
+        url: `${siteUrl}/opengraph-image`,
         width: 1200,
         height: 630,
         alt: 'StoryStack - Asset and Content Management',
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: 'StoryStack',
     description: 'Centralized hub for asset and content management',
-    images: [`${siteUrl}/logo.png`],
+    images: [`${siteUrl}/opengraph-image`],
   },
   robots: {
     index: true,
