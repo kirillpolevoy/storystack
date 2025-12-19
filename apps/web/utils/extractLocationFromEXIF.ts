@@ -58,7 +58,7 @@ export async function extractLocationFromEXIF(file: File): Promise<string | null
       // Check if coordinates might need sign correction based on magnitude
       // US longitudes should be negative (West of Prime Meridian)
       // If longitude is positive and > 80, it's likely wrong for US locations
-      if (longitude > 0 && Math.abs(longitude) > 80) {
+      if (longitude !== null && longitude > 0 && Math.abs(longitude) > 80) {
         console.warn('[extractLocationFromEXIF] ⚠️  Suspicious longitude (positive and > 80), might need negation:', longitude)
         // Don't auto-correct here, but log for debugging
       }
