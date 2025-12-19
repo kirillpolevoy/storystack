@@ -23,7 +23,7 @@ export const metadata: Metadata = {
     siteName: 'StoryStack',
     images: [
       {
-        url: new URL('/og-image.png', siteUrl).toString(),
+        url: '/og-image.png',
         width: 1200,
         height: 630,
         alt: 'StoryStack - Asset and Content Management',
@@ -37,7 +37,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: 'StoryStack',
     description: 'Centralized hub for asset and content management',
-    images: [new URL('/og-image.png', siteUrl).toString()],
+    images: ['/og-image.png'],
   },
 }
 
