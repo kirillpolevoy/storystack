@@ -5,10 +5,8 @@ import { Providers } from './providers'
 
 const inter = Inter({ subsets: ['latin'] })
 
-// Get site URL for Open Graph
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 
-  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 
-  'https://storystackstudios.com')
+// Get site URL for Open Graph - always use production domain for images
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://storystackstudios.com'
 
 export const metadata: Metadata = {
   title: 'StoryStack',
@@ -21,7 +19,7 @@ export const metadata: Metadata = {
     siteName: 'StoryStack',
     images: [
       {
-        url: '/og-image.png',
+        url: `${siteUrl}/og-image.png`,
         width: 1200,
         height: 630,
         alt: 'StoryStack - Asset and Content Management',
@@ -35,7 +33,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: 'StoryStack',
     description: 'Centralized hub for asset and content management',
-    images: ['/og-image.png'],
+    images: [`${siteUrl}/og-image.png`],
   },
   robots: {
     index: true,
