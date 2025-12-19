@@ -1,7 +1,14 @@
 {
   "buildCommand": "npm ci && npm run build",
   "installCommand": "npm ci",
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "redirects": [
+    {
+      "source": "/opengraph-image",
+      "destination": "/opengraph-image",
+      "permanent": false
+    }
+  ]
 }
 
 
