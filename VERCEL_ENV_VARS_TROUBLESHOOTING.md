@@ -64,11 +64,12 @@ To verify variables are available, you can temporarily add this to your code:
 
 ```typescript
 console.log('Env check:', {
-  hasUrl: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+  hasUrl: !!process.env.    NEXT_PUBLIC_SUPABASE_URL,
   hasKey: !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   urlPrefix: process.env.NEXT_PUBLIC_SUPABASE_URL?.substring(0, 20)
 })
 ```
 
 Check the function logs to see if these values are logged.
+
 

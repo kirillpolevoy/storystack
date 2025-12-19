@@ -112,13 +112,14 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
   
-  // Allow static assets and Next.js internals
+  // Allow static assets, Next.js internals, and Open Graph image
   if (
     pathname.startsWith('/_next') ||
     pathname.startsWith('/api') ||
+    pathname === '/opengraph-image' ||
     pathname.match(/\.(ico|png|jpg|jpeg|svg|css|js|woff|woff2|ttf|eot)$/)
   ) {
-    console.log(`[Middleware] Allowing static asset: ${pathname}`)
+    console.log(`[Middleware] Allowing static asset or Open Graph image: ${pathname}`)
     return supabaseResponse
   }
 

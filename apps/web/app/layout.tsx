@@ -21,10 +21,11 @@ export const metadata: Metadata = {
     siteName: 'StoryStack',
     images: [
       {
-        url: `${siteUrl}/opengraph-image`,
+        url: new URL('/opengraph-image', siteUrl).toString(),
         width: 1200,
         height: 630,
         alt: 'StoryStack - Asset and Content Management',
+        type: 'image/png',
       },
     ],
     locale: 'en_US',

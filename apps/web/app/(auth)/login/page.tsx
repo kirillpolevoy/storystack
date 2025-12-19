@@ -4,8 +4,42 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import type { Metadata } from 'next'
 
 export const dynamic = 'force-dynamic'
+
+// Get site URL for Open Graph
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 
+  'https://storystackstudios.com')
+
+export const metadata: Metadata = {
+  title: 'StoryStack - Sign In',
+  description: 'Centralized hub for asset and content management',
+  openGraph: {
+    title: 'StoryStack',
+    description: 'Centralized hub for asset and content management',
+    url: new URL('/login', siteUrl).toString(),
+    siteName: 'StoryStack',
+    images: [
+      {
+        url: new URL('/opengraph-image', siteUrl).toString(),
+        width: 1200,
+        height: 630,
+        alt: 'StoryStack - Asset and Content Management',
+        type: 'image/png',
+      },
+    ],
+    locale: 'en_US',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'StoryStack',
+    description: 'Centralized hub for asset and content management',
+    images: [new URL('/opengraph-image', siteUrl).toString()],
+  },
+}
 
 export default async function LoginPage() {
   // Check environment variables first
