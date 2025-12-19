@@ -12,12 +12,13 @@ export const dynamic = 'force-dynamic'
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://storystackstudios.com'
 
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: 'StoryStack - Sign In',
   description: 'Centralized hub for asset and content management',
   openGraph: {
     title: 'StoryStack',
     description: 'Centralized hub for asset and content management',
-    url: new URL('/login', siteUrl).toString(),
+    url: `${siteUrl}/login`,
     siteName: 'StoryStack',
     images: [
       {
