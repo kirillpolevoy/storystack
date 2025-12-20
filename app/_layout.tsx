@@ -5,6 +5,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useRouter, useSegments } from 'expo-router';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { WorkspaceProvider } from '@/contexts/WorkspaceContext';
 import { DelightfulLoadingScreen } from '@/components/DelightfulLoadingScreen';
 import { hasCompletedOnboarding } from '@/utils/onboarding';
 import { PostHogProvider } from 'posthog-react-native';
@@ -324,14 +325,16 @@ function RootLayoutNav() {
         <ErrorBoundary>
           <SafeAreaProvider>
             <GestureHandlerRootView style={{ flex: 1 }}>
-              <View style={{ flex: 1, backgroundColor: '#fafafa' }}>
-                <StatusBar barStyle="dark-content" />
-                <Suspense fallback={<LoadingFallback />}>
-                  <Animated.View style={{ flex: 1, opacity: showContent ? contentFadeAnim : 0 }}>
-                    <Slot />
-                  </Animated.View>
-                </Suspense>
-              </View>
+              <WorkspaceProvider>
+                <View style={{ flex: 1, backgroundColor: '#fafafa' }}>
+                  <StatusBar barStyle="dark-content" />
+                  <Suspense fallback={<LoadingFallback />}>
+                    <Animated.View style={{ flex: 1, opacity: showContent ? contentFadeAnim : 0 }}>
+                      <Slot />
+                    </Animated.View>
+                  </Suspense>
+                </View>
+              </WorkspaceProvider>
             </GestureHandlerRootView>
           </SafeAreaProvider>
         </ErrorBoundary>

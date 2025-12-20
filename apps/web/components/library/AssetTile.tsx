@@ -184,7 +184,7 @@ export function AssetTile({
           )}
           <Image
             src={imageUrl}
-            alt={asset.tags[0] || 'Asset'}
+            alt={asset.tags?.[0] || 'Asset'}
             fill
             className={`object-cover transition-opacity duration-200 ${
               isLoading ? 'opacity-0' : 'opacity-100'
@@ -221,7 +221,7 @@ export function AssetTile({
       
       
       {/* Overlay with tag info - Stripe-style subtle */}
-      {asset.tags.length > 0 && (
+      {asset.tags && asset.tags.length > 0 && (
         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 via-black/40 to-transparent p-3 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
           <p className="text-xs font-medium text-white truncate">
             {asset.tags[0]}

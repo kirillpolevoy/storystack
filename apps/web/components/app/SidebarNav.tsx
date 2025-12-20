@@ -3,7 +3,7 @@
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
-import { LogOut, Library, BookOpen, Tag, HelpCircle, User, ChevronLeft, ChevronRight } from 'lucide-react'
+import { LogOut, Library, BookOpen, Tag, HelpCircle, User, Settings, ChevronLeft, ChevronRight } from 'lucide-react'
 
 interface SidebarNavProps {
   isMinimized: boolean
@@ -42,6 +42,10 @@ export function SidebarNav({ isMinimized }: SidebarNavProps) {
         <NavLink href="/app/profile" pathname={pathname} secondary isMinimized={isMinimized}>
           <User className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-3.5 w-3.5 flex-shrink-0"} />
           {!isMinimized && <span>Profile</span>}
+        </NavLink>
+        <NavLink href="/app/workspace-settings" pathname={pathname} secondary isMinimized={isMinimized}>
+          <Settings className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-3.5 w-3.5 flex-shrink-0"} />
+          {!isMinimized && <span>Workspace</span>}
         </NavLink>
       </nav>
   )

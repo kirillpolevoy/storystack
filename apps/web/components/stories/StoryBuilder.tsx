@@ -70,7 +70,7 @@ function SortableAssetItem({
         {imageUrl ? (
           <Image
             src={imageUrl}
-            alt={asset.tags[0] || 'Asset'}
+            alt={asset.tags?.[0] || 'Asset'}
             fill
             className="object-cover"
             sizes="64px"
@@ -83,9 +83,9 @@ function SortableAssetItem({
       </div>
       <div className="flex-1">
         <p className="text-sm font-medium text-gray-900">
-          {asset.tags[0] || 'Untitled'}
+          {asset.tags?.[0] || 'Untitled'}
         </p>
-        {asset.tags.length > 1 && (
+        {asset.tags && asset.tags.length > 1 && (
           <p className="text-xs text-gray-500 mt-0.5">
             {asset.tags.slice(1).join(', ')}
           </p>

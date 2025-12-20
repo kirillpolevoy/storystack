@@ -80,3 +80,5 @@ SELECT
 FROM assets;
 
 
+
+

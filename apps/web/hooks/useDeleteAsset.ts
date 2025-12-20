@@ -36,13 +36,17 @@ export function useDeleteAsset() {
         }
       }
 
-      // Delete DB record
+      // Soft delete DB record (set deleted_at timestamp)
+      // RLS policy only allows UPDATE, not DELETE
       const { error: deleteError } = await supabase
         .from('assets')
-        .delete()
+        .update({ deleted_at: new Date().toISOString() })
         .eq('id', assetId)
 
-      if (deleteError) throw deleteError
+      if (deleteError) {
+        console.error('[useDeleteAsset] Error soft-deleting asset:', deleteError)
+        throw deleteError
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['assets'] })
@@ -50,5 +54,7 @@ export function useDeleteAsset() {
     },
   })
 }
+
+
 
 

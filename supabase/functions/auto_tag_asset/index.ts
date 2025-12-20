@@ -41,17 +41,22 @@ const DEFAULT_TAG_VOCABULARY = [
 ];
 
 // Get tag vocabulary from Supabase config - ONLY use enabled tags, never fallback to defaults
-// Now user-specific: gets tags for the user who owns the asset
-async function getTagVocabulary(supabaseClient: any, userId: string): Promise<string[]> {
+// Workspace-scoped: gets tags for the workspace that owns the asset
+async function getTagVocabulary(supabaseClient: any, workspaceId: string): Promise<string[]> {
   try {
-    console.log('[auto_tag_asset] 🔍 Fetching tag_config from database for user:', userId);
-    console.log('[auto_tag_asset] 🔍 Query: SELECT auto_tags FROM tag_config WHERE user_id =', userId);
+    if (!workspaceId) {
+      console.error('[auto_tag_asset] ❌ workspace_id not provided');
+      return [];
+    }
+    
+    console.log('[auto_tag_asset] 🔍 Fetching tag_config from database for workspace:', workspaceId);
+    console.log('[auto_tag_asset] 🔍 Query: SELECT auto_tags FROM tag_config WHERE workspace_id =', workspaceId);
     
     const { data: config, error } = await supabaseClient
       .from('tag_config')
-      .select('auto_tags, user_id')
-      .eq('user_id', userId)
-      .single();
+      .select('auto_tags, workspace_id')
+      .eq('workspace_id', workspaceId)
+      .maybeSingle(); // Use maybeSingle() instead of single() to handle missing rows gracefully
     
     if (error) {
       console.error('[auto_tag_asset] ❌ Failed to load tag config:', error);
@@ -59,24 +64,35 @@ async function getTagVocabulary(supabaseClient: any, userId: string): Promise<st
       console.error('[auto_tag_asset] ❌ Error message:', error.message);
       console.error('[auto_tag_asset] ❌ Error details:', JSON.stringify(error, null, 2));
       
-      // If config doesn't exist (PGRST116), try to see if there are any tag_configs for this user
-      if (error.code === 'PGRST116') {
-        console.log('[auto_tag_asset] 🔍 No tag_config found for user. Checking if any tag_configs exist...');
-        const { data: allConfigs, error: listError } = await supabaseClient
-          .from('tag_config')
-          .select('user_id, auto_tags')
-          .limit(5);
-        
-        if (!listError && allConfigs) {
-          console.log('[auto_tag_asset] 🔍 Found tag_configs for other users:', allConfigs.map((c: any) => ({
-            user_id: c.user_id,
-            auto_tags_count: Array.isArray(c.auto_tags) ? c.auto_tags.length : 'not array',
-            auto_tags: c.auto_tags
-          })));
-        }
+      // Check for column not found errors (might indicate schema mismatch)
+      if (error.message?.includes('user_id') || error.code === '42703') {
+        console.error('[auto_tag_asset] ❌ Schema error: tag_config.user_id column referenced but does not exist');
+        console.error('[auto_tag_asset] ❌ This suggests a migration issue. tag_config should use workspace_id, not user_id.');
+        console.error('[auto_tag_asset] ❌ Please verify tag_config table structure and ensure user_id column is dropped.');
       }
       
-      // If config doesn't exist, return empty array (no auto-tagging)
+      // If config doesn't exist (PGRST116) or any other error, return empty array (no auto-tagging)
+      return [];
+    }
+    
+    // Handle case where config doesn't exist (maybeSingle returns null instead of error)
+    if (!config) {
+      console.log('[auto_tag_asset] 🔍 No tag_config found for workspace:', workspaceId);
+      console.log('[auto_tag_asset] 🔍 Checking if any tag_configs exist...');
+      const { data: allConfigs, error: listError } = await supabaseClient
+        .from('tag_config')
+        .select('workspace_id, auto_tags')
+        .limit(5);
+      
+      if (!listError && allConfigs) {
+        console.log('[auto_tag_asset] 🔍 Found tag_configs for other workspaces:', allConfigs.map((c: any) => ({
+          workspace_id: c.workspace_id,
+          auto_tags_count: Array.isArray(c.auto_tags) ? c.auto_tags.length : 'not array',
+          auto_tags: c.auto_tags
+        })));
+      }
+      
+      // No config found - return empty array (no auto-tagging)
       return [];
     }
     
@@ -128,8 +144,27 @@ function extractStoragePath(imageUrl: string): string | null {
 
 // Get A2 storage path from A1 storage path
 function getA2StoragePath(a1Path: string): string {
-  // A1: users/{userId}/campaigns/{campaignId}/{filename}
-  // A2: users/{userId}/campaigns/{campaignId}/ai/{filename}
+  // New format: workspaces/{workspace_id}/assets/{asset_id}/{filename}
+  // Legacy format: users/{userId}/campaigns/{campaignId}/{filename}
+  // A2: users/{userId}/campaigns/{campaignId}/ai/{filename} (legacy only)
+  
+  // Check if it's a workspace path (new format)
+  if (a1Path.startsWith('workspaces/')) {
+    // For workspace paths, A2 is the same as A1 (assets are already stored correctly)
+    // Or we can add an 'ai' subfolder if needed
+    const parts = a1Path.split('/');
+    if (parts.length >= 5 && parts[2] === 'assets') {
+      // workspaces/{workspace_id}/assets/{asset_id}/{filename}
+      // Insert 'ai' before filename
+      const filename = parts.pop();
+      parts.push('ai', filename!);
+      return parts.join('/');
+    }
+    // Fallback: add 'ai' prefix
+    return a1Path.replace('/assets/', '/assets/ai/');
+  }
+  
+  // Legacy format handling
   const parts = a1Path.split('/');
   if (parts.length >= 4) {
     // Insert 'ai' before filename
@@ -927,7 +962,7 @@ async function createOpenAIBatch(
   apiKey: string,
   tagVocabulary: string[],
   supabaseClient: any,
-  userId: string
+  workspaceId: string
 ): Promise<{ batchId: string; fileId: string }> {
   console.log(`[auto_tag_asset] 🚀 Creating OpenAI Batch API job for ${requests.length} images...`);
   
@@ -1547,7 +1582,7 @@ Deno.serve(async (req) => {
         
         const result = await supabaseClient
           .from('assets')
-          .select('id, user_id')
+          .select('id, user_id, workspace_id')
           .in('id', assetIds);
         
         assetsError = result.error;
@@ -1584,13 +1619,13 @@ Deno.serve(async (req) => {
         });
       }
       
-      // Check if all assets have user_id
-      const assetsWithoutUserId = assets.filter(a => !a.user_id);
-      if (assetsWithoutUserId.length > 0) {
-        console.error('[auto_tag_asset] Some assets missing user_id:', assetsWithoutUserId.map(a => a.id));
+      // Check if all assets have workspace_id
+      const assetsWithoutWorkspaceId = assets.filter(a => !a.workspace_id);
+      if (assetsWithoutWorkspaceId.length > 0) {
+        console.error('[auto_tag_asset] Some assets missing workspace_id:', assetsWithoutWorkspaceId.map(a => a.id));
         return new Response(JSON.stringify({ 
-          error: 'Some assets are missing user_id', 
-          assetIds: assetsWithoutUserId.map(a => a.id) 
+          error: 'Some assets are missing workspace_id', 
+          assetIds: assetsWithoutWorkspaceId.map(a => a.id) 
         }), {
           status: 400,
           headers: { 'Content-Type': 'application/json' },
@@ -1607,7 +1642,7 @@ Deno.serve(async (req) => {
         // This handles race conditions during bulk imports where some assets aren't committed yet
       }
       
-      // Get user_id from first found asset (all assets should belong to same user)
+      // Get workspace_id from first found asset (all assets should belong to same workspace)
       // Filter to only process assets that were found
       const foundAssets = assets.filter((a: any) => foundAssetIds.has(a.id));
       if (foundAssets.length === 0) {
@@ -1618,23 +1653,24 @@ Deno.serve(async (req) => {
         });
       }
       
-      const userId = foundAssets[0].user_id;
-      if (!userId) {
-        console.error('[auto_tag_asset] First asset missing user_id');
-        return new Response(JSON.stringify({ error: 'Asset missing user_id' }), {
+      // Get workspace_id from first found asset (all assets should belong to same workspace)
+      const workspaceId = foundAssets[0].workspace_id;
+      if (!workspaceId) {
+        console.error('[auto_tag_asset] First asset missing workspace_id');
+        return new Response(JSON.stringify({ error: 'Asset missing workspace_id' }), {
           status: 400,
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      console.log(`[auto_tag_asset] Processing batch of ${batchBody.assets.length} assets (${foundAssets.length} found, ${missingAssetIds.length} missing) for user:`, userId);
-      console.log(`[auto_tag_asset] Found asset user_ids:`, foundAssets.map((a: any) => a.user_id));
+      console.log(`[auto_tag_asset] Processing batch of ${batchBody.assets.length} assets (${foundAssets.length} found, ${missingAssetIds.length} missing) for workspace:`, workspaceId);
+      console.log(`[auto_tag_asset] Found asset workspace_ids:`, foundAssets.map((a: any) => a.workspace_id));
       
       // Filter batchBody.assets to only include found assets for processing
       // We'll add empty results for missing assets later
       const assetsToProcess = batchBody.assets.filter(a => foundAssetIds.has(a.assetId));
       
-      // Get tag vocabulary from config
-      const tagVocabulary = await getTagVocabulary(supabaseClient, userId);
+      // Get tag vocabulary from config (workspace-scoped)
+      const tagVocabulary = await getTagVocabulary(supabaseClient, workspaceId);
       console.log('[auto_tag_asset] Using tag vocabulary (enabled tags only):', tagVocabulary);
       console.log('[auto_tag_asset] Number of enabled tags:', tagVocabulary.length);
       console.log('[auto_tag_asset] Tag vocabulary details:', JSON.stringify(tagVocabulary, null, 2));
@@ -1679,7 +1715,7 @@ Deno.serve(async (req) => {
               openAiKey!,
               tagVocabulary,
               supabaseClient,
-              userId
+              workspaceId
             );
             
             console.log(`[auto_tag_asset] ✅ Batch API job created: ${batchId}`);
@@ -1984,7 +2020,7 @@ Deno.serve(async (req) => {
         
         const result = await supabaseClient
           .from('assets')
-          .select('id, user_id')
+          .select('id, user_id, workspace_id')
           .eq('id', singleBody.assetId)
           .single();
         
@@ -2025,11 +2061,11 @@ Deno.serve(async (req) => {
         });
       }
       
-      if (!asset.user_id) {
-        console.error('[auto_tag_asset] Asset missing user_id:', singleBody.assetId);
+      if (!asset.workspace_id) {
+        console.error('[auto_tag_asset] Asset missing workspace_id:', singleBody.assetId);
         console.error('[auto_tag_asset] Asset data:', asset);
         return new Response(JSON.stringify({ 
-          error: 'Asset missing user_id', 
+          error: 'Asset missing workspace_id', 
           assetId: singleBody.assetId 
         }), {
           status: 400,
@@ -2037,11 +2073,11 @@ Deno.serve(async (req) => {
         });
       }
       
-      const userId = asset.user_id;
-      console.log('[auto_tag_asset] Asset belongs to user:', userId);
+      const workspaceId = asset.workspace_id;
+      console.log('[auto_tag_asset] Asset belongs to workspace:', workspaceId);
       
-      // Get tag vocabulary from config - ONLY enabled tags for this user
-      const tagVocabulary = await getTagVocabulary(supabaseClient, userId);
+      // Get tag vocabulary from config - ONLY enabled tags for this workspace
+      const tagVocabulary = await getTagVocabulary(supabaseClient, workspaceId);
       console.log('[auto_tag_asset] Using tag vocabulary (enabled tags only):', tagVocabulary);
       console.log('[auto_tag_asset] Number of enabled tags:', tagVocabulary.length);
       

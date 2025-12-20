@@ -16,7 +16,7 @@ export type Asset = {
   storage_path_preview?: string | null;
   storage_path_thumb?: string | null;
   source: AssetSource;
-  tags: string[];
+  tags: string[] | null;
   created_at: string;
   publicUrl?: string;
   previewUrl?: string;

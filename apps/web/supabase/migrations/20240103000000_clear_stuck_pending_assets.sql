@@ -16,3 +16,5 @@ WHERE auto_tag_status = 'pending'
 COMMENT ON COLUMN assets.auto_tag_status IS 'Status of auto-tagging: pending, completed, failed, or NULL (not attempted)';
 
 
+
+

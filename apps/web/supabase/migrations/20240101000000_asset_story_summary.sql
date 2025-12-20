@@ -19,3 +19,5 @@ CREATE INDEX IF NOT EXISTS idx_asset_story_summary_asset_id ON story_assets(asse
 COMMENT ON VIEW asset_story_summary IS 'Provides aggregated story membership data per asset';
 
 
+
+

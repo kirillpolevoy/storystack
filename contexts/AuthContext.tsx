@@ -296,24 +296,75 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // 7. Delete campaigns
-      const { error: campaignsError } = await supabase
-        .from('campaigns')
+      // 7. Get workspaces where user is owner (to delete them)
+      const { data: ownedWorkspaces } = await supabase
+        .from('workspace_members')
+        .select('workspace_id')
+        .eq('user_id', userId)
+        .eq('role', 'owner');
+      
+      const ownedWorkspaceIds = ownedWorkspaces?.map(w => w.workspace_id) || [];
+      
+      // Delete workspace memberships (this will cascade delete workspaces if user is only member)
+      const { error: membersError } = await supabase
+        .from('workspace_members')
         .delete()
         .eq('user_id', userId);
       
-      if (campaignsError) {
-        console.error('[AuthContext] Error deleting campaigns:', campaignsError);
-        errors.push(`Failed to delete campaigns: ${campaignsError.message}`);
+      if (membersError) {
+        console.error('[AuthContext] Error deleting workspace memberships:', membersError);
+        errors.push(`Failed to delete workspace memberships: ${membersError.message}`);
       } else {
-        console.log('[AuthContext] Deleted campaigns');
+        console.log('[AuthContext] Deleted workspace memberships');
+      }
+      
+      // Delete workspaces where user was owner (if any remain after cascade)
+      if (ownedWorkspaceIds.length > 0) {
+        // Get workspace logo paths before deletion
+        const { data: workspaces } = await supabase
+          .from('workspaces')
+          .select('id, logo_path')
+          .in('id', ownedWorkspaceIds);
+        
+        // Delete workspace logos from storage
+        if (workspaces) {
+          const logoPaths = workspaces
+            .map(w => w.logo_path)
+            .filter(path => path);
+          
+          if (logoPaths.length > 0) {
+            const { error: logoError } = await supabase.storage
+              .from('workspace_logos')
+              .remove(logoPaths);
+            
+            if (logoError) {
+              console.warn('[AuthContext] Error deleting workspace logos:', logoError);
+            } else {
+              console.log('[AuthContext] Deleted workspace logos');
+            }
+          }
+        }
+        
+        // Delete workspaces (cascade should handle most, but delete explicitly)
+        const { error: workspacesError } = await supabase
+          .from('workspaces')
+          .delete()
+          .in('id', ownedWorkspaceIds);
+        
+        if (workspacesError) {
+          console.error('[AuthContext] Error deleting workspaces:', workspacesError);
+          errors.push(`Failed to delete workspaces: ${workspacesError.message}`);
+        } else {
+          console.log('[AuthContext] Deleted workspaces');
+        }
       }
 
-      // 8. Delete tag_config
+      // 8. Delete tag_config (workspace-scoped, will be deleted with workspace cascade)
+      // But also delete any orphaned tag_configs
       const { error: tagConfigError } = await supabase
         .from('tag_config')
         .delete()
-        .eq('user_id', userId);
+        .in('workspace_id', ownedWorkspaceIds);
       
       if (tagConfigError) {
         console.error('[AuthContext] Error deleting tag_config:', tagConfigError);
@@ -321,8 +372,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         console.log('[AuthContext] Deleted tag_config');
       }
+      
+      // 9. Delete user preferences
+      const { error: prefsError } = await supabase
+        .from('user_preferences')
+        .delete()
+        .eq('user_id', userId);
+      
+      if (prefsError) {
+        console.warn('[AuthContext] Error deleting user preferences:', prefsError);
+      } else {
+        console.log('[AuthContext] Deleted user preferences');
+      }
 
-      // 9. Delete user's storage files (avatars)
+      // 10. Delete user's storage files (avatars)
       try {
         const { data: files } = await supabase.storage
           .from('avatars')
@@ -453,102 +516,128 @@ async function initializeUserData(userId: string) {
   if (!supabase) return;
 
   try {
-    // Check if user already has data (prevent duplicate initialization)
-    // Note: This will fail if user_id column doesn't exist yet (Phase 2 not done)
-    let existingCampaign = null;
+    // Check if user already has a workspace (prevent duplicate initialization)
+    let existingWorkspace = null;
     try {
-      const { data } = await supabase
-        .from('campaigns')
-        .select('id')
+      const { data: members } = await supabase
+        .from('workspace_members')
+        .select('workspace_id')
         .eq('user_id', userId)
-        .limit(1)
-        .single();
-      existingCampaign = data;
-    } catch (error: any) {
-      // If user_id column doesn't exist, check by name instead (fallback for Phase 1)
-      if (error.code === 'PGRST204' || error.message?.includes('column') || error.message?.includes('user_id')) {
-        console.log('[Auth] user_id column not found, using fallback method');
-        const { data } = await supabase
-          .from('campaigns')
-          .select('id')
-          .eq('name', 'My Library')
-          .limit(1)
-          .single();
-        existingCampaign = data;
+        .limit(1);
+      
+      if (members && members.length > 0) {
+        existingWorkspace = members[0].workspace_id;
       }
+    } catch (error: any) {
+      // Schema might not be ready yet
+      if (error.code === 'PGRST204' || error.message?.includes('column') || error.message?.includes('relation')) {
+        console.log('[Auth] Workspace schema not ready yet. Skipping workspace creation.');
+        return;
+      }
+      console.error('[Auth] Error checking for existing workspace:', error);
     }
 
-    if (existingCampaign) {
-      console.log('[Auth] User data already initialized');
+    if (existingWorkspace) {
+      console.log('[Auth] User already has a workspace');
       return;
     }
 
-    // Create default campaign
-    // Try with user_id first, fallback to without if schema not ready
-    let campaignError = null;
-    let campaign = null;
+    // Create default workspace
+    let workspaceError = null;
+    let workspace = null;
     
     try {
+      // Get user email for workspace name
+      const { data: userData } = await supabase.auth.getUser();
+      const userEmail = userData?.user?.email || '';
+      const workspaceName = userEmail 
+        ? `${userEmail.split('@')[0]}'s Workspace`
+        : 'My Workspace';
+      
       const { data, error } = await supabase
-        .from('campaigns')
+        .from('workspaces')
         .insert({
-          user_id: userId,
-          name: 'My Library',
+          name: workspaceName,
+          created_by: userId,
+          status: 'active',
         })
         .select('id')
         .single();
-      campaign = data;
-      campaignError = error;
+      workspace = data;
+      workspaceError = error;
     } catch (error: any) {
-      // If user_id column doesn't exist, create without it (Phase 1 fallback)
-      if (error.code === 'PGRST204' || error.message?.includes('column') || error.message?.includes('user_id')) {
-        console.log('[Auth] Creating campaign without user_id (Phase 1 fallback)');
-        const { data, error: fallbackError } = await supabase
-          .from('campaigns')
-          .insert({
-            name: 'My Library',
-          })
-          .select('id')
-          .single();
-        campaign = data;
-        campaignError = fallbackError;
-      } else {
-        campaignError = error;
-      }
+      workspaceError = error;
     }
 
-    if (campaignError || !campaign) {
-      console.error('[Auth] Failed to create default campaign:', campaignError);
+    if (workspaceError || !workspace) {
+      console.error('[Auth] Failed to create default workspace:', workspaceError);
       return;
     }
 
-    // Create default tag_config (only if schema supports it)
-    // This will fail gracefully if user_id column doesn't exist yet (Phase 2 not done)
+    // Add user as owner of the workspace
+    try {
+      const { error: memberError } = await supabase
+        .from('workspace_members')
+        .insert({
+          workspace_id: workspace.id,
+          user_id: userId,
+          role: 'owner',
+          created_by: userId,
+        });
+
+      if (memberError) {
+        console.error('[Auth] Failed to add user as workspace owner:', memberError);
+        // Clean up workspace if member creation fails
+        await supabase.from('workspaces').delete().eq('id', workspace.id);
+        return;
+      }
+    } catch (error) {
+      console.error('[Auth] Error adding user as workspace owner:', error);
+      // Clean up workspace
+      await supabase.from('workspaces').delete().eq('id', workspace.id);
+      return;
+    }
+
+    // Create default tag_config for workspace
     // Note: auto_tags starts empty - user must enable tags in Tag Management screen
     try {
       const { error: tagConfigError } = await supabase
         .from('tag_config')
         .insert({
-          user_id: userId,
+          workspace_id: workspace.id,
           auto_tags: [],
           custom_tags: [],
           deleted_tags: [],
         });
 
       if (tagConfigError) {
-        // Check if it's a schema error (expected before Phase 2)
+        // Check if it's a schema error (expected before migration)
         if (tagConfigError.code === 'PGRST204' || tagConfigError.message?.includes('column') || tagConfigError.message?.includes('schema')) {
-          console.log('[Auth] Tag config schema not ready yet (Phase 2 pending). Skipping tag config creation.');
+          console.log('[Auth] Tag config schema not ready yet. Skipping tag config creation.');
         } else {
           console.error('[Auth] Failed to create tag config:', tagConfigError);
         }
       }
     } catch (error) {
-      // Schema not ready - this is expected before Phase 2
+      // Schema not ready - this is expected before migration
       console.log('[Auth] Tag config creation skipped (schema not ready):', error);
     }
 
-    console.log('[Auth] User data initialized successfully');
+    // Set as active workspace in user preferences
+    try {
+      await supabase
+        .from('user_preferences')
+        .upsert({
+          user_id: userId,
+          active_workspace_id: workspace.id,
+          updated_at: new Date().toISOString(),
+        });
+    } catch (error) {
+      console.warn('[Auth] Failed to set active workspace:', error);
+      // Non-critical, continue
+    }
+
+    console.log('[Auth] User data initialized successfully with workspace:', workspace.id);
   } catch (error) {
     console.error('[Auth] Error initializing user data:', error);
   }

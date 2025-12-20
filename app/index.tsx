@@ -27,9 +27,10 @@ import { PhotoGrid } from '@/components/PhotoGrid';
 import { LibraryHeader } from '@/components/LibraryHeader';
 import { BottomCTA } from '@/components/BottomCTA';
 import { TagSearchBar } from '@/components/TagSearchBar';
-import { getDefaultCampaignId } from '@/utils/getDefaultCampaign';
 import { getAllAvailableTags } from '@/utils/getAllAvailableTags';
 import { useAuth } from '@/contexts/AuthContext';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
+import { WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
 import { MenuDrawer } from '@/components/MenuDrawer';
 import { BottomTabBar } from '@/components/BottomTabBar';
 import { queueAutoTag, queueBulkAutoTag } from '@/utils/autoTagQueue';
@@ -46,6 +47,7 @@ export default function LibraryScreen() {
     storyName?: string;
   }>();
   const { session, loading: authLoading } = useAuth();
+  const { activeWorkspaceId, loading: workspaceLoading } = useWorkspace();
   
   // useSafeAreaInsets requires SafeAreaProvider in _layout.tsx
   // The SafeAreaProvider is set up in _layout.tsx with proper initialization delays
@@ -54,8 +56,6 @@ export default function LibraryScreen() {
   if (!router) {
     return null;
   }
-
-  const [campaignId, setCampaignId] = useState<string | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
@@ -302,49 +302,38 @@ export default function LibraryScreen() {
 
     const userId = session.user.id;
 
-    // Optimized initialization: load campaign first (blocking), then tags (non-blocking)
-    const initializeData = async () => {
-      try {
-        // Load campaign first (required for assets)
-        const campaignIdResult = await getDefaultCampaignId(userId);
+    // Workspace is loaded via WorkspaceContext, no initialization needed here
+    // Tags will be loaded when workspace is available
+  }, [authLoading, session, activeWorkspaceId]);
 
-        if (campaignIdResult) {
-          setCampaignId(campaignIdResult);
-        } else {
-          console.error('[LibraryScreen] Failed to initialize campaign: No campaign ID returned');
-          setIsLoading(false);
-          return;
-        }
-
-        // Load tags in background (non-blocking) - don't await, let it complete asynchronously
-        // This allows assets to load immediately while tags populate in the background
-        getAllAvailableTags(userId)
-          .then((tagsResult) => {
-            setAllAvailableTags(tagsResult);
-          })
-          .catch((error) => {
-            console.warn('[LibraryScreen] Failed to load tags (non-critical):', error);
-            // Set empty tags array as fallback - tags will be populated as assets load
-            setAllAvailableTags([]);
-          });
-      } catch (error) {
-        console.error('[LibraryScreen] Failed to initialize data:', error);
-        setIsLoading(false);
-      }
-    };
-    initializeData();
-  }, [authLoading, session]);
-
-  // Ensure loading state is set correctly when campaignId changes
+  // Load tags when workspace is available
   useEffect(() => {
-    if (!campaignId && !authLoading && session) {
-      // Campaign not initialized yet, but auth is ready - keep loading
+    if (!activeWorkspaceId) {
+      setAllAvailableTags([]);
+      return;
+    }
+
+    // Load tags in background (non-blocking)
+    getAllAvailableTags(activeWorkspaceId)
+      .then((tagsResult) => {
+        setAllAvailableTags(tagsResult);
+      })
+      .catch((error) => {
+        console.warn('[LibraryScreen] Failed to load tags (non-critical):', error);
+        setAllAvailableTags([]);
+      });
+  }, [activeWorkspaceId]);
+
+  // Ensure loading state is set correctly when workspace changes
+  useEffect(() => {
+    if (!activeWorkspaceId && !workspaceLoading && !authLoading && session) {
+      // Workspace not initialized yet, but auth is ready - keep loading
       setIsLoading(true);
     }
-  }, [campaignId, authLoading, session]);
+  }, [activeWorkspaceId, workspaceLoading, authLoading, session]);
 
   const loadAssets = useCallback(async (isPullRefresh = false) => {
-    if (!campaignId) {
+    if (!activeWorkspaceId) {
       setIsLoading(false);
       setIsRefreshing(false);
       return;
@@ -357,10 +346,10 @@ export default function LibraryScreen() {
       return;
     }
 
-    // Validate campaignId is a valid UUID (not fallback string)
+    // Validate workspaceId is a valid UUID
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(campaignId)) {
-      console.warn('[Library] Invalid campaign ID format, skipping load:', campaignId);
+    if (!uuidRegex.test(activeWorkspaceId)) {
+      console.warn('[Library] Invalid workspace ID format, skipping load:', activeWorkspaceId);
       setAssets([]);
       setIsLoading(false);
       setIsRefreshing(false);
@@ -386,15 +375,17 @@ export default function LibraryScreen() {
 
     const userId = session.user.id;
 
-    // Load assets from the campaign, but also filter by user_id for security
-    // This ensures RLS policies work correctly and we only see user's own assets
+    // Load assets from the workspace, filter by workspace_id
+    // RLS policies ensure we only see assets from workspaces we're members of
     // Only select needed columns for better performance
     // Optimized: Batch URL generation and use efficient mapping
+    // Filter out soft-deleted assets
+    // Note: tags array is kept for backward compatibility during migration
     const { data: assetData, error: assetError } = await supabase
       .from('assets')
-      .select('id, campaign_id, storage_path, source, tags, location, created_at, auto_tag_status')
-      .eq('campaign_id', campaignId)
-      .eq('user_id', userId)
+      .select('id, workspace_id, storage_path, source, tags, location, created_at, auto_tag_status, deleted_at')
+      .eq('workspace_id', activeWorkspaceId)
+      .is('deleted_at', null) // Exclude soft-deleted assets
       .order('created_at', { ascending: false })
       .limit(500); // Reduced initial limit for faster load, FlatList handles scrolling
 
@@ -482,10 +473,10 @@ export default function LibraryScreen() {
   }, [loadAssets]);
 
   useEffect(() => {
-    if (campaignId) {
+    if (activeWorkspaceId) {
       loadAssets();
     }
-  }, [campaignId, loadAssets]);
+  }, [activeWorkspaceId, loadAssets]);
 
   // Sync activeAsset with filteredAssets when it updates (for background refreshes)
   // This ensures TagModal shows the latest tags even after background refresh
@@ -623,7 +614,7 @@ export default function LibraryScreen() {
     skipDuplicates: boolean,
     locations: (string | null)[] = []
   ) => {
-    if (!campaignId || !supabase || !session?.user?.id) {
+    if (!activeWorkspaceId || !supabase || !session?.user?.id) {
       return;
     }
 
@@ -683,8 +674,11 @@ export default function LibraryScreen() {
 
         const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const fileName = `${uniqueSuffix}.jpg`;
-        // Store directly in A2 path (ai/ folder) - A2 is now the only version
-        const filePath = `users/${userId}/campaigns/${campaignId}/ai/${fileName}`;
+        // Use new workspace-based storage path
+        // Format: workspaces/{workspace_id}/assets/{asset_id}/{filename}
+        // We'll use a temp ID for now, then update after insert
+        const tempAssetId = uniqueSuffix;
+        const filePath = `workspaces/${activeWorkspaceId}/assets/${tempAssetId}/${fileName}`;
 
         // Upload compressed image to storage
         const { error: uploadError } = await supabase.storage.from('assets').upload(filePath, arrayBuffer, {
@@ -700,14 +694,13 @@ export default function LibraryScreen() {
           continue;
         }
 
-        // Insert into database with user_id and file_hash
+        // Insert into database with workspace_id
         // Include location in separate column if extracted from EXIF
         const insertData: any = {
           user_id: userId,
-          campaign_id: campaignId,
+          workspace_id: activeWorkspaceId,
           storage_path: filePath,
           source: 'local',
-          tags: initialTags,
         };
 
         // Add location if available (stored in separate column, not as tag)
@@ -733,10 +726,9 @@ export default function LibraryScreen() {
             console.warn('[Library] file_hash column does not exist, inserting without hash');
             const retryInsertData: any = {
               user_id: userId,
-              campaign_id: campaignId,
+              workspace_id: activeWorkspaceId,
               storage_path: filePath,
               source: 'local',
-              tags: initialTags,
             };
             if (locationValue) {
               retryInsertData.location = locationValue;
@@ -957,7 +949,7 @@ export default function LibraryScreen() {
     
     // Check for pending/failed assets from THIS import session and show notification when overlay is dismissed
     const checkForRetries = async () => {
-      if (campaignId && supabase && importedIdsArray.length > 0) {
+      if (activeWorkspaceId && supabase && importedIdsArray.length > 0) {
         console.log('[Library] Checking for pending/failed assets from current import session...');
         console.log('[Library] Newly imported asset IDs:', importedIdsArray);
         
@@ -1033,7 +1025,7 @@ export default function LibraryScreen() {
         }
       } else {
         console.log('[Library] ⚠️  Cannot check for retries:', {
-          hasCampaignId: !!campaignId,
+          hasWorkspaceId: !!activeWorkspaceId,
           hasSupabase: !!supabase,
           importedIdsArrayLength: importedIdsArray.length,
         });
@@ -1059,11 +1051,11 @@ export default function LibraryScreen() {
     } else if (successCount > 0) {
       console.log(`[Library] ✅ Successfully imported ${successCount} photo${successCount > 1 ? 's' : ''}`);
     }
-  }, [campaignId, loadAssets, session, pendingImportData]);
+  }, [activeWorkspaceId, loadAssets, session, pendingImportData]);
 
   const handleImport = useCallback(async () => {
-    if (!campaignId) {
-      Alert.alert('Error', 'Library not initialized. Please try again.');
+    if (!activeWorkspaceId) {
+      Alert.alert('Error', 'Workspace not initialized. Please try again.');
       return;
     }
 
@@ -1284,7 +1276,7 @@ export default function LibraryScreen() {
         return prev;
       });
     }
-  }, [campaignId, loadAssets, session, processImport, showRetryNotificationBanner]);
+  }, [activeWorkspaceId, loadAssets, session, processImport, showRetryNotificationBanner]);
 
   // Periodic check for pending/failed assets (every 30 seconds) to retry background processing
   // Only retry assets from the most recent import session
@@ -1942,14 +1934,14 @@ export default function LibraryScreen() {
   };
 
   const handleDeleteAsset = async (asset: Asset) => {
-    if (!supabase) {
-      Alert.alert('Error', 'Supabase is not configured.');
+    if (!supabase || !session?.user?.id) {
+      Alert.alert('Error', 'Supabase is not configured or user not authenticated.');
       return;
     }
 
     Alert.alert(
       'Delete Photo',
-      'Are you sure you want to delete this photo? This action cannot be undone.',
+      'Are you sure you want to delete this photo? It will be removed from your library but can be restored.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -1960,26 +1952,22 @@ export default function LibraryScreen() {
               // Remove from selected assets if selected
               setSelectedAssets((prev) => prev.filter((a) => a.id !== asset.id));
 
-              // Delete from storage
-              if (asset.storage_path) {
-                const { error: storageError } = await supabase.storage
-                  .from('assets')
-                  .remove([asset.storage_path]);
-                if (storageError) {
-                  console.error('[Library] storage delete failed', storageError);
-                  // Continue with DB delete even if storage delete fails
-                }
-              }
-
-              // Delete from database
-              const { error: dbError } = await supabase.from('assets').delete().eq('id', asset.id);
+              // Soft delete: Set deleted_at and deleted_by (do NOT delete storage files)
+              const { error: dbError } = await supabase
+                .from('assets')
+                .update({
+                  deleted_at: new Date().toISOString(),
+                  deleted_by: session.user.id,
+                })
+                .eq('id', asset.id);
+              
               if (dbError) {
-                console.error('[Library] database delete failed', dbError);
+                console.error('[Library] soft delete failed', dbError);
                 Alert.alert('Delete failed', 'Unable to delete photo from database.');
                 return;
               }
 
-              // Refresh the list
+              // Refresh the list (soft-deleted assets will be filtered out)
               await loadAssets();
             } catch (error) {
               console.error('[Library] delete failed', error);
@@ -2042,21 +2030,15 @@ export default function LibraryScreen() {
       setSelectedAssets([]);
       setIsSelectionMode(false);
 
-      // Delete from storage with progress tracking
-      if (storagePaths.length > 0) {
-        setDeleteProgress({ current: Math.floor(count * 0.3), total: count });
-        const { error: storageError } = await supabase.storage
-          .from('assets')
-          .remove(storagePaths);
-        if (storageError) {
-          console.error('[Library] storage delete failed', storageError);
-          // Continue with DB delete even if storage delete fails
-        }
-      }
-
-      // Delete from database with progress tracking
-      setDeleteProgress({ current: Math.floor(count * 0.7), total: count });
-      const { error: dbError } = await supabase.from('assets').delete().in('id', assetIds);
+      // Soft delete: Set deleted_at and deleted_by (do NOT delete storage files)
+      setDeleteProgress({ current: Math.floor(count * 0.5), total: count });
+      const { error: dbError } = await supabase
+        .from('assets')
+        .update({
+          deleted_at: new Date().toISOString(),
+          deleted_by: session.user.id,
+        })
+        .in('id', assetIds);
       
       if (dbError) {
         console.error('[Library] database delete failed', dbError);
@@ -2669,7 +2651,7 @@ export default function LibraryScreen() {
           <ActivityIndicator size="large" color="#b38f5b" />
           <Text className="mt-4 text-[15px] font-medium text-gray-500">Loading…</Text>
         </View>
-      ) : !campaignId ? (
+      ) : !activeWorkspaceId ? (
         <View className="flex-1 items-center justify-center px-6">
           <View 
             className="mb-4 h-20 w-20 items-center justify-center rounded-full bg-white"

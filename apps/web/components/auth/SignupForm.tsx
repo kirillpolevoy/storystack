@@ -29,7 +29,18 @@ export function SignupForm() {
 
       if (error) throw error
 
-      if (data.session) {
+      if (data.session && data.user) {
+        // Process workspace invitations for the new user
+        try {
+          await supabase.rpc('process_workspace_invitations_for_user', {
+            user_id: data.user.id,
+            user_email: email.toLowerCase(),
+          })
+        } catch (inviteError) {
+          // Log error but don't block signup if invitation processing fails
+          console.error('Error processing workspace invitations:', inviteError)
+        }
+        
         setSuccess(true)
         // Wait for cookies to be set, then redirect
         setTimeout(() => {

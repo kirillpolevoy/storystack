@@ -6,6 +6,7 @@ import { Image } from 'expo-image';
 import { Swipeable } from 'react-native-gesture-handler';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useAuth } from '@/contexts/AuthContext';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { StoryWithAssets } from '@/types';
 import { getStories, deleteStory } from '@/utils/stories';
 import { MenuDrawer } from '@/components/MenuDrawer';
@@ -16,6 +17,7 @@ export default function StoriesScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
+  const { activeWorkspaceId } = useWorkspace();
   const [stories, setStories] = useState<StoryWithAssets[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -29,21 +31,21 @@ export default function StoriesScreen() {
   const buttonOpacity = useRef(new Animated.Value(0)).current;
 
   const loadStories = useCallback(async () => {
-    if (!session?.user?.id) {
+    if (!session?.user?.id || !activeWorkspaceId) {
       setIsLoading(false);
       return;
     }
 
     setIsLoading(true);
     try {
-      const userStories = await getStories(session.user.id);
+      const userStories = await getStories(activeWorkspaceId);
       setStories(userStories);
     } catch (error) {
       console.error('[StoriesScreen] Failed to load stories:', error);
     } finally {
       setIsLoading(false);
     }
-  }, [session]);
+  }, [session, activeWorkspaceId]);
 
   useEffect(() => {
     loadStories();

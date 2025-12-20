@@ -6,6 +6,7 @@ import { Story, StoryAsset, Asset, StoryWithAssets } from '@/types';
  */
 export async function createStory(
   userId: string,
+  workspaceId: string,
   name: string,
   description?: string,
   assetIds?: string[]
@@ -21,6 +22,7 @@ export async function createStory(
       .from('stories')
       .insert({
         user_id: userId,
+        workspace_id: workspaceId,
         name: name.trim(),
         description: description?.trim() || null,
       })
@@ -58,20 +60,21 @@ export async function createStory(
 }
 
 /**
- * Get all stories for a user
+ * Get all stories for a workspace (excluding soft-deleted)
  */
-export async function getStories(userId: string): Promise<StoryWithAssets[]> {
+export async function getStories(workspaceId: string): Promise<StoryWithAssets[]> {
   if (!supabase) {
     console.error('[stories] Supabase not configured');
     return [];
   }
 
   try {
-    // Get all stories
+    // Get all stories for workspace (excluding soft-deleted)
     const { data: stories, error: storiesError } = await supabase
       .from('stories')
       .select('*')
-      .eq('user_id', userId)
+      .eq('workspace_id', workspaceId)
+      .is('deleted_at', null) // Exclude soft-deleted stories
       .order('updated_at', { ascending: false });
 
     if (storiesError) {
@@ -295,20 +298,24 @@ export async function deleteStory(storyId: string, userId: string): Promise<bool
   }
 
   try {
+    // Soft delete: Set deleted_at and deleted_by (do NOT hard delete)
     const { error } = await supabase
       .from('stories')
-      .delete()
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: userId,
+      })
       .eq('id', storyId)
       .eq('user_id', userId);
 
     if (error) {
-      console.error('[stories] Failed to delete story:', error);
+      console.error('[stories] Failed to soft delete story:', error);
       return false;
     }
 
     return true;
   } catch (error) {
-    console.error('[stories] Error deleting story:', error);
+    console.error('[stories] Error soft deleting story:', error);
     return false;
   }
 }

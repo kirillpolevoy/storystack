@@ -412,7 +412,7 @@ export function AssetDetailPanel({
         <div className="relative w-full aspect-square overflow-hidden rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200/50 shadow-sm group">
           <Image
             src={imageUrl}
-            alt={currentAsset.tags[0] || 'Asset'}
+            alt={currentAsset.tags?.[0] || 'Asset'}
             fill
             className="object-contain p-2 z-0 transition-opacity duration-300"
             sizes="(max-width: 768px) 100vw, 420px"

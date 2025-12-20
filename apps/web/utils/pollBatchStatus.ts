@@ -122,10 +122,22 @@ async function pollPendingBatches(): Promise<void> {
   }
 
   try {
-    // Find assets with pending batch IDs
+    // Get active workspace ID
+    const activeWorkspaceId = typeof window !== 'undefined' 
+      ? localStorage.getItem('@storystack:active_workspace_id')
+      : null
+
+    if (!activeWorkspaceId) {
+      console.log('[BatchPolling] ⏸️  No active workspace, skipping batch polling')
+      return
+    }
+
+    // Find assets with pending batch IDs from the active workspace
     const { data: assets, error } = await supabase
       .from('assets')
       .select('openai_batch_id')
+      .eq('workspace_id', activeWorkspaceId)
+      .is('deleted_at', null) // Exclude soft-deleted assets
       .not('openai_batch_id', 'is', null)
       .eq('auto_tag_status', 'pending')
       .limit(20)

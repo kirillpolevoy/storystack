@@ -18,3 +18,5 @@ CREATE INDEX IF NOT EXISTS idx_assets_auto_tag_status ON assets(auto_tag_status)
 
 
 
+
+

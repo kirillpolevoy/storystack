@@ -1,91 +1,74 @@
-# Deployment Checklist
-
-Use this checklist to ensure a smooth production deployment to Vercel.
+# Deployment Checklist - Backward Compatible Code
 
 ## Pre-Deployment
 
-- [ ] Code is committed and pushed to repository
-- [ ] All tests pass (if applicable)
-- [ ] Linter passes (`npm run lint` in `apps/web`)
-- [ ] Build succeeds locally (`cd apps/web && npm run build`)
-- [ ] Environment variables documented
+- [x] Update hooks to support both `user_id` and `workspace_id`
+- [x] Update tags page to support both schemas
+- [x] Update batch polling to filter by workspace
+- [x] Test with both schemas (if possible)
 
-## Vercel Setup
+## Deployment Steps
 
-- [ ] Vercel account created
-- [ ] Repository connected to Vercel
-- [ ] Root directory set to `apps/web`
-- [ ] Framework preset: Next.js (auto-detected)
+1. **Deploy Code** (Safe - backward compatible)
+   ```bash
+   # Deploy web app
+   npm run build
+   # Deploy to Vercel/production
+   ```
 
-## Environment Variables
+2. **Verify Production Schema** (Run in Supabase SQL Editor)
+   ```sql
+   -- Run CHECK_PRODUCTION_SCHEMA.sql
+   ```
 
-- [ ] `NEXT_PUBLIC_SUPABASE_URL` added to Vercel
-- [ ] `NEXT_PUBLIC_SUPABASE_ANON_KEY` added to Vercel
-- [ ] `NEXT_PUBLIC_SITE_URL` added (optional, for logout redirect)
-- [ ] Variables set for Production, Preview, and Development environments
+3. **Test Production**
+   - [ ] Login works
+   - [ ] Assets load (using user_id or workspace_id)
+   - [ ] Tags page works
+   - [ ] Tag management works
+   - [ ] Bulk operations work
+   - [ ] Autotagging works
 
-## First Deployment
+## Post-Deployment
 
-- [ ] Initial deployment triggered
-- [ ] Build logs reviewed (no errors)
-- [ ] Deployment successful
-- [ ] Production URL accessible
+### Option A: Keep Legacy Schema (Current)
+- Code works with `user_id` filtering
+- No workspace features available
+- Everything works as before
 
-## Post-Deployment Testing
+### Option B: Migrate to Workspace Schema (Future)
+1. **Backup Database**
+   ```bash
+   supabase db dump -f backup.sql
+   ```
 
-- [ ] Homepage loads correctly
-- [ ] Authentication (login) works
-- [ ] User registration works (if applicable)
-- [ ] Asset library loads
-- [ ] Image uploads work
-- [ ] Image display works
-- [ ] Search functionality works
-- [ ] Tag filtering works
-- [ ] Story creation works
-- [ ] Mobile responsive design verified
+2. **Apply Migrations**
+   ```bash
+   supabase migration up
+   ```
 
-## Production Verification
+3. **Verify Migration**
+   - Run `CHECK_PRODUCTION_SCHEMA.sql`
+   - Verify all assets have `workspace_id`
+   - Verify all users have workspaces
 
-- [ ] HTTPS enabled (automatic)
-- [ ] Custom domain configured (if applicable)
-- [ ] Analytics enabled (optional)
-- [ ] Error monitoring set up (optional)
-- [ ] Performance monitoring enabled (optional)
+4. **Test Production**
+   - [ ] Workspace switcher appears
+   - [ ] Assets load by workspace
+   - [ ] Workspace members can be added
+   - [ ] All features work with workspaces
 
-## Documentation
+## Rollback Plan
 
-- [ ] Team members have access to Vercel dashboard
-- [ ] Deployment process documented
-- [ ] Environment variables documented securely
-- [ ] Rollback procedure understood
+If issues occur:
+1. Code is backward compatible - should work with old schema
+2. If migration was applied, restore from backup:
+   ```bash
+   psql -f backup.sql
+   ```
 
-## Quick Deploy Commands
+## Support
 
-### Via Vercel Dashboard
-1. Push to main branch → Automatic deployment
-
-### Via CLI
-```bash
-cd apps/web
-vercel --prod
-```
-
-### Via GitHub Actions (if configured)
-1. Push to main branch → Automatic deployment via workflow
-
-## Troubleshooting
-
-If deployment fails:
-1. Check build logs in Vercel dashboard
-2. Verify environment variables are set
-3. Test build locally: `cd apps/web && npm run build`
-4. Check Node.js version compatibility
-5. Review error messages in deployment logs
-
-## Rollback Procedure
-
-1. Go to Vercel Dashboard → Deployments
-2. Find previous successful deployment
-3. Click "..." → "Promote to Production"
-
-
+- Check logs for schema detection
+- Look for `[TagManagement]`, `[useAssets]` console logs
+- Verify `activeWorkspaceId` in localStorage (if migrated)

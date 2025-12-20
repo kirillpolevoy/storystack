@@ -23,6 +23,7 @@ import { Asset } from '@/types';
 import { exportStorySequence } from '@/utils/exportStory';
 import { createStory, addAssetsToStory, getStories } from '@/utils/stories';
 import { useAuth } from '@/contexts/AuthContext';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { StoryHeader } from '@/components/StoryHeader';
 import { MenuDrawer } from '@/components/MenuDrawer';
 import * as Haptics from 'expo-haptics';
@@ -50,6 +51,7 @@ export default function StoryBuilderScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
+  const { activeWorkspaceId } = useWorkspace();
   
   if (!router) {
     return null;
@@ -293,11 +295,15 @@ export default function StoryBuilderScreen() {
   useEffect(() => {
     const loadStories = async () => {
       if (!session?.user?.id) return;
-      const stories = await getStories(session.user.id);
+      if (!activeWorkspaceId) {
+        setExistingStories([]);
+        return;
+      }
+      const stories = await getStories(activeWorkspaceId);
       setExistingStories(stories);
     };
     loadStories();
-  }, [session]);
+  }, [session, activeWorkspaceId]);
 
   const handleSaveStory = useCallback(async (targetStoryId?: string) => {
     if (!session?.user?.id) {
@@ -336,7 +342,11 @@ export default function StoryBuilderScreen() {
         }
       } else {
         // Create new story
-        const story = await createStory(session.user.id, storyName.trim(), undefined, assetIds);
+        if (!activeWorkspaceId) {
+          Alert.alert('Error', 'Workspace not initialized. Please try again.');
+          return;
+        }
+        const story = await createStory(session.user.id, activeWorkspaceId, storyName.trim(), undefined, assetIds);
         if (story) {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           // Navigate to stories screen

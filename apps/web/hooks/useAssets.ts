@@ -28,8 +28,13 @@ export function useAssets(
 ) {
   const supabase = createClient()
 
+  // Get active workspace ID for query key (so it refetches when workspace changes)
+  const activeWorkspaceId = typeof window !== 'undefined' 
+    ? localStorage.getItem('@storystack:active_workspace_id')
+    : null
+
   const query = useInfiniteQuery({
-    queryKey: ['assets', searchQuery, selectedFilters, viewFilter],
+    queryKey: ['assets', activeWorkspaceId, searchQuery, selectedFilters, viewFilter],
     queryFn: async ({ pageParam = 0 }) => {
       try {
         const {
@@ -51,10 +56,21 @@ export function useAssets(
       const locationFilters = selectedFilters?.filter((f) => isLocationFilter(f)).map(getLocationName) || []
       const regularTags = selectedFilters?.filter((f) => f !== NO_TAGS_FILTER && !isLocationFilter(f)) || []
 
+      // Get active workspace ID from localStorage
+      const activeWorkspaceId = typeof window !== 'undefined' 
+        ? localStorage.getItem('@storystack:active_workspace_id')
+        : null
+
+      if (!activeWorkspaceId) {
+        // Return empty if no workspace selected
+        return { assets: [], nextPage: null, totalCount: 0 }
+      }
+
       let query = supabase
         .from('assets')
         .select('*, auto_tag_status, original_filename') // Explicitly include auto_tag_status and original_filename
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
+        .is('deleted_at', null) // Exclude soft-deleted assets
         .order('created_at', { ascending: false })
         .range(pageParam * PAGE_SIZE, (pageParam + 1) * PAGE_SIZE - 1)
 
@@ -211,7 +227,7 @@ export function useAssets(
         let countQuery = supabase
           .from('assets')
           .select('id', { count: 'exact', head: true })
-          .eq('user_id', user.id)
+          .eq('workspace_id', activeWorkspaceId)
 
         // Apply server-side filters for count
         if (!searchQuery && selectedFilters && selectedFilters.length > 0) {
@@ -251,7 +267,7 @@ export function useAssets(
           let viewCountQuery = supabase
             .from('assets')
             .select('id')
-            .eq('user_id', user.id)
+            .eq('workspace_id', activeWorkspaceId)
 
           // Apply same server-side filters as count query
           if (!searchQuery && selectedFilters && selectedFilters.length > 0) {
@@ -335,6 +351,7 @@ export function useAssets(
 
         return {
           ...asset,
+          tags: Array.isArray(asset.tags) ? asset.tags : [],
           publicUrl,
           previewUrl,
           thumbUrl,

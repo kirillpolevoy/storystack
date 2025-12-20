@@ -115,3 +115,5 @@ In Supabase Dashboard → Edge Functions → auto_tag_asset → Logs:
 **Solution**: Verify batchId is extracted and added to polling queue
 
 
+
+

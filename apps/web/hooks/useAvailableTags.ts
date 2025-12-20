@@ -6,8 +6,13 @@ import { createClient } from '@/lib/supabase/client'
 export function useAvailableTags() {
   const supabase = createClient()
 
+  // Get active workspace ID for query key (so it refetches when workspace changes)
+  const activeWorkspaceId = typeof window !== 'undefined' 
+    ? localStorage.getItem('@storystack:active_workspace_id')
+    : null
+
   return useQuery({
-    queryKey: ['availableTags'],
+    queryKey: ['availableTags', activeWorkspaceId],
     queryFn: async () => {
       const {
         data: { user },
@@ -17,11 +22,16 @@ export function useAvailableTags() {
         return []
       }
 
-      // Get all unique tags from user's assets
+      if (!activeWorkspaceId) {
+        return []
+      }
+
+      // Get all unique tags from workspace assets
       const { data: assets, error } = await supabase
         .from('assets')
         .select('tags')
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
+        .is('deleted_at', null) // Exclude soft-deleted assets
         .not('tags', 'is', null)
 
       if (error) throw error
@@ -41,7 +51,7 @@ export function useAvailableTags() {
       const { data: config } = await supabase
         .from('tag_config')
         .select('auto_tags')
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
         .single()
 
       if (config?.auto_tags && Array.isArray(config.auto_tags)) {

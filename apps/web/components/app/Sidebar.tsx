@@ -5,6 +5,7 @@ import Image from 'next/image'
 import { Button } from '@/components/ui/button'
 import { ChevronLeft, ChevronRight, LogOut } from 'lucide-react'
 import { SidebarNav } from './SidebarNav'
+import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 import { createClient } from '@/lib/supabase/client'
 
 export function Sidebar() {
@@ -25,7 +26,7 @@ export function Sidebar() {
         {/* Header: Logo + Toggle - Aligned with main content header */}
         {/* Main content: pt-4 (16px) + title row pb-4 (16px) + tabs row pb-3 (12px) = 44px padding + content heights */}
         {/* Sidebar: pt-4 (16px) + logo content (~44px) + pb to match = need ~52px more to align borders */}
-        <div className="flex-shrink-0 pt-5 pb-[52px] border-b border-gray-200/50">
+        <div className="flex-shrink-0 pt-5 pb-4 border-b border-gray-200/50">
           <div className={`flex items-center ${isMinimized ? 'justify-center' : 'justify-between'}`}>
             {isMinimized ? (
               <div className="flex items-center justify-center">
@@ -71,6 +72,9 @@ export function Sidebar() {
                 </Button>
               </>
             )}
+          </div>
+          <div className={isMinimized ? "mt-4 flex justify-center" : "mt-4"}>
+            <WorkspaceSwitcher />
           </div>
         </div>
 

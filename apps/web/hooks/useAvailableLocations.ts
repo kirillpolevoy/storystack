@@ -6,8 +6,13 @@ import { createClient } from '@/lib/supabase/client'
 export function useAvailableLocations() {
   const supabase = createClient()
 
+  // Get active workspace ID for query key (so it refetches when workspace changes)
+  const activeWorkspaceId = typeof window !== 'undefined' 
+    ? localStorage.getItem('@storystack:active_workspace_id')
+    : null
+
   return useQuery({
-    queryKey: ['availableLocations'],
+    queryKey: ['availableLocations', activeWorkspaceId],
     queryFn: async () => {
       const {
         data: { user },
@@ -17,10 +22,15 @@ export function useAvailableLocations() {
         return []
       }
 
+      if (!activeWorkspaceId) {
+        return []
+      }
+
       const { data, error } = await supabase
         .from('assets')
         .select('location')
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
+        .is('deleted_at', null) // Exclude soft-deleted assets
         .not('location', 'is', null)
 
       if (error) throw error

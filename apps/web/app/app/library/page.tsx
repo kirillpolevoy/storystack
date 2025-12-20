@@ -92,13 +92,16 @@ export default function LibraryPage() {
     console.error('[LibraryPage] Error loading assets:', error)
   }
 
-  const assets = data?.pages.flatMap((page: { assets: Asset[] }) => page.assets) || []
+  const assets = (data?.pages.flatMap((page: { assets: Asset[] }) => page.assets).filter((asset): asset is Asset => asset != null) || [])
 
   // Apply date range filter client-side (based on date_taken, fallback to created_at)
   const filteredAssets = useMemo(() => {
-    if (!dateRange.from && !dateRange.to) return assets
+    // First filter out any undefined/null assets
+    const validAssets = assets.filter((asset): asset is Asset => asset != null)
+    
+    if (!dateRange.from && !dateRange.to) return validAssets
 
-    return assets.filter((asset: Asset) => {
+    return validAssets.filter((asset: Asset) => {
       // Use date_taken if available, otherwise fall back to created_at
       const dateToUse = asset.date_taken || asset.created_at
       const assetDate = new Date(dateToUse)
@@ -117,7 +120,9 @@ export default function LibraryPage() {
   const tagCounts = useMemo(() => {
     const counts = new Map<string, number>()
     filteredAssets.forEach((asset: Asset) => {
-      (asset.tags ?? []).forEach((tag) => {
+      if (!asset) return // Safety check
+      const tags: string[] = Array.isArray(asset.tags) ? asset.tags : []
+      tags.forEach((tag: string) => {
         if (tag) {
           counts.set(tag, (counts.get(tag) || 0) + 1)
         }
@@ -129,6 +134,7 @@ export default function LibraryPage() {
   const locationCounts = useMemo(() => {
     const counts = new Map<string, number>()
     filteredAssets.forEach((asset: Asset) => {
+      if (!asset) return // Safety check
       if (asset.location && asset.location.trim()) {
         const location = asset.location.trim()
         counts.set(location, (counts.get(location) || 0) + 1)

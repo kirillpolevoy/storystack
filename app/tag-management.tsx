@@ -28,6 +28,7 @@ import { TagListCard } from '@/components/TagListCard';
 import { MenuDrawer } from '@/components/MenuDrawer';
 import { BottomTabBar } from '@/components/BottomTabBar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
 
 const TAG_STORAGE_KEY = '@storystack:tags';
 const AUTO_TAG_STORAGE_KEY = '@storystack:auto_tags';
@@ -43,6 +44,7 @@ type TagConfig = {
 export default function TagManagementScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ setup?: string }>();
+  const { activeWorkspaceId } = useWorkspace();
   if (!router) {
     return null;
   }
@@ -77,33 +79,29 @@ export default function TagManagementScreen() {
     try {
       setIsLoading(true);
       
-      // Get current user ID - REQUIRED for data isolation
-      let userId: string | null = null;
-      if (supabase) {
-        const { data: { user } } = await supabase.auth.getUser();
-        userId = user?.id || null;
-      }
+      // Get active workspace ID - REQUIRED for data isolation
+      const workspaceId = activeWorkspaceId;
 
-      // CRITICAL: Don't load tags if no user ID - prevents cross-user data leakage
-      if (!userId) {
-        console.warn('[TagManagement] No user ID - cannot load tags safely');
+      // CRITICAL: Don't load tags if no workspace ID - prevents cross-workspace data leakage
+      if (!workspaceId) {
+        console.warn('[TagManagement] No workspace ID - cannot load tags safely');
         setTags([]);
         setIsLoading(false);
         return;
       }
 
-      // Load deleted tags list (tags that user has explicitly deleted)
+      // Load deleted tags list (tags that workspace has explicitly deleted)
       let deletedTags: string[] = [];
-      if (supabase && userId) {
+      if (supabase && workspaceId) {
         try {
           const { data: config, error } = await supabase
             .from('tag_config')
             .select('deleted_tags')
-            .eq('user_id', userId)
+            .eq('workspace_id', workspaceId)
             .single();
           
           // If column doesn't exist, error.code will be PGRST204
-          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'deleted_tags' column") && !error.message?.includes("Could not find the 'user_id' column")) {
+          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'deleted_tags' column") && !error.message?.includes("Could not find the 'workspace_id' column")) {
             console.warn('[TagManagement] Error loading deleted_tags from Supabase:', error);
           }
           
@@ -114,12 +112,12 @@ export default function TagManagementScreen() {
           console.warn('[TagManagement] Failed to load deleted_tags from Supabase, using AsyncStorage:', error);
         }
       }
-      // Fallback to AsyncStorage - ONLY if Supabase failed AND we have user ID
-      // Use user-specific key to prevent cross-user data leakage
-      if (deletedTags.length === 0 && userId) {
+      // Fallback to AsyncStorage - ONLY if Supabase failed AND we have workspace ID
+      // Use workspace-specific key to prevent cross-workspace data leakage
+      if (deletedTags.length === 0 && workspaceId) {
         try {
-          const userSpecificKey = `${DELETED_TAGS_STORAGE_KEY}:${userId}`;
-          const deletedTagsJson = await AsyncStorage.getItem(userSpecificKey);
+          const workspaceSpecificKey = `${DELETED_TAGS_STORAGE_KEY}:${workspaceId}`;
+          const deletedTagsJson = await AsyncStorage.getItem(workspaceSpecificKey);
           deletedTags = deletedTagsJson ? JSON.parse(deletedTagsJson) : [];
         } catch (error) {
           console.warn('[TagManagement] Failed to load deleted_tags from AsyncStorage:', error);
@@ -128,17 +126,17 @@ export default function TagManagementScreen() {
       }
       const deletedTagsSet = new Set<string>(deletedTags);
       
-      // Load custom tags (tags that user has created but may not be used yet)
+      // Load custom tags (tags that workspace has created but may not be used yet)
       let customTags: string[] = [];
-      if (supabase && userId) {
+      if (supabase && workspaceId) {
         try {
           const { data: config, error } = await supabase
             .from('tag_config')
             .select('custom_tags')
-            .eq('user_id', userId)
+            .eq('workspace_id', workspaceId)
             .single();
           
-          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column") && !error.message?.includes("Could not find the 'user_id' column")) {
+          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column") && !error.message?.includes("Could not find the 'workspace_id' column")) {
             console.warn('[TagManagement] Error loading custom_tags from Supabase:', error);
           }
           
@@ -149,12 +147,12 @@ export default function TagManagementScreen() {
           console.warn('[TagManagement] Failed to load custom_tags from Supabase, using AsyncStorage:', error);
         }
       }
-      // Fallback to AsyncStorage - ONLY if Supabase failed AND we have user ID
-      // Use user-specific key to prevent cross-user data leakage
-      if (customTags.length === 0 && userId) {
+      // Fallback to AsyncStorage - ONLY if Supabase failed AND we have workspace ID
+      // Use workspace-specific key to prevent cross-workspace data leakage
+      if (customTags.length === 0 && workspaceId) {
         try {
-          const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
-          const customTagsJson = await AsyncStorage.getItem(userSpecificKey);
+          const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${workspaceId}`;
+          const customTagsJson = await AsyncStorage.getItem(workspaceSpecificKey);
           customTags = customTagsJson ? JSON.parse(customTagsJson) : [];
         } catch (error) {
           console.warn('[TagManagement] Failed to load custom_tags from AsyncStorage:', error);
@@ -163,12 +161,13 @@ export default function TagManagementScreen() {
       }
       const customTagsSet = new Set<string>(customTags);
       
-      // Get all unique tags from assets in the database and count usage (user-specific)
-      if (supabase && userId) {
+      // Get all unique tags from assets in the database and count usage (workspace-specific)
+      if (supabase && workspaceId) {
         const { data: assets } = await supabase
           .from('assets')
           .select('tags')
-          .eq('user_id', userId);
+          .eq('workspace_id', workspaceId)
+          .is('deleted_at', null); // Exclude soft-deleted assets
         const allTagsSet = new Set<string>();
         const tagUsageCounts = new Map<string, number>();
         
@@ -193,17 +192,17 @@ export default function TagManagementScreen() {
         
         // No default tags - users only see tags they create or use
         
-        // Load saved auto-tag configuration from Supabase (user-specific)
+        // Load saved auto-tag configuration from Supabase (workspace-specific)
         let autoTags: string[] = [];
-        if (supabase && userId) {
+        if (supabase && workspaceId) {
           try {
             const { data: config, error } = await supabase
               .from('tag_config')
               .select('auto_tags')
-              .eq('user_id', userId)
+              .eq('workspace_id', workspaceId)
               .single();
             
-            if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'auto_tags' column") && !error.message?.includes("Could not find the 'user_id' column")) {
+            if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'auto_tags' column") && !error.message?.includes("Could not find the 'workspace_id' column")) {
               console.warn('[TagManagement] Error loading auto_tags from Supabase:', error);
             }
             
@@ -214,12 +213,12 @@ export default function TagManagementScreen() {
             console.warn('[TagManagement] Failed to load auto_tags from Supabase, using AsyncStorage:', error);
           }
         }
-        // Fallback to AsyncStorage - ONLY if Supabase failed AND we have user ID
-        // Use user-specific key to prevent cross-user data leakage
-        if (autoTags.length === 0 && userId) {
+        // Fallback to AsyncStorage - ONLY if Supabase failed AND we have workspace ID
+        // Use workspace-specific key to prevent cross-workspace data leakage
+        if (autoTags.length === 0 && workspaceId) {
           try {
-            const userSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${userId}`;
-            const autoTagsJson = await AsyncStorage.getItem(userSpecificKey);
+            const workspaceSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${workspaceId}`;
+            const autoTagsJson = await AsyncStorage.getItem(workspaceSpecificKey);
             autoTags = autoTagsJson ? JSON.parse(autoTagsJson) : [];
           } catch (error) {
             console.warn('[TagManagement] Failed to load auto_tags from AsyncStorage:', error);
@@ -248,7 +247,7 @@ export default function TagManagementScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
     loadTags();
@@ -328,7 +327,12 @@ export default function TagManagementScreen() {
     try {
       setIsSaving(true);
       
-      // Get current user ID
+      if (!activeWorkspaceId) {
+        Alert.alert('Error', 'No active workspace. Please select a workspace.');
+        return;
+      }
+      
+      // Get current user ID for tag setup completion tracking
       let userId: string | null = null;
       if (supabase) {
         const { data: { user } } = await supabase.auth.getUser();
@@ -376,20 +380,19 @@ export default function TagManagementScreen() {
   };
 
   const handleDeleteTag = async (tagName: string) => {
-    // Get current user ID
-    let userId: string | null = null;
-    if (supabase) {
-      const { data: { user } } = await supabase.auth.getUser();
-      userId = user?.id || null;
+    if (!activeWorkspaceId) {
+      Alert.alert('Error', 'No active workspace. Please select a workspace.');
+      return;
     }
 
-    // Check if tag is in use (user-specific)
+    // Check if tag is in use (workspace-specific)
     let photosUsingTag: number = 0;
-    if (supabase && userId) {
+    if (supabase && activeWorkspaceId) {
       const { data: assets, error: fetchError } = await supabase
         .from('assets')
         .select('tags')
-        .eq('user_id', userId);
+        .eq('workspace_id', activeWorkspaceId)
+        .is('deleted_at', null); // Exclude soft-deleted assets
       
       if (fetchError) {
         console.error('[TagManagement] Failed to fetch assets:', fetchError);
@@ -419,12 +422,13 @@ export default function TagManagementScreen() {
               try {
                 setIsSaving(true);
                 
-                // Remove tag from all assets (user-specific)
-                if (supabase && userId) {
+                // Remove tag from all assets (workspace-specific)
+                if (supabase && activeWorkspaceId) {
                   const { data: assets, error: fetchError } = await supabase
                     .from('assets')
                     .select('id, tags')
-                    .eq('user_id', userId);
+                    .eq('workspace_id', activeWorkspaceId)
+                    .is('deleted_at', null); // Exclude soft-deleted assets
                   
                   if (fetchError) {
                     console.error('[TagManagement] Failed to fetch assets:', fetchError);
@@ -480,21 +484,21 @@ export default function TagManagementScreen() {
                 await removeCustomTag(tagName);
                 
                 // Add to deleted tags list
-                // Load current deleted tags (user-specific)
+                // Load current deleted tags (workspace-specific)
                 let currentDeletedTags: string[] = [];
-                if (supabase && userId) {
+                if (supabase && activeWorkspaceId) {
                   const { data: config } = await supabase
                     .from('tag_config')
                     .select('deleted_tags')
-                    .eq('user_id', userId)
+                    .eq('workspace_id', activeWorkspaceId)
                     .single();
                   if (config?.deleted_tags && Array.isArray(config.deleted_tags)) {
                     currentDeletedTags = config.deleted_tags;
                   }
                 }
-                if (currentDeletedTags.length === 0 && userId) {
-                  const userSpecificKey = `${DELETED_TAGS_STORAGE_KEY}:${userId}`;
-                  const deletedTagsJson = await AsyncStorage.getItem(userSpecificKey);
+                if (currentDeletedTags.length === 0 && activeWorkspaceId) {
+                  const workspaceSpecificKey = `${DELETED_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+                  const deletedTagsJson = await AsyncStorage.getItem(workspaceSpecificKey);
                   currentDeletedTags = deletedTagsJson ? JSON.parse(deletedTagsJson) : [];
                 }
                 // Add the deleted tag to the list
@@ -538,13 +542,13 @@ export default function TagManagementScreen() {
               await removeCustomTag(tagName);
               
               // Add to deleted tags list
-              // Load current deleted tags (user-specific)
+              // Load current deleted tags (workspace-specific)
               let currentDeletedTags: string[] = [];
-              if (supabase && userId) {
+              if (supabase && activeWorkspaceId) {
                 const { data: config } = await supabase
                   .from('tag_config')
                   .select('deleted_tags')
-                  .eq('user_id', userId)
+                  .eq('workspace_id', activeWorkspaceId)
                   .single();
                 if (config?.deleted_tags && Array.isArray(config.deleted_tags)) {
                   currentDeletedTags = config.deleted_tags;
@@ -638,19 +642,18 @@ export default function TagManagementScreen() {
     try {
       setIsSaving(true);
       
-      // Get current user ID
-      let userId: string | null = null;
-      if (supabase) {
-        const { data: { user } } = await supabase.auth.getUser();
-        userId = user?.id || null;
+      if (!activeWorkspaceId) {
+        Alert.alert('Error', 'No active workspace. Please select a workspace.');
+        return;
       }
       
       // Update tag in database (all assets using this tag)
-      if (supabase && userId) {
+      if (supabase && activeWorkspaceId) {
         const { data: assets, error: fetchError } = await supabase
           .from('assets')
           .select('id, tags')
-          .eq('user_id', userId);
+          .eq('workspace_id', activeWorkspaceId)
+          .is('deleted_at', null); // Exclude soft-deleted assets
         
         if (fetchError) {
           console.error('[TagManagement] Failed to fetch assets:', fetchError);
@@ -708,14 +711,14 @@ export default function TagManagementScreen() {
       
       // No default tags to handle, so skip deleted_tags logic for renaming
       if (false) {
-        // Load current deleted tags (user-specific)
+        // Load current deleted tags (workspace-specific)
         let currentDeletedTags: string[] = [];
-        if (supabase && userId) {
+        if (supabase && activeWorkspaceId) {
           try {
             const { data: config } = await supabase
               .from('tag_config')
               .select('deleted_tags')
-              .eq('user_id', userId)
+              .eq('workspace_id', activeWorkspaceId)
               .single();
             if (config?.deleted_tags && Array.isArray(config.deleted_tags)) {
               currentDeletedTags = config.deleted_tags;
@@ -744,14 +747,19 @@ export default function TagManagementScreen() {
       }
       
       // Update custom tags list atomically (user-specific)
+      if (!activeWorkspaceId) {
+        console.warn('[TagManagement] No workspace ID - cannot save custom tag');
+        return;
+      }
+
       // Load current custom tags
       let currentCustomTags: string[] = [];
-      if (supabase && userId) {
+      if (supabase && activeWorkspaceId) {
         try {
           const { data: config, error } = await supabase
             .from('tag_config')
             .select('custom_tags')
-            .eq('user_id', userId)
+            .eq('workspace_id', activeWorkspaceId)
             .single();
           
           if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column")) {
@@ -907,16 +915,9 @@ export default function TagManagementScreen() {
 
   const saveAutoTagConfig = async (tagConfigs: TagConfig[]) => {
     try {
-      // Get current user ID
-      let userId: string | null = null;
-      if (supabase) {
-        const { data: { user } } = await supabase.auth.getUser();
-        userId = user?.id || null;
-      }
-
-      if (!userId) {
-        console.warn('[TagManagement] No user ID - cannot save tags safely');
-        throw new Error('User ID required to save tags');
+      if (!activeWorkspaceId) {
+        console.warn('[TagManagement] No workspace ID - cannot save tags safely');
+        throw new Error('Workspace ID required to save tags');
       }
 
       // Filter to ONLY tags where isAutoTag is true
@@ -937,7 +938,7 @@ export default function TagManagementScreen() {
         try {
           const result = await supabase
             .from('tag_config')
-            .upsert({ user_id: userId, auto_tags: autoTags }, { onConflict: 'user_id' });
+            .upsert({ workspace_id: activeWorkspaceId, auto_tags: autoTags }, { onConflict: 'workspace_id' });
           error = result.error;
           data = result.data;
         } catch (upsertError: any) {
@@ -947,7 +948,7 @@ export default function TagManagementScreen() {
           // First try to insert
           const insertResult = await supabase
             .from('tag_config')
-            .insert({ user_id: userId, auto_tags: autoTags });
+            .insert({ workspace_id: activeWorkspaceId, auto_tags: autoTags });
           
           if (insertResult.error) {
             // If insert fails (row exists), try update
@@ -955,7 +956,7 @@ export default function TagManagementScreen() {
               const updateResult = await supabase
                 .from('tag_config')
                 .update({ auto_tags: autoTags })
-                .eq('user_id', userId);
+                .eq('workspace_id', activeWorkspaceId);
               error = updateResult.error;
               data = updateResult.data;
             } else {
@@ -972,9 +973,9 @@ export default function TagManagementScreen() {
           console.error('[TagManagement] Error code:', error.code);
           console.error('[TagManagement] Error message:', error.message);
           console.error('[TagManagement] Error details:', JSON.stringify(error, null, 2));
-          // Fallback to user-specific AsyncStorage
-          const userSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${userId}`;
-          await AsyncStorage.setItem(userSpecificKey, JSON.stringify(autoTags));
+          // Fallback to workspace-specific AsyncStorage
+          const workspaceSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${activeWorkspaceId}`;
+          await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(autoTags));
           console.log('[TagManagement] Saved to AsyncStorage as fallback');
         } else {
           console.log('[TagManagement] ✅ Auto-tag config saved successfully to Supabase');
@@ -983,7 +984,7 @@ export default function TagManagementScreen() {
           const { data: verifyData, error: verifyError } = await supabase
             .from('tag_config')
             .select('auto_tags')
-            .eq('user_id', userId)
+            .eq('workspace_id', activeWorkspaceId)
             .single();
           
           if (verifyError) {
@@ -996,14 +997,14 @@ export default function TagManagementScreen() {
             }
           }
           
-          // Also save to user-specific AsyncStorage as backup
-          const userSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${userId}`;
-          await AsyncStorage.setItem(userSpecificKey, JSON.stringify(autoTags));
+          // Also save to workspace-specific AsyncStorage as backup
+          const workspaceSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${activeWorkspaceId}`;
+          await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(autoTags));
         }
       } else {
-        // No Supabase - use user-specific AsyncStorage
-        const userSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${userId}`;
-        await AsyncStorage.setItem(userSpecificKey, JSON.stringify(autoTags));
+        // No Supabase - use workspace-specific AsyncStorage
+        const workspaceSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${activeWorkspaceId}`;
+        await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(autoTags));
         console.log('[TagManagement] Saved to AsyncStorage (no Supabase)');
       }
     } catch (error) {
@@ -1014,24 +1015,22 @@ export default function TagManagementScreen() {
 
   const saveCustomTag = async (tagName: string) => {
     try {
-      // Get current user ID
-      let userId: string | null = null;
-      if (supabase) {
-        const { data: { user } } = await supabase.auth.getUser();
-        userId = user?.id || null;
+      if (!activeWorkspaceId) {
+        console.warn('[TagManagement] No workspace ID - cannot save custom tag');
+        return;
       }
 
-      // Load current custom tags (user-specific)
+      // Load current custom tags (workspace-specific)
       let currentCustomTags: string[] = [];
-      if (supabase && userId) {
+      if (supabase && activeWorkspaceId) {
         try {
           const { data: config, error } = await supabase
             .from('tag_config')
             .select('custom_tags')
-            .eq('user_id', userId)
+            .eq('workspace_id', activeWorkspaceId)
             .single();
           
-          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column") && !error.message?.includes("Could not find the 'user_id' column")) {
+          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column") && !error.message?.includes("Could not find the 'workspace_id' column")) {
             console.warn('[TagManagement] Error loading custom_tags from Supabase:', error);
           }
           
@@ -1043,11 +1042,11 @@ export default function TagManagementScreen() {
         }
       }
       
-      // Fallback to user-specific AsyncStorage
-      if (currentCustomTags.length === 0 && userId) {
+      // Fallback to workspace-specific AsyncStorage
+      if (currentCustomTags.length === 0 && activeWorkspaceId) {
         try {
-          const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
-          const customTagsJson = await AsyncStorage.getItem(userSpecificKey);
+          const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+          const customTagsJson = await AsyncStorage.getItem(workspaceSpecificKey);
           currentCustomTags = customTagsJson ? JSON.parse(customTagsJson) : [];
         } catch (error) {
           currentCustomTags = [];
@@ -1059,12 +1058,12 @@ export default function TagManagementScreen() {
         const updatedCustomTags = [...currentCustomTags, tagName];
         
         // Save to Supabase if available
-        if (supabase && userId) {
+        if (supabase && activeWorkspaceId) {
           let error = null;
           try {
             const result = await supabase
               .from('tag_config')
-              .upsert({ user_id: userId, custom_tags: updatedCustomTags }, { onConflict: 'user_id' });
+              .upsert({ workspace_id: activeWorkspaceId, custom_tags: updatedCustomTags }, { onConflict: 'workspace_id' });
             error = result.error;
           } catch (upsertError: any) {
             // If upsert fails, try update as fallback
@@ -1072,7 +1071,7 @@ export default function TagManagementScreen() {
             const updateResult = await supabase
               .from('tag_config')
               .update({ custom_tags: updatedCustomTags })
-              .eq('user_id', userId);
+              .eq('workspace_id', activeWorkspaceId);
             error = updateResult.error;
           }
           
@@ -1083,16 +1082,16 @@ export default function TagManagementScreen() {
               console.error('[TagManagement] Supabase save custom_tags failed', error);
               console.error('[TagManagement] Error code:', error.code);
             }
-            const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
-            await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
+            const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+            await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(updatedCustomTags));
           } else {
-            // Also save to user-specific AsyncStorage as backup
-            const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
-            await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
+            // Also save to workspace-specific AsyncStorage as backup
+            const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+            await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(updatedCustomTags));
           }
-        } else if (userId) {
-          const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
-          await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
+        } else if (activeWorkspaceId) {
+          const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+          await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(updatedCustomTags));
         }
         
         console.log(`[TagManagement] Custom tag "${tagName}" saved`);
@@ -1194,20 +1193,18 @@ export default function TagManagementScreen() {
     try {
       console.log('[TagManagement] Saving deleted tags:', deletedTags);
       
-      // Get current user ID
-      let userId: string | null = null;
-      if (supabase) {
-        const { data: { user } } = await supabase.auth.getUser();
-        userId = user?.id || null;
+      if (!activeWorkspaceId) {
+        console.warn('[TagManagement] No workspace ID - cannot save deleted tags');
+        return;
       }
       
       // Save to Supabase if available
-      if (supabase && userId) {
+      if (supabase && activeWorkspaceId) {
         let error = null;
         try {
           const result = await supabase
             .from('tag_config')
-            .upsert({ user_id: userId, deleted_tags: deletedTags }, { onConflict: 'user_id' });
+            .upsert({ workspace_id: activeWorkspaceId, deleted_tags: deletedTags }, { onConflict: 'workspace_id' });
           error = result.error;
         } catch (upsertError: any) {
           // If upsert fails, try update as fallback
@@ -1215,7 +1212,7 @@ export default function TagManagementScreen() {
           const updateResult = await supabase
             .from('tag_config')
             .update({ deleted_tags: deletedTags })
-            .eq('user_id', userId);
+            .eq('workspace_id', activeWorkspaceId);
           error = updateResult.error;
         }
         
@@ -1228,27 +1225,33 @@ export default function TagManagementScreen() {
             console.error('[TagManagement] Error code:', error.code);
             console.error('[TagManagement] Error message:', error.message);
           }
-          // Always fallback to AsyncStorage if Supabase fails
-          await AsyncStorage.setItem(DELETED_TAGS_STORAGE_KEY, JSON.stringify(deletedTags));
+          // Always fallback to workspace-specific AsyncStorage if Supabase fails
+          const workspaceSpecificKey = `${DELETED_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+          await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(deletedTags));
         } else {
           console.log('[TagManagement] Deleted tags saved successfully to Supabase');
-          // Also save to AsyncStorage as backup
-          await AsyncStorage.setItem(DELETED_TAGS_STORAGE_KEY, JSON.stringify(deletedTags));
+          // Also save to workspace-specific AsyncStorage as backup
+          const workspaceSpecificKey = `${DELETED_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+          await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(deletedTags));
         }
-      } else {
-        // Fallback to AsyncStorage
-        await AsyncStorage.setItem(DELETED_TAGS_STORAGE_KEY, JSON.stringify(deletedTags));
+      } else if (activeWorkspaceId) {
+        // Fallback to workspace-specific AsyncStorage
+        const workspaceSpecificKey = `${DELETED_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+        await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(deletedTags));
         console.log('[TagManagement] Deleted tags saved to AsyncStorage');
       }
     } catch (error) {
       console.error('[TagManagement] Save deleted tags failed', error);
       // Don't throw - just use AsyncStorage as final fallback
-      try {
-        await AsyncStorage.setItem(DELETED_TAGS_STORAGE_KEY, JSON.stringify(deletedTags));
-        console.log('[TagManagement] Deleted tags saved to AsyncStorage as fallback');
-      } catch (storageError) {
-        console.error('[TagManagement] AsyncStorage save also failed', storageError);
-        throw storageError;
+      if (activeWorkspaceId) {
+        try {
+          const workspaceSpecificKey = `${DELETED_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+          await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(deletedTags));
+          console.log('[TagManagement] Deleted tags saved to AsyncStorage as fallback');
+        } catch (storageError) {
+          console.error('[TagManagement] AsyncStorage save also failed', storageError);
+          throw storageError;
+        }
       }
     }
   };

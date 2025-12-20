@@ -73,3 +73,5 @@ console.log('Env check:', {
 Check the function logs to see if these values are logged.
 
 
+
+

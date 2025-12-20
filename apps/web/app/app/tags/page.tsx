@@ -51,9 +51,14 @@ export default function TagsPage() {
   const supabase = createClient()
   const queryClient = useQueryClient()
 
+  // Get active workspace ID
+  const activeWorkspaceId = typeof window !== 'undefined' 
+    ? localStorage.getItem('@storystack:active_workspace_id')
+    : null
+
   // Fetch all tags with usage counts
   const { data: tags, isLoading, refetch } = useQuery({
-    queryKey: ['tags'],
+    queryKey: ['tags', activeWorkspaceId],
     queryFn: async () => {
       const {
         data: { user },
@@ -61,13 +66,19 @@ export default function TagsPage() {
 
       if (!user) throw new Error('Not authenticated')
 
-      console.log('[TagManagement] Fetching tags for user:', user.id)
+      if (!activeWorkspaceId) {
+        console.log('[TagManagement] No active workspace, returning empty tags')
+        return []
+      }
 
-      // Get all assets with tags
+      console.log('[TagManagement] Fetching tags for workspace:', activeWorkspaceId)
+
+      // Get all assets with tags from the active workspace
       const { data: assets, error } = await supabase
         .from('assets')
         .select('tags')
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
+        .is('deleted_at', null) // Exclude soft-deleted assets
 
       if (error) {
         console.error('[TagManagement] Error fetching assets:', error)
@@ -88,15 +99,15 @@ export default function TagsPage() {
 
       console.log('[TagManagement] Found tags in assets:', Array.from(tagCounts.keys()))
 
-      // Get tag config (auto_tags for AI)
+      // Get tag config (auto_tags for AI) for the active workspace
       // Note: custom_tags column doesn't exist in tag_config table, only auto_tags
       let autoTags: string[] = []
       
-      console.log('[TagManagement] Fetching tag_config for user:', user.id)
+      console.log('[TagManagement] Fetching tag_config for workspace:', activeWorkspaceId)
       const { data: config, error: configError } = await supabase
         .from('tag_config')
         .select('auto_tags')
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
         .single()
 
       console.log('[TagManagement] Query result - data:', config, 'error:', configError)
@@ -169,11 +180,17 @@ export default function TagsPage() {
 
       if (!user) throw new Error('Not authenticated')
 
+      const activeWorkspaceId = typeof window !== 'undefined' 
+        ? localStorage.getItem('@storystack:active_workspace_id')
+        : null
+
+      if (!activeWorkspaceId) throw new Error('No active workspace')
+
       // Get current tag_config to preserve existing auto_tags
       const { data: existingConfig } = await supabase
         .from('tag_config')
         .select('auto_tags')
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
         .single()
 
       const currentAutoTags = existingConfig?.auto_tags && Array.isArray(existingConfig.auto_tags) 
@@ -189,24 +206,24 @@ export default function TagsPage() {
           .from('tag_config')
           .upsert(
             { 
-              user_id: user.id, 
+              workspace_id: activeWorkspaceId, 
               auto_tags: updatedAutoTags 
             },
-            { onConflict: 'user_id' }
+            { onConflict: 'workspace_id' }
           )
 
         if (error) {
           // Try insert/update fallback
           const insertResult = await supabase
             .from('tag_config')
-            .insert({ user_id: user.id, auto_tags: updatedAutoTags })
+            .insert({ workspace_id: activeWorkspaceId, auto_tags: updatedAutoTags })
           
           if (insertResult.error) {
             if (insertResult.error.code === '23505' || insertResult.error.message?.includes('duplicate')) {
               const updateResult = await supabase
                 .from('tag_config')
                 .update({ auto_tags: updatedAutoTags })
-                .eq('user_id', user.id)
+                .eq('workspace_id', activeWorkspaceId)
               
               if (updateResult.error) {
                 throw updateResult.error
@@ -235,11 +252,18 @@ export default function TagsPage() {
 
       if (!user) throw new Error('Not authenticated')
 
+      const activeWorkspaceId = typeof window !== 'undefined' 
+        ? localStorage.getItem('@storystack:active_workspace_id')
+        : null
+
+      if (!activeWorkspaceId) throw new Error('No active workspace')
+
       // Update all assets that use this tag
       const { data: assets } = await supabase
         .from('assets')
         .select('id, tags')
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
+        .is('deleted_at', null) // Exclude soft-deleted assets
         .contains('tags', [oldName])
 
       if (assets) {
@@ -276,11 +300,18 @@ export default function TagsPage() {
 
       if (!user) throw new Error('Not authenticated')
 
+      const activeWorkspaceId = typeof window !== 'undefined' 
+        ? localStorage.getItem('@storystack:active_workspace_id')
+        : null
+
+      if (!activeWorkspaceId) throw new Error('No active workspace')
+
       // Remove tag from all assets
       const { data: assets } = await supabase
         .from('assets')
         .select('id, tags')
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
+        .is('deleted_at', null) // Exclude soft-deleted assets
         .contains('tags', [tagName])
 
       if (assets) {
@@ -299,7 +330,7 @@ export default function TagsPage() {
       const { data: config } = await supabase
         .from('tag_config')
         .select('auto_tags')
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
         .single()
 
       if (config?.auto_tags && Array.isArray(config.auto_tags)) {
@@ -309,8 +340,8 @@ export default function TagsPage() {
         const { error: configError } = await supabase
           .from('tag_config')
           .upsert(
-            { user_id: user.id, auto_tags: updatedAutoTags },
-            { onConflict: 'user_id' }
+            { workspace_id: activeWorkspaceId, auto_tags: updatedAutoTags },
+            { onConflict: 'workspace_id' }
           )
 
         if (configError) {
@@ -430,6 +461,10 @@ export default function TagsPage() {
 
       if (!user) throw new Error('Not authenticated')
 
+      const activeWorkspaceId = typeof window !== 'undefined' 
+        ? localStorage.getItem('@storystack:active_workspace_id')
+        : null
+
       // Read optimistic tags from cache (onMutate has already updated it)
       const optimisticTags = queryClient.getQueryData<TagConfig[]>(['tags']) || []
       
@@ -442,12 +477,12 @@ export default function TagsPage() {
 
       console.log('[TagManagement] Saving auto_tags:', autoTags, 'for tag:', tagName, 'enabled:', enabled)
 
-      // Save the auto_tags array (same as mobile app: saves array of tag names)
+      // Save the auto_tags array
       const { error } = await supabase
         .from('tag_config')
         .upsert(
-          { user_id: user.id, auto_tags: autoTags },
-          { onConflict: 'user_id' }
+          { workspace_id: activeWorkspaceId, auto_tags: autoTags },
+          { onConflict: 'workspace_id' }
         )
 
       if (error) {
@@ -455,14 +490,14 @@ export default function TagsPage() {
         // Try insert/update fallback like mobile app
         const insertResult = await supabase
           .from('tag_config')
-          .insert({ user_id: user.id, auto_tags: autoTags })
+          .insert({ workspace_id: activeWorkspaceId, auto_tags: autoTags })
         
         if (insertResult.error) {
           if (insertResult.error.code === '23505' || insertResult.error.message?.includes('duplicate')) {
             const updateResult = await supabase
               .from('tag_config')
               .update({ auto_tags: autoTags })
-              .eq('user_id', user.id)
+              .eq('workspace_id', activeWorkspaceId)
             
             if (updateResult.error) {
               console.error('[TagManagement] Update failed:', updateResult.error)
@@ -484,7 +519,7 @@ export default function TagsPage() {
       const { data: verifyData, error: verifyError } = await supabase
         .from('tag_config')
         .select('auto_tags')
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
         .single()
 
       if (verifyError) {
@@ -550,13 +585,20 @@ export default function TagsPage() {
 
       if (!user) throw new Error('Not authenticated')
 
-      console.log('[TagManagement] Clearing pending assets for user:', user.id)
+      const activeWorkspaceId = typeof window !== 'undefined' 
+        ? localStorage.getItem('@storystack:active_workspace_id')
+        : null
+
+      if (!activeWorkspaceId) throw new Error('No active workspace')
+
+      console.log('[TagManagement] Clearing pending assets for workspace:', activeWorkspaceId)
 
       // First, check how many pending assets exist
       const { data: pendingAssets, error: countError } = await supabase
         .from('assets')
         .select('id', { count: 'exact' })
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
+        .is('deleted_at', null) // Exclude soft-deleted assets
         .eq('auto_tag_status', 'pending')
 
       if (countError) {
@@ -571,11 +613,12 @@ export default function TagsPage() {
         return { cleared: 0 }
       }
 
-      // Clear all pending assets for this user
+      // Clear all pending assets for this workspace
       const { data, error } = await supabase
         .from('assets')
         .update({ auto_tag_status: null })
-        .eq('user_id', user.id)
+        .eq('workspace_id', activeWorkspaceId)
+        .is('deleted_at', null) // Exclude soft-deleted assets
         .eq('auto_tag_status', 'pending')
         .select('id')
 

@@ -84,3 +84,5 @@ After updating CORS, check the browser console:
 - ✅ No CORS errors = Fixed!
 - ❌ Still seeing CORS errors = Check if you added the correct domain
 
+
+
