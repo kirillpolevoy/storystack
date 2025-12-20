@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import {
   Workspace,
@@ -55,6 +55,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [userRole, setUserRole] = useState<WorkspaceRole | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Use ref to access latest workspaces without causing dependency issues
+  const workspacesRef = useRef<Workspace[]>([]);
+  useEffect(() => {
+    workspacesRef.current = workspaces;
+  }, [workspaces]);
 
   // Load workspaces for the user
   const loadWorkspaces = useCallback(async () => {
@@ -68,10 +74,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       const userWorkspaces = await getUserWorkspaces(user.id);
       setWorkspaces(userWorkspaces);
       setError(null);
+      return userWorkspaces; // Return workspaces for use in loadActiveWorkspace
     } catch (err) {
       console.error('[WorkspaceContext] Error loading workspaces:', err);
       setError(err instanceof Error ? err.message : 'Failed to load workspaces');
       setWorkspaces([]);
+      return [];
     }
   }, [user?.id]);
 
@@ -90,17 +98,17 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       const workspaceId = await getOrCreateDefaultWorkspace(user.id);
       setActiveWorkspaceIdState(workspaceId);
 
-      // Find workspace in loaded workspaces
-      const workspace = workspaces.find((w) => w.id === workspaceId);
+      // Find workspace in current workspaces (use ref to avoid dependency)
+      let workspace = workspacesRef.current.find((w) => w.id === workspaceId);
+      
+      if (!workspace) {
+        // If not found, refresh workspaces and get the result
+        const refreshedWorkspaces = await loadWorkspaces();
+        workspace = refreshedWorkspaces.find((w) => w.id === workspaceId);
+      }
+      
       if (workspace) {
         setActiveWorkspace(workspace);
-      } else {
-        // If not found, refresh workspaces
-        await loadWorkspaces();
-        const refreshedWorkspace = workspaces.find((w) => w.id === workspaceId);
-        if (refreshedWorkspace) {
-          setActiveWorkspace(refreshedWorkspace);
-        }
       }
 
       // Load user role
@@ -116,7 +124,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [user?.id, workspaces, loadWorkspaces]);
+  }, [user?.id, loadWorkspaces]); // Removed workspaces from dependencies
 
   // Switch to a different workspace
   const switchWorkspace = useCallback(
@@ -136,16 +144,16 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         await setActiveWorkspaceId(user.id, workspaceId);
         setActiveWorkspaceIdState(workspaceId);
 
-        // Update active workspace object
-        const workspace = workspaces.find((w) => w.id === workspaceId);
+        // Update active workspace object (use ref to avoid dependency)
+        let workspace = workspacesRef.current.find((w) => w.id === workspaceId);
         if (workspace) {
           setActiveWorkspace(workspace);
         } else {
-          // Refresh workspaces if not found
-          await loadWorkspaces();
-          const refreshedWorkspace = workspaces.find((w) => w.id === workspaceId);
-          if (refreshedWorkspace) {
-            setActiveWorkspace(refreshedWorkspace);
+          // Refresh workspaces if not found and get result
+          const refreshedWorkspaces = await loadWorkspaces();
+          workspace = refreshedWorkspaces.find((w) => w.id === workspaceId);
+          if (workspace) {
+            setActiveWorkspace(workspace);
           }
         }
 
@@ -191,14 +199,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   // Refresh workspaces list
   const refreshWorkspaces = useCallback(async () => {
     await loadWorkspaces();
-    // Reload active workspace if needed
+    // Reload active workspace if needed (use ref to avoid dependency)
     if (activeWorkspaceId) {
-      const workspace = workspaces.find((w) => w.id === activeWorkspaceId);
+      const workspace = workspacesRef.current.find((w) => w.id === activeWorkspaceId);
       if (workspace) {
         setActiveWorkspace(workspace);
       }
     }
-  }, [loadWorkspaces, activeWorkspaceId, workspaces]);
+  }, [loadWorkspaces, activeWorkspaceId]); // Removed workspaces from dependencies
 
   // Refresh user role
   const refreshUserRole = useCallback(async () => {
@@ -252,22 +260,38 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [activeWorkspaceId, workspaces]);
 
+  // Memoize context value to prevent unnecessary re-renders
+  const value = useMemo(
+    () => ({
+      activeWorkspace,
+      activeWorkspaceId,
+      workspaces,
+      userRole,
+      loading,
+      error,
+      switchWorkspace,
+      createNewWorkspace,
+      refreshWorkspaces,
+      hasPermission,
+      refreshUserRole,
+    }),
+    [
+      activeWorkspace,
+      activeWorkspaceId,
+      workspaces,
+      userRole,
+      loading,
+      error,
+      switchWorkspace,
+      createNewWorkspace,
+      refreshWorkspaces,
+      hasPermission,
+      refreshUserRole,
+    ]
+  );
+
   return (
-    <WorkspaceContext.Provider
-      value={{
-        activeWorkspace,
-        activeWorkspaceId,
-        workspaces,
-        userRole,
-        loading,
-        error,
-        switchWorkspace,
-        createNewWorkspace,
-        refreshWorkspaces,
-        hasPermission,
-        refreshUserRole,
-      }}
-    >
+    <WorkspaceContext.Provider value={value}>
       {children}
     </WorkspaceContext.Provider>
   );

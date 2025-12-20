@@ -42,10 +42,10 @@ export default function WorkspaceSettingsScreen() {
   const [isDeletingWorkspace, setIsDeletingWorkspace] = useState(false);
 
   useEffect(() => {
-    if (activeWorkspace) {
+    if (activeWorkspace?.name) {
       setWorkspaceName(activeWorkspace.name);
     }
-  }, [activeWorkspace]);
+  }, [activeWorkspace?.id, activeWorkspace?.name]);
 
   // Load workspace members
   const loadMembers = useCallback(async () => {
@@ -91,10 +91,8 @@ export default function WorkspaceSettingsScreen() {
   }, [activeWorkspace?.id, hasPermission]);
 
   useEffect(() => {
-    if (hasPermission('admin')) {
-      loadMembers();
-    }
-  }, [loadMembers, hasPermission]);
+    loadMembers();
+  }, [loadMembers]);
 
   const handleCreateWorkspace = async () => {
     if (!session?.user?.id || !newWorkspaceName.trim()) {

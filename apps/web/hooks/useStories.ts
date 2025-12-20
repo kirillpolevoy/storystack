@@ -19,6 +19,7 @@ export function useStories() {
       }
 
       // Fetch stories with their first asset for thumbnail
+      // RLS policies handle workspace membership, but we filter out soft-deleted stories
       const { data, error } = await supabase
         .from('stories')
         .select(`
@@ -33,7 +34,7 @@ export function useStories() {
             )
           )
         `)
-        .eq('user_id', user.id)
+        .is('deleted_at', null) // Exclude soft-deleted stories
         .order('updated_at', { ascending: false })
 
       if (error) throw error
@@ -157,7 +158,22 @@ export function useDeleteStory() {
 
   return useMutation({
     mutationFn: async (storyId: string) => {
-      const { error } = await supabase.from('stories').delete().eq('id', storyId)
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+
+      if (!user) {
+        throw new Error('Not authenticated')
+      }
+
+      // Soft delete: Set deleted_at and deleted_by (RLS policy requires UPDATE, not DELETE)
+      const { error } = await supabase
+        .from('stories')
+        .update({
+          deleted_at: new Date().toISOString(),
+          deleted_by: user.id,
+        })
+        .eq('id', storyId)
 
       if (error) throw error
     },

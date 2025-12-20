@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
 import { useAuth } from '@/contexts/AuthContext';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const DRAWER_WIDTH = Math.min(320, SCREEN_WIDTH * 0.85);
@@ -241,6 +242,31 @@ export function MenuDrawer({ visible, onClose }: MenuDrawerProps) {
 
           {/* Menu Content */}
           <View style={{ flex: 1, paddingTop: 8 }}>
+            {/* Workspace Switcher Section - Premium placement */}
+            <View
+              style={{
+                paddingHorizontal: 20,
+                paddingBottom: 20,
+                borderBottomWidth: 1,
+                borderBottomColor: 'rgba(0, 0, 0, 0.08)',
+                marginBottom: 8,
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 13,
+                  fontWeight: '600',
+                  color: '#8e8e93',
+                  letterSpacing: -0.1,
+                  marginBottom: 12,
+                  textTransform: 'uppercase',
+                }}
+              >
+                Workspace
+              </Text>
+              <WorkspaceSwitcher />
+            </View>
+
             {/* Main Navigation Section */}
             <View style={{ paddingBottom: 8 }}>
               {mainMenuItems.map((item) => {

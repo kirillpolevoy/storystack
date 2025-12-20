@@ -126,8 +126,7 @@ export async function getStories(workspaceId: string): Promise<StoryWithAssets[]
       const { data: assets } = await supabase
         .from('assets')
         .select('id, storage_path')
-        .in('id', thumbnailAssetIds)
-        .eq('user_id', userId);
+        .in('id', thumbnailAssetIds);
 
       if (assets) {
         thumbnailAssets = assets.map((asset) => {

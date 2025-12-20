@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
@@ -81,6 +81,8 @@ export default function WorkspaceSettingsPage() {
   })
 
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
+  const prevWorkspaceIdRef = useRef<string | null>(null)
+  const prevWorkspaceNameRef = useRef<string>('')
 
   useEffect(() => {
     try {
@@ -151,18 +153,32 @@ export default function WorkspaceSettingsPage() {
     retry: false,
   })
 
+  // Update workspace name when workspace changes, but only if it's a different workspace or name actually changed
   useEffect(() => {
-    if (workspace?.name) {
-      setWorkspaceName(workspace.name)
+    const workspaceId = workspace?.id
+    const workspaceNameValue = workspace?.name
+    
+    if (!workspaceId || !workspaceNameValue) return
+    
+    // Only update if workspace ID changed or workspace name actually changed
+    const isNewWorkspace = prevWorkspaceIdRef.current !== workspaceId
+    const isNameChanged = prevWorkspaceNameRef.current !== workspaceNameValue
+    
+    if (isNewWorkspace || isNameChanged) {
+      setWorkspaceName(workspaceNameValue)
       setHasChanges(false)
+      prevWorkspaceIdRef.current = workspaceId
+      prevWorkspaceNameRef.current = workspaceNameValue
     }
-  }, [workspace])
+  }, [workspace?.id, workspace?.name])
 
+  // Update hasChanges flag when workspaceName changes (only if workspace is loaded)
   useEffect(() => {
-    if (workspace?.name) {
-      setHasChanges(workspaceName.trim() !== workspace.name && workspaceName.trim() !== '')
-    }
-  }, [workspaceName, workspace])
+    if (!workspace?.name) return
+    
+    const hasChangesValue = workspaceName.trim() !== workspace.name && workspaceName.trim() !== ''
+    setHasChanges(hasChangesValue)
+  }, [workspaceName, workspace?.name])
 
   const hasRole = (minRole: 'owner' | 'admin' | 'editor' | 'viewer') => {
     if (!member) return false

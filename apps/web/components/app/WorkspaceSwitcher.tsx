@@ -114,25 +114,43 @@ export function WorkspaceSwitcher() {
 
   // Auto-select first workspace if none is set
   useEffect(() => {
-    if (workspaces.length > 0 && !activeWorkspaceId && activeWorkspace) {
-      console.log('[WorkspaceSwitcher] Auto-selecting first workspace:', activeWorkspace.id)
-      setActiveWorkspaceId(activeWorkspace.id)
-      localStorage.setItem('@storystack:active_workspace_id', activeWorkspace.id)
-      // Invalidate queries to refetch with new workspace
-      queryClient.invalidateQueries()
-    } else if (activeWorkspace && activeWorkspace.id !== activeWorkspaceId) {
-      // Update if workspace changed
-      setActiveWorkspaceId(activeWorkspace.id)
-      localStorage.setItem('@storystack:active_workspace_id', activeWorkspace.id)
+    if (workspaces.length === 0) return
+    
+    // If no active workspace ID is set, use the first workspace
+    if (!activeWorkspaceId) {
+      const firstWorkspace = workspaces[0]
+      if (firstWorkspace) {
+        console.log('[WorkspaceSwitcher] Auto-selecting first workspace:', firstWorkspace.id)
+        setActiveWorkspaceId(firstWorkspace.id)
+        localStorage.setItem('@storystack:active_workspace_id', firstWorkspace.id)
+        // Invalidate workspace-related queries only
+        queryClient.invalidateQueries({ queryKey: ['workspace'] })
+        queryClient.invalidateQueries({ queryKey: ['workspaces'] })
+      }
+      return
     }
-  }, [workspaces, activeWorkspace, activeWorkspaceId, queryClient])
+    
+    // Check if the active workspace ID is still valid
+    const isValidWorkspace = workspaces.some((w) => w.id === activeWorkspaceId)
+    if (!isValidWorkspace && workspaces.length > 0) {
+      // Active workspace ID is invalid, fallback to first workspace
+      const firstWorkspace = workspaces[0]
+      console.log('[WorkspaceSwitcher] Active workspace invalid, switching to:', firstWorkspace.id)
+      setActiveWorkspaceId(firstWorkspace.id)
+      localStorage.setItem('@storystack:active_workspace_id', firstWorkspace.id)
+      // Invalidate workspace-related queries only
+      queryClient.invalidateQueries({ queryKey: ['workspace'] })
+      queryClient.invalidateQueries({ queryKey: ['workspaces'] })
+    }
+  }, [workspaces, activeWorkspaceId, queryClient])
 
   const handleSwitchWorkspace = async (workspaceId: string) => {
     setActiveWorkspaceId(workspaceId)
     localStorage.setItem('@storystack:active_workspace_id', workspaceId)
     setIsOpen(false)
-    // Invalidate all queries to refetch with new workspace
-    queryClient.invalidateQueries()
+    // Invalidate workspace-related queries only
+    queryClient.invalidateQueries({ queryKey: ['workspace'] })
+    queryClient.invalidateQueries({ queryKey: ['workspaces'] })
     // Refresh the page to reload workspace-scoped data
     window.location.reload()
   }

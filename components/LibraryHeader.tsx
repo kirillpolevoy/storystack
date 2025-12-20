@@ -2,7 +2,6 @@ import { Text, TouchableOpacity, View } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
-import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 
 type LibraryHeaderProps = {
   onMenuPress?: () => void;
@@ -38,13 +37,6 @@ export function LibraryHeader({
         elevation: 2,
       }}
     >
-      {/* Workspace Switcher - Top row */}
-      {!isSelectionMode && (
-        <View className="mb-3">
-          <WorkspaceSwitcher />
-        </View>
-      )}
-
       {/* Main title and actions - Apple-style compact header */}
       <View className="mb-3 flex-row items-center justify-between">
         <View className="flex-1">

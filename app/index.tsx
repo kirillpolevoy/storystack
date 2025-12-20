@@ -464,7 +464,7 @@ export default function LibraryScreen() {
 
     setIsLoading(false);
     setIsRefreshing(false);
-  }, [campaignId, session]);
+  }, [activeWorkspaceId, session]);
 
   const handleRefresh = useCallback(async () => {
     await loadAssets(true);
