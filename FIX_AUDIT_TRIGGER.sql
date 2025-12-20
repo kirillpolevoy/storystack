@@ -1,10 +1,7 @@
--- StoryStack Workspaces v1 - Audit Logging Triggers
--- Creates triggers to automatically log workspace actions to audit_log
+-- Fix audit trigger: Remove reference to OLD.role for workspaces table
+-- The workspaces table doesn't have a 'role' column, only workspace_members does
 
--- ============================================================================
--- HELPER FUNCTION: CREATE AUDIT LOG ENTRY
--- ============================================================================
-
+-- Drop and recreate the function with fixed logic
 CREATE OR REPLACE FUNCTION create_audit_log_entry()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -171,97 +168,4 @@ BEGIN
   RETURN NEW;
 END;
 $$;
-
--- ============================================================================
--- TRIGGERS FOR WORKSPACES
--- ============================================================================
-
-DROP TRIGGER IF EXISTS audit_workspaces ON workspaces;
-CREATE TRIGGER audit_workspaces
-  AFTER INSERT OR UPDATE ON workspaces
-  FOR EACH ROW
-  EXECUTE FUNCTION create_audit_log_entry();
-
--- ============================================================================
--- TRIGGERS FOR WORKSPACE_MEMBERS
--- ============================================================================
-
-DROP TRIGGER IF EXISTS audit_workspace_members ON workspace_members;
-CREATE TRIGGER audit_workspace_members
-  AFTER INSERT OR UPDATE OR DELETE ON workspace_members
-  FOR EACH ROW
-  EXECUTE FUNCTION create_audit_log_entry();
-
--- ============================================================================
--- TRIGGERS FOR ASSETS
--- ============================================================================
-
-DROP TRIGGER IF EXISTS audit_assets ON assets;
-CREATE TRIGGER audit_assets
-  AFTER INSERT OR UPDATE ON assets
-  FOR EACH ROW
-  EXECUTE FUNCTION create_audit_log_entry();
-
--- ============================================================================
--- TRIGGERS FOR STORIES
--- ============================================================================
-
-DROP TRIGGER IF EXISTS audit_stories ON stories;
-CREATE TRIGGER audit_stories
-  AFTER INSERT OR UPDATE ON stories
-  FOR EACH ROW
-  EXECUTE FUNCTION create_audit_log_entry();
-
--- ============================================================================
--- TRIGGERS FOR TAGS
--- ============================================================================
-
-DROP TRIGGER IF EXISTS audit_tags ON tags;
-CREATE TRIGGER audit_tags
-  AFTER INSERT OR UPDATE OR DELETE ON tags
-  FOR EACH ROW
-  EXECUTE FUNCTION create_audit_log_entry();
-
--- ============================================================================
--- TRIGGERS FOR STORY_ASSETS
--- ============================================================================
-
-DROP TRIGGER IF EXISTS audit_story_assets_insert ON story_assets;
-CREATE TRIGGER audit_story_assets_insert
-  AFTER INSERT ON story_assets
-  FOR EACH ROW
-  EXECUTE FUNCTION create_audit_log_entry();
-
-DROP TRIGGER IF EXISTS audit_story_assets_delete ON story_assets;
-CREATE TRIGGER audit_story_assets_delete
-  AFTER DELETE ON story_assets
-  FOR EACH ROW
-  EXECUTE FUNCTION create_audit_log_entry();
-
--- Note: We use separate triggers for INSERT and DELETE to set action correctly
--- UPDATE is less common for story_assets (mainly order_index changes)
-
--- ============================================================================
--- TRIGGERS FOR ASSET_TAGS
--- ============================================================================
-
-DROP TRIGGER IF EXISTS audit_asset_tags_insert ON asset_tags;
-CREATE TRIGGER audit_asset_tags_insert
-  AFTER INSERT ON asset_tags
-  FOR EACH ROW
-  EXECUTE FUNCTION create_audit_log_entry();
-
-DROP TRIGGER IF EXISTS audit_asset_tags_delete ON asset_tags;
-CREATE TRIGGER audit_asset_tags_delete
-  AFTER DELETE ON asset_tags
-  FOR EACH ROW
-  EXECUTE FUNCTION create_audit_log_entry();
-
--- ============================================================================
--- COMMENTS
--- ============================================================================
-
-COMMENT ON FUNCTION create_audit_log_entry IS 'Creates audit log entries for workspace actions. Handles create, update, soft_delete, restore, delete, role_change, update_name, update_logo, remove_logo, add, and remove actions.';
-
-
 
