@@ -11,6 +11,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
 
 interface Workspace {
   id: string
@@ -23,6 +24,7 @@ export function WorkspaceSwitcher() {
   const supabase = createClient()
   const queryClient = useQueryClient()
   const [isOpen, setIsOpen] = useState(false)
+  const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -135,6 +137,13 @@ export function WorkspaceSwitcher() {
     window.location.reload()
   }
 
+  const handleWorkspaceCreated = (workspaceId: string) => {
+    // Refresh workspaces list
+    queryClient.invalidateQueries({ queryKey: ['workspaces', user?.id] })
+    // Switch to the new workspace
+    handleSwitchWorkspace(workspaceId)
+  }
+
   const getInitials = (name: string) => {
     return name
       .split(' ')
@@ -238,6 +247,16 @@ export function WorkspaceSwitcher() {
           <button
             onClick={() => {
               setIsOpen(false)
+              setShowCreateDialog(true)
+            }}
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors text-sm text-gray-700"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Create Workspace</span>
+          </button>
+          <button
+            onClick={() => {
+              setIsOpen(false)
               router.push('/app/workspace-settings')
             }}
             className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors text-sm text-gray-700"
@@ -247,6 +266,11 @@ export function WorkspaceSwitcher() {
           </button>
         </div>
       </PopoverContent>
+      <CreateWorkspaceDialog
+        open={showCreateDialog}
+        onOpenChange={setShowCreateDialog}
+        onSuccess={handleWorkspaceCreated}
+      />
     </Popover>
   )
 }

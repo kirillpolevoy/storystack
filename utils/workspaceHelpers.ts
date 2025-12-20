@@ -103,37 +103,73 @@ export async function createWorkspace(
     throw new Error('Supabase client not available');
   }
 
-  // Create workspace
-  const { data: workspace, error: workspaceError } = await supabase
-    .from('workspaces')
-    .insert({
-      name,
-      created_by: userId,
-      status: 'active',
-    })
-    .select()
-    .single();
+  // Try RPC function first (bypasses RLS)
+  const { data: workspaceData, error: rpcError } = await supabase.rpc('create_workspace', {
+    workspace_name: name.trim(),
+  });
 
-  if (workspaceError || !workspace) {
-    console.error('[workspaceHelpers] Error creating workspace:', workspaceError);
-    throw workspaceError || new Error('Failed to create workspace');
+  let workspace: Workspace | null = null;
+
+  if (!rpcError && workspaceData && workspaceData.length > 0) {
+    workspace = workspaceData[0] as Workspace;
+    console.log('[workspaceHelpers] Workspace created via RPC:', workspace.id);
+  } else {
+    // Fallback to direct insert if RPC doesn't exist or fails
+    console.log('[workspaceHelpers] RPC failed, trying direct insert:', rpcError);
+    
+    const { data, error: workspaceError } = await supabase
+      .from('workspaces')
+      .insert({
+        name: name.trim(),
+        created_by: userId,
+        status: 'active',
+      })
+      .select()
+      .single();
+
+    if (workspaceError || !data) {
+      console.error('[workspaceHelpers] Error creating workspace:', {
+        rpcError,
+        insertError: workspaceError,
+      });
+      throw workspaceError || rpcError || new Error('Failed to create workspace');
+    }
+
+    workspace = data as Workspace;
+
+    // Add creator as owner
+    const { error: memberError } = await supabase
+      .from('workspace_members')
+      .insert({
+        workspace_id: workspace.id,
+        user_id: userId,
+        role: 'owner',
+        created_by: userId,
+      });
+
+    if (memberError) {
+      console.error('[workspaceHelpers] Error adding owner to workspace:', memberError);
+      // Clean up workspace if member creation fails
+      await supabase.from('workspaces').delete().eq('id', workspace.id);
+      throw memberError;
+    }
+
+    // Create default tag_config for the workspace
+    const { error: tagConfigError } = await supabase
+      .from('tag_config')
+      .insert({
+        workspace_id: workspace.id,
+        auto_tags: [],
+      });
+
+    if (tagConfigError) {
+      // Log but don't fail - tag_config creation is optional
+      console.warn('[workspaceHelpers] Error creating tag_config:', tagConfigError);
+    }
   }
 
-  // Add creator as owner
-  const { error: memberError } = await supabase
-    .from('workspace_members')
-    .insert({
-      workspace_id: workspace.id,
-      user_id: userId,
-      role: 'owner',
-      created_by: userId,
-    });
-
-  if (memberError) {
-    console.error('[workspaceHelpers] Error adding owner to workspace:', memberError);
-    // Clean up workspace if member creation fails
-    await supabase.from('workspaces').delete().eq('id', workspace.id);
-    throw memberError;
+  if (!workspace) {
+    throw new Error('Failed to create workspace');
   }
 
   // Upload logo if provided
@@ -155,7 +191,7 @@ export async function createWorkspace(
     }
   }
 
-  return workspace as Workspace;
+  return workspace;
 }
 
 /**
@@ -182,38 +218,45 @@ export async function updateWorkspaceName(
 
 /**
  * Upload workspace logo (owner only)
+ * Accepts File (web) or Blob (React Native)
  */
 export async function uploadWorkspaceLogo(
   workspaceId: string,
-  file: File,
-  userId: string
+  file: File | Blob,
+  userId: string,
+  fileName?: string,
+  contentType?: string
 ): Promise<string> {
   if (!supabase) {
     throw new Error('Supabase client not available');
   }
 
+  // Get file type and size - handle both File and Blob
+  const fileType = contentType || (file instanceof File ? file.type : 'image/jpeg');
+  const fileSize = file.size;
+
   // Validate file type
   const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
-  if (!allowedTypes.includes(file.type)) {
+  if (!allowedTypes.includes(fileType)) {
     throw new Error('Invalid file type. Only PNG, JPEG, and WebP are allowed.');
   }
 
   // Validate file size (5MB max)
   const maxSize = 5 * 1024 * 1024; // 5MB
-  if (file.size > maxSize) {
+  if (fileSize > maxSize) {
     throw new Error('File size exceeds 5MB limit.');
   }
 
   // Generate unique filename
-  const fileExt = file.name.split('.').pop() || 'jpg';
-  const fileName = `${workspaceId}-${Date.now()}.${fileExt}`;
-  const filePath = `workspaces/${workspaceId}/logo/${fileName}`;
+  const fileExt = fileName?.split('.').pop() || (file instanceof File ? file.name.split('.').pop() : 'jpg') || 'jpg';
+  const uniqueFileName = `${workspaceId}-${Date.now()}.${fileExt}`;
+  const filePath = `workspaces/${workspaceId}/logo/${uniqueFileName}`;
 
   // Upload to workspace_logos bucket
   const { error: uploadError } = await supabase.storage
     .from('workspace_logos')
     .upload(filePath, file, {
-      contentType: file.type,
+      contentType: fileType,
       upsert: true,
     });
 
@@ -334,6 +377,47 @@ export async function addWorkspaceMember(
 /**
  * Remove member from workspace (admin+ only)
  */
+/**
+ * Delete a workspace
+ * Only workspace owners can delete workspaces
+ * @param workspaceId Workspace ID to delete
+ * @param userId User ID (must be owner)
+ */
+export async function deleteWorkspace(
+  workspaceId: string,
+  userId: string
+): Promise<void> {
+  if (!supabase) {
+    throw new Error('Supabase client not available');
+  }
+
+  // Try RPC function first (bypasses RLS)
+  const { error: rpcError } = await supabase.rpc('delete_workspace', {
+    workspace_id_param: workspaceId,
+  });
+
+  if (!rpcError) {
+    console.log('[workspaceHelpers] Workspace deleted via RPC:', workspaceId);
+    return;
+  }
+
+  // Fallback to direct delete if RPC doesn't exist or fails
+  console.log('[workspaceHelpers] RPC failed, trying direct delete:', rpcError);
+  
+  const { error: deleteError } = await supabase
+    .from('workspaces')
+    .delete()
+    .eq('id', workspaceId);
+
+  if (deleteError) {
+    console.error('[workspaceHelpers] Error deleting workspace:', {
+      rpcError,
+      deleteError,
+    });
+    throw deleteError || rpcError || new Error('Failed to delete workspace');
+  }
+}
+
 export async function removeWorkspaceMember(
   workspaceId: string,
   userId: string

@@ -5,8 +5,9 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ArrowLeft, Upload, X, Settings, Mail, UserPlus, Trash2, Crown, Shield, Edit, Eye } from 'lucide-react'
+import { ArrowLeft, X, Settings, Mail, UserPlus, Trash2, Crown, Shield, Edit, Eye, Check, Loader2 } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { deleteWorkspace } from '@/utils/workspaceHelpers'
 import {
   Select,
   SelectContent,
@@ -24,6 +25,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 interface Workspace {
   id: string
@@ -41,6 +49,7 @@ interface WorkspaceMember {
   user_id: string
   role: 'owner' | 'admin' | 'editor' | 'viewer'
   created_at: string
+  email?: string
 }
 
 interface WorkspaceInvitation {
@@ -59,10 +68,10 @@ export default function WorkspaceSettingsPage() {
   const queryClient = useQueryClient()
   const [workspaceName, setWorkspaceName] = useState('')
   const [isSaving, setIsSaving] = useState(false)
-  const [isUploadingLogo, setIsUploadingLogo] = useState(false)
-  const [logoPreview, setLogoPreview] = useState<string | null>(null)
+  const [hasChanges, setHasChanges] = useState(false)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
 
-  // Get current user
   const { data: user } = useQuery({
     queryKey: ['user'],
     queryFn: async () => {
@@ -71,60 +80,89 @@ export default function WorkspaceSettingsPage() {
     },
   })
 
-  // Get active workspace ID from localStorage
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
 
   useEffect(() => {
-    const stored = localStorage.getItem('@storystack:active_workspace_id')
-    setActiveWorkspaceId(stored)
+    try {
+      const stored = localStorage.getItem('@storystack:active_workspace_id')
+      setActiveWorkspaceId(stored)
+    } catch (error) {
+      console.error('[WorkspaceSettings] Error reading localStorage:', error)
+      // Continue without active workspace ID
+    }
   }, [])
 
-  // Fetch workspace data
-  const { data: workspace, isLoading } = useQuery({
+  const { data: workspace, isLoading, error: workspaceError } = useQuery({
     queryKey: ['workspace', activeWorkspaceId],
     queryFn: async () => {
       if (!activeWorkspaceId) return null
-      const { data, error } = await supabase
-        .from('workspaces')
-        .select('*')
-        .eq('id', activeWorkspaceId)
-        .single()
+      try {
+        const { data, error } = await supabase
+          .from('workspaces')
+          .select('*')
+          .eq('id', activeWorkspaceId)
+          .single()
 
-      if (error) throw error
-      return data as Workspace
+        if (error) {
+          console.error('[WorkspaceSettings] Error fetching workspace:', error)
+          throw error
+        }
+        return data as Workspace
+      } catch (error) {
+        console.error('[WorkspaceSettings] Workspace query failed:', error)
+        throw error
+      }
     },
     enabled: !!activeWorkspaceId,
+    retry: false,
   })
 
-  // Fetch user role
   const { data: member } = useQuery({
     queryKey: ['workspace-member', activeWorkspaceId, user?.id],
     queryFn: async () => {
       if (!activeWorkspaceId || !user?.id) return null
-      const { data, error } = await supabase
-        .from('workspace_members')
-        .select('*')
-        .eq('workspace_id', activeWorkspaceId)
-        .eq('user_id', user.id)
-        .single()
+      try {
+        const { data, error } = await supabase
+          .from('workspace_members')
+          .select('*')
+          .eq('workspace_id', activeWorkspaceId)
+          .eq('user_id', user.id)
+          .single()
 
-      if (error) throw error
-      return data as WorkspaceMember
+        // If member not found (PGRST116), return null instead of throwing
+        if (error) {
+          if (error.code === 'PGRST116') {
+            return null
+          }
+          console.error('[WorkspaceSettings] Error fetching member:', error)
+          throw error
+        }
+        return data as WorkspaceMember
+      } catch (error: any) {
+        // Handle "not found" gracefully
+        if (error?.code === 'PGRST116') {
+          return null
+        }
+        console.error('[WorkspaceSettings] Member query failed:', error)
+        throw error
+      }
     },
     enabled: !!activeWorkspaceId && !!user?.id,
+    retry: false,
   })
 
   useEffect(() => {
-    if (workspace) {
+    if (workspace?.name) {
       setWorkspaceName(workspace.name)
-      if (workspace.logo_path) {
-        const { data } = supabase.storage.from('workspace_logos').getPublicUrl(workspace.logo_path)
-        setLogoPreview(data.publicUrl)
-      } else {
-        setLogoPreview(null)
-      }
+      setHasChanges(false)
     }
-  }, [workspace, supabase])
+  }, [workspace])
+
+  useEffect(() => {
+    if (workspace?.name) {
+      setHasChanges(workspaceName.trim() !== workspace.name && workspaceName.trim() !== '')
+    }
+  }, [workspaceName, workspace])
 
   const hasRole = (minRole: 'owner' | 'admin' | 'editor' | 'viewer') => {
     if (!member) return false
@@ -133,324 +171,282 @@ export default function WorkspaceSettingsPage() {
   }
 
   const handleSaveName = async () => {
-    if (!workspace) {
-      alert('No workspace selected.')
+    if (!workspace || !hasRole('owner')) {
       return
     }
     
-    // Debug: Check role before proceeding
-    console.log('[WorkspaceSettings] Attempting to save name:', {
-      workspaceId: workspace.id,
-      currentRole: member?.role,
-      hasOwnerRole: hasRole('owner'),
-      userId: user?.id
-    })
-    
-    if (!hasRole('owner')) {
-      alert('Only workspace owners can rename the workspace.')
-      console.error('[WorkspaceSettings] User does not have owner role. Current role:', member?.role)
-      return
-    }
-    
-    if (workspaceName.trim() === '' || workspaceName === workspace.name) {
+    if (!workspace?.id || workspaceName.trim() === '' || workspaceName === workspace?.name) {
       return
     }
 
     setIsSaving(true)
     try {
-      console.log('[WorkspaceSettings] Updating workspace name:', {
-        workspaceId: workspace.id,
-        oldName: workspace.name,
-        newName: workspaceName.trim(),
-        userRole: member?.role,
-        userId: user?.id
-      })
-
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('workspaces')
         .update({ name: workspaceName.trim(), updated_at: new Date().toISOString() })
         .eq('id', workspace.id)
-        .select()
 
-      if (error) {
-        console.error('[WorkspaceSettings] Update error:', error)
-        console.error('[WorkspaceSettings] Error code:', error.code)
-        console.error('[WorkspaceSettings] Error message:', error.message)
-        console.error('[WorkspaceSettings] Error details:', error.details)
-        console.error('[WorkspaceSettings] Error hint:', error.hint)
-        
-        // More specific error messages
-        if (error.code === '42501') {
-          throw new Error('Permission denied. You may not have owner role in this workspace.')
-        } else if (error.code === 'PGRST301') {
-          throw new Error('Row-level security policy violation. Check your workspace membership.')
-        } else {
-          throw error
-        }
-      }
+      if (error) throw error
 
-      console.log('[WorkspaceSettings] Update successful:', data)
       queryClient.invalidateQueries({ queryKey: ['workspace', activeWorkspaceId] })
-      queryClient.invalidateQueries({ queryKey: ['workspace-member', activeWorkspaceId, user?.id] })
-      alert('Workspace name updated successfully.')
+      queryClient.invalidateQueries({ queryKey: ['workspaces', user?.id] })
+      setHasChanges(false)
     } catch (error: any) {
-      console.error('[WorkspaceSettings] Error updating workspace name:', error)
-      const errorMessage = error?.message || error?.details || error?.hint || 'Unknown error occurred'
-      alert(`Failed to update workspace name: ${errorMessage}`)
+      console.error('Error updating workspace name:', error)
+      alert(`Failed to update workspace name: ${error?.message || 'Unknown error'}`)
     } finally {
       setIsSaving(false)
     }
   }
 
-  const handleUploadLogo = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!workspace || !hasRole('owner')) {
-      alert('Only workspace owners can upload a logo.')
-      return
-    }
-
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    // Validate file type
-    if (!file.type.match(/^image\/(png|jpeg|jpg|webp)$/)) {
-      alert('Please upload a PNG, JPG, or WebP image.')
-      return
-    }
-
-    // Validate file size (5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      alert('File size must be less than 5MB.')
-      return
-    }
-
-    setIsUploadingLogo(true)
-    try {
-      const fileExt = file.name.split('.').pop() || 'png'
-      const fileName = `${workspace.id}.${fileExt}`
-      const filePath = `workspaces/${workspace.id}/logo/${fileName}`
-
-      // Upload to Supabase Storage
-      const { error: uploadError } = await supabase.storage
-        .from('workspace_logos')
-        .upload(filePath, file, {
-          contentType: file.type,
-          upsert: true,
-        })
-
-      if (uploadError) throw uploadError
-
-      // Update workspace table
-      const { error: dbError } = await supabase
-        .from('workspaces')
-        .update({ logo_path: filePath, logo_updated_at: new Date().toISOString() })
-        .eq('id', workspace.id)
-
-      if (dbError) throw dbError
-
-      queryClient.invalidateQueries({ queryKey: ['workspace', activeWorkspaceId] })
-      const { data } = supabase.storage.from('workspace_logos').getPublicUrl(filePath)
-      setLogoPreview(data.publicUrl)
-      alert('Workspace logo updated successfully.')
-    } catch (error) {
-      console.error('Error uploading logo:', error)
-      alert('Failed to upload logo.')
-    } finally {
-      setIsUploadingLogo(false)
-      e.target.value = '' // Reset input
-    }
+  // Helper functions
+  const getWorkspaceInitials = (name: string) => {
+    return name
+      .split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase()
+      .substring(0, 2)
   }
 
-  const handleRemoveLogo = async () => {
-    if (!workspace || !hasRole('owner')) {
-      alert('Only workspace owners can remove the logo.')
-      return
-    }
-    if (!workspace.logo_path) {
-      alert('There is no logo to remove.')
-      return
-    }
-
-    if (!confirm('Are you sure you want to remove the workspace logo?')) {
-      return
-    }
-
-    setIsUploadingLogo(true)
+  const getWorkspaceLogoUrl = (logoPath: string | null | undefined) => {
+    if (!logoPath) return null
     try {
-      // Remove from storage
-      const { error: storageError } = await supabase.storage
-        .from('workspace_logos')
-        .remove([workspace.logo_path])
-
-      if (storageError) {
-        console.error('Error removing logo from storage:', storageError)
-        // Continue with DB update
-      }
-
-      // Update workspace table
-      const { error: dbError } = await supabase
-        .from('workspaces')
-        .update({ logo_path: null, logo_updated_at: new Date().toISOString() })
-        .eq('id', workspace.id)
-
-      if (dbError) throw dbError
-
-      queryClient.invalidateQueries({ queryKey: ['workspace', activeWorkspaceId] })
-      setLogoPreview(null)
-      alert('Workspace logo removed successfully.')
+      const { data } = supabase.storage.from('workspace_logos').getPublicUrl(logoPath)
+      return data?.publicUrl || null
     } catch (error) {
-      console.error('Error removing logo:', error)
-      alert('Failed to remove logo.')
-    } finally {
-      setIsUploadingLogo(false)
+      console.error('[WorkspaceSettings] Error getting logo URL:', error)
+      return null
     }
   }
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-gray-500">Loading workspace settings...</div>
+      <div className="flex h-full items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-6 w-6 text-muted-foreground animate-spin" />
+          <p className="text-sm text-muted-foreground">Loading workspace settings...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!activeWorkspaceId) {
+    return (
+      <div className="flex h-full items-center justify-center bg-background">
+        <div className="text-center max-w-md">
+          <p className="text-muted-foreground mb-2 font-medium">No workspace selected</p>
+          <p className="text-sm text-muted-foreground mb-4">
+            Please select a workspace from the dropdown to view its settings.
+          </p>
+          <Button variant="outline" onClick={() => router.push('/app/library')}>
+            Go to Library
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  if (workspaceError) {
+    return (
+      <div className="flex h-full items-center justify-center bg-background">
+        <div className="text-center max-w-md">
+          <p className="text-red-600 mb-2 font-medium">Error loading workspace</p>
+          <p className="text-sm text-muted-foreground mb-4">
+            {workspaceError instanceof Error ? workspaceError.message : 'Unknown error occurred'}
+          </p>
+          <Button variant="outline" onClick={() => router.back()}>
+            Go Back
+          </Button>
+        </div>
       </div>
     )
   }
 
   if (!workspace) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-gray-500">No workspace found. Please select a workspace.</div>
+      <div className="flex h-full items-center justify-center bg-background">
+        <div className="text-center">
+          <p className="text-muted-foreground mb-2">No workspace found</p>
+          <Button variant="outline" onClick={() => router.back()}>
+            Go Back
+          </Button>
+        </div>
       </div>
     )
   }
 
-  const initials = workspace.name
-    .split(' ')
-    .map((n) => n[0])
-    .join('')
-    .toUpperCase()
-    .substring(0, 2)
-
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="flex-shrink-0 border-b border-gray-200 bg-white px-6 py-4">
-        <div className="flex items-center gap-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => router.back()}
-            className="h-8 w-8"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div className="flex items-center gap-3">
-            <Settings className="h-5 w-5 text-gray-600" />
-            <h1 className="text-xl font-semibold text-gray-900">Workspace Settings</h1>
-          </div>
+    <div className="flex h-screen flex-col bg-white">
+      {/* Header - Matching Profile page style */}
+      <div className="border-b border-gray-200 bg-white shadow-sm">
+        <div className="px-8 pt-6 pb-4">
+          <h1 className="text-3xl font-bold text-gray-900 tracking-tight mb-1">
+            Workspace settings
+          </h1>
+          <p className="text-sm text-gray-500 font-medium">
+            Manage your workspace and team members
+          </p>
         </div>
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-2xl space-y-6">
-          {/* Workspace Name */}
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Workspace Name</h2>
-            <div className="space-y-4">
-              <Input
-                value={workspaceName}
-                onChange={(e) => setWorkspaceName(e.target.value)}
-                placeholder="Enter workspace name"
-                disabled={!hasRole('owner')}
-                className="max-w-md"
-              />
-              {hasRole('owner') ? (
-                <Button
-                  onClick={handleSaveName}
-                  disabled={isSaving || workspaceName.trim() === '' || workspaceName === workspace.name}
-                >
-                  {isSaving ? 'Saving...' : 'Save Name'}
-                </Button>
-              ) : (
-                <p className="text-sm text-gray-500">Only the workspace owner can change the name.</p>
-              )}
-            </div>
-          </div>
-
-          {/* Workspace Logo */}
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Workspace Logo</h2>
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                {logoPreview ? (
-                  <img
-                    src={logoPreview}
-                    alt={workspace.name}
-                    className="w-20 h-20 rounded-full object-cover border-2 border-gray-200"
-                  />
-                ) : (
-                  <div className="w-20 h-20 rounded-full bg-gray-200 flex items-center justify-center">
-                    <span className="text-2xl font-semibold text-gray-600">{initials}</span>
-                  </div>
-                )}
-                <div>
-                  <p className="text-sm text-gray-600">Current Logo</p>
-                </div>
+      <div className="flex-1 overflow-y-auto bg-gray-50">
+        <div className="max-w-5xl mx-auto px-8 py-8">
+          <div className="space-y-8">
+            {/* Workspace Name Section */}
+            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+              <div className="px-8 py-6 border-b border-gray-100">
+                <h2 className="text-xl font-semibold text-gray-900">Workspace name</h2>
+                <p className="text-sm text-gray-600 mt-1.5">Change how this workspace appears to your team</p>
               </div>
-              {hasRole('owner') ? (
-                <div className="flex gap-2">
-                  <label>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={isUploadingLogo}
-                      className="cursor-pointer"
-                      asChild
-                    >
-                      <span>
-                        <Upload className="h-4 w-4 mr-2" />
-                        Upload New Logo
-                      </span>
-                    </Button>
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/jpg,image/webp"
-                      onChange={handleUploadLogo}
-                      className="hidden"
-                    />
-                  </label>
-                  {workspace.logo_path && (
-                    <Button
-                      variant="outline"
-                      onClick={handleRemoveLogo}
-                      disabled={isUploadingLogo}
-                    >
-                      {isUploadingLogo ? 'Processing...' : 'Remove Logo'}
-                    </Button>
+              <div className="px-8 py-6">
+                <div className="max-w-lg space-y-4">
+                  <Input
+                    value={workspaceName}
+                    onChange={(e) => setWorkspaceName(e.target.value)}
+                    placeholder="Enter workspace name"
+                    disabled={!member || !hasRole('owner')}
+                    className="h-12 text-base border-gray-300 focus:border-accent focus:ring-accent rounded-lg"
+                  />
+                  {member && hasRole('owner') ? (
+                    <div className="flex items-center gap-4">
+                      <Button
+                        onClick={handleSaveName}
+                        disabled={!hasChanges || isSaving}
+                        className="h-11 px-6 text-sm font-medium rounded-lg shadow-sm hover:shadow transition-all"
+                      >
+                        {isSaving ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          <>
+                            <Check className="h-4 w-4 mr-2" />
+                            Save changes
+                          </>
+                        )}
+                      </Button>
+                      {hasChanges && (
+                        <span className="text-sm text-gray-500">You have unsaved changes</span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-2.5 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                      <Shield className="h-4 w-4 text-gray-500 mt-0.5 flex-shrink-0" />
+                      <p className="text-sm text-gray-600">Only workspace owners can change the workspace name</p>
+                    </div>
                   )}
                 </div>
-              ) : (
-                <p className="text-sm text-gray-500">Only the workspace owner can manage the logo.</p>
-              )}
+              </div>
             </div>
-          </div>
 
-          {/* Workspace Members */}
-          <WorkspaceMembersSection 
-            workspaceId={workspace.id} 
-            currentUserId={user?.id}
-            hasAdminRole={hasRole('admin')}
-            hasOwnerRole={hasRole('owner')}
-          />
+            {/* Team Members Section */}
+            {workspace?.id && (
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                <WorkspaceMembersSection 
+                  workspaceId={workspace.id} 
+                  currentUserId={user?.id}
+                  hasAdminRole={member ? hasRole('admin') : false}
+                  hasOwnerRole={member ? hasRole('owner') : false}
+                />
+              </div>
+            )}
+
+            {/* Delete Workspace Section */}
+            {member && hasRole('owner') && (
+              <div className="bg-white rounded-2xl border-2 border-red-100 overflow-hidden">
+                <div className="px-8 py-6 border-b border-red-50 bg-red-50/50">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-red-100">
+                      <Trash2 className="h-5 w-5 text-red-600" />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-semibold text-red-900">Delete workspace</h2>
+                      <p className="text-sm text-red-700 mt-1">This action cannot be undone</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="px-8 py-6">
+                  <p className="text-base text-gray-700 mb-6 leading-relaxed">
+                    Once you delete <span className="font-semibold text-gray-900">{workspace?.name || 'this workspace'}</span>, all of its data will be permanently removed. This includes all assets, stories, team members, and settings.
+                  </p>
+                  <Button
+                    onClick={() => setShowDeleteDialog(true)}
+                    className="h-11 px-6 text-sm font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg shadow-sm hover:shadow transition-all"
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete workspace
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Delete Workspace Dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Workspace</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete &quot;{workspace?.name}&quot;? This action cannot be undone.
+              All workspace data, including assets, stories, and members, will be permanently deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                if (!workspace?.id) return
+                setIsDeleting(true)
+                try {
+                  await deleteWorkspace(workspace.id)
+                  // Invalidate workspace queries to refresh the dropdown
+                  queryClient.invalidateQueries({ queryKey: ['workspaces'] })
+                  queryClient.invalidateQueries({ queryKey: ['workspaces', user?.id] })
+                  queryClient.invalidateQueries({ queryKey: ['workspace'] })
+                  // Switch to first available workspace or redirect
+                  const { data: workspaces } = await supabase
+                    .from('workspace_members')
+                    .select('workspace_id')
+                    .eq('user_id', user?.id)
+                    .limit(1)
+                  
+                  if (workspaces && workspaces.length > 0) {
+                    localStorage.setItem('@storystack:active_workspace_id', workspaces[0].workspace_id)
+                    router.push('/app/library')
+                  } else {
+                    router.push('/app/library')
+                  }
+                } catch (error: any) {
+                  console.error('[WorkspaceSettings] Error deleting workspace:', error)
+                  alert(error.message || 'Failed to delete workspace')
+                } finally {
+                  setIsDeleting(false)
+                  setShowDeleteDialog(false)
+                }
+              }}
+              disabled={isDeleting}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Delete Workspace'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
     </div>
   )
-}
-
-interface WorkspaceMembersSectionProps {
-  workspaceId: string
-  currentUserId?: string
-  hasAdminRole: boolean
-  hasOwnerRole: boolean
 }
 
 function WorkspaceMembersSection({ 
@@ -458,7 +454,12 @@ function WorkspaceMembersSection({
   currentUserId,
   hasAdminRole,
   hasOwnerRole 
-}: WorkspaceMembersSectionProps) {
+}: {
+  workspaceId: string
+  currentUserId?: string
+  hasAdminRole: boolean
+  hasOwnerRole: boolean
+}) {
   const supabase = createClient()
   const queryClient = useQueryClient()
   const [newMemberEmail, setNewMemberEmail] = useState('')
@@ -468,45 +469,59 @@ function WorkspaceMembersSection({
   const [memberToEditRole, setMemberToEditRole] = useState<WorkspaceMember | null>(null)
   const [newRole, setNewRole] = useState<'admin' | 'editor' | 'viewer'>('editor')
 
-  // Fetch workspace members with user emails
-  const { data: members = [], isLoading } = useQuery({
+  const { data: members = [], isLoading, error: membersError } = useQuery({
     queryKey: ['workspace-members', workspaceId],
     queryFn: async () => {
-      console.log('[WorkspaceMembers] Fetching members for workspace:', workspaceId)
+      if (!workspaceId) return []
       
-      // Use the database function to get members with emails
-      const { data, error } = await supabase.rpc('get_workspace_members_with_emails', {
-        workspace_id_param: workspaceId,
-      })
+      try {
+        const { data, error } = await supabase.rpc('get_workspace_members_with_emails', {
+          workspace_id_param: workspaceId,
+        })
 
-      if (error) {
-        console.error('[WorkspaceMembers] Error fetching members:', error)
-        // Fallback: try direct query without emails
-        const { data: fallbackData, error: fallbackError } = await supabase
-          .from('workspace_members')
-          .select('workspace_id, user_id, role, created_at')
-          .eq('workspace_id', workspaceId)
-          .order('created_at', { ascending: true })
+        if (error) {
+          console.error('[WorkspaceMembers] RPC error:', error)
+          // Fallback to direct query
+          const { data: fallbackData, error: fallbackError } = await supabase
+            .from('workspace_members')
+            .select('workspace_id, user_id, role, created_at')
+            .eq('workspace_id', workspaceId)
+            .order('created_at', { ascending: true })
+          
+          if (fallbackError) {
+            console.error('[WorkspaceMembers] Fallback query error:', fallbackError)
+            return [] // Return empty array instead of throwing
+          }
         
-        if (fallbackError) throw fallbackError
+          return (fallbackData || []).map((m: any) => ({
+            workspace_id: m.workspace_id,
+            user_id: m.user_id,
+            role: m.role,
+            created_at: m.created_at,
+            email: undefined,
+          })) as WorkspaceMember[]
+        }
+
+        if (!data || data.length === 0) return []
         
-        return (fallbackData || []).map((m: any) => ({
-          ...m,
-          email: `User ${m.user_id.substring(0, 8)}...`,
-        })) as (WorkspaceMember & { email: string })[]
+        return data.map((m: any) => ({
+          workspace_id: m.workspace_id,
+          user_id: m.user_id,
+          role: m.role,
+          created_at: m.created_at,
+          email: m.email && m.email !== 'Unknown' && m.email !== 'No email' ? m.email : undefined,
+        })) as WorkspaceMember[]
+      } catch (error) {
+        console.error('[WorkspaceMembers] Query error:', error)
+        return [] // Return empty array on any error
       }
-
-      console.log('[WorkspaceMembers] Members with emails:', data)
-      
-      return (data || []) as (WorkspaceMember & { email: string })[]
     },
+    enabled: !!workspaceId && hasAdminRole,
   })
 
-  // Fetch pending invitations
-  const { data: invitations = [], isLoading: isLoadingInvitations } = useQuery({
+  const { data: invitations = [] } = useQuery({
     queryKey: ['workspace-invitations', workspaceId],
     queryFn: async () => {
-      console.log('[WorkspaceMembers] Fetching invitations for workspace:', workspaceId)
       const { data, error } = await supabase
         .from('workspace_invitations')
         .select('*')
@@ -514,76 +529,26 @@ function WorkspaceMembersSection({
         .eq('status', 'pending')
         .order('created_at', { ascending: true })
 
-      if (error) {
-        console.error('[WorkspaceMembers] Error fetching invitations:', error)
-        throw error
-      }
-      
-      console.log('[WorkspaceMembers] Fetched invitations:', data)
+      if (error) throw error
       return (data || []) as WorkspaceInvitation[]
     },
-    enabled: hasAdminRole && !!workspaceId, // Only fetch if user has admin role and workspaceId exists
+    enabled: hasAdminRole && !!workspaceId,
   })
 
   const handleAddMember = async () => {
-    if (!newMemberEmail.trim()) {
-      alert('Please enter an email address')
-      return
-    }
+    if (!newMemberEmail.trim()) return
 
     setIsAddingMember(true)
     try {
-      // Get current user - this will refresh the session if needed
       const { data: { user }, error: userError } = await supabase.auth.getUser()
-      
-      if (userError) {
-        console.error('[AddMember] Error getting user:', userError)
-        throw new Error('Authentication error. Please sign in again.')
-      }
-      
-      if (!user) {
-        console.error('[AddMember] No user found')
-        // Redirect to login - the middleware will handle this
-        window.location.href = '/login'
-        return
-      }
+      if (userError || !user) throw new Error('Authentication error')
 
-      // Get session - getUser() above should have refreshed it if needed
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
-      
-      if (sessionError) {
-        console.error('[AddMember] Error getting session:', sessionError)
-        throw new Error('Session error. Please sign in again.')
-      }
-      
-      if (!session) {
-        console.error('[AddMember] No session found')
-        // Redirect to login - the middleware will handle this
-        window.location.href = '/login'
-        return
-      }
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) throw new Error('Invalid session')
 
-      if (!session.access_token) {
-        console.error('[AddMember] No access token in session')
-        throw new Error('Invalid session. Please sign in again.')
-      }
-
-      // Get Supabase URL from environment (NEXT_PUBLIC_ vars are available in browser)
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-      
-      if (!supabaseUrl) {
-        throw new Error('Supabase URL not configured. Please check your environment variables.')
-      }
+      if (!supabaseUrl) throw new Error('Supabase URL not configured')
 
-      console.log('[AddMember] Calling edge function:', {
-        url: `${supabaseUrl}/functions/v1/add-workspace-member`,
-        workspaceId,
-        email: newMemberEmail.trim(),
-        role: newRole,
-        hasToken: !!session.access_token,
-      })
-
-      // Call edge function to add member
       const response = await fetch(`${supabaseUrl}/functions/v1/add-workspace-member`, {
         method: 'POST',
         headers: {
@@ -598,22 +563,8 @@ function WorkspaceMembersSection({
       })
 
       const result = await response.json()
-      
-      console.log('[AddMember] Edge function response:', {
-        status: response.status,
-        ok: response.ok,
-        result,
-      })
+      if (!response.ok) throw new Error(result.error || result.message || 'Failed to add member')
 
-      if (!response.ok) {
-        console.error('[AddMember] Edge function error:', {
-          status: response.status,
-          result,
-        })
-        throw new Error(result.error || result.message || 'Failed to add member')
-      }
-
-      // Refresh members list and invitations
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['workspace-members', workspaceId] }),
         queryClient.invalidateQueries({ queryKey: ['workspace-invitations', workspaceId] }),
@@ -622,41 +573,19 @@ function WorkspaceMembersSection({
       setShowAddDialog(false)
       setNewMemberEmail('')
       
-      // Show appropriate message based on whether it was an invitation or direct add
       if (result.invitation) {
-        console.log('[AddMember] Invitation created:', result.invitation)
-        alert('Invitation sent successfully! The user will be added to the workspace when they sign up.')
+        alert('Invitation sent successfully!')
       } else if (result.member) {
-        console.log('[AddMember] Member added:', result.member)
         alert('Member added successfully!')
-      } else if (result.success) {
-        // Generic success message
-        console.log('[AddMember] Success response:', result)
-        alert(result.message || 'Success! Please refresh the page to see the changes.')
-      } else {
-        console.warn('[AddMember] Unexpected response format:', result)
-        alert('Success, but unexpected response format. Please refresh the page.')
       }
     } catch (error: any) {
-      console.error('[AddMember] Error adding member:', error)
-      const errorMessage = error.message || 'Failed to add member. Make sure the user has signed up first.'
-      alert(errorMessage)
+      alert(error.message || 'Failed to add member')
     } finally {
       setIsAddingMember(false)
     }
   }
 
   const handleRemoveMember = async (member: WorkspaceMember) => {
-    if (member.role === 'owner' && !hasOwnerRole) {
-      alert('Only the workspace owner can remove the owner')
-      return
-    }
-
-    if (member.user_id === currentUserId) {
-      alert('You cannot remove yourself from the workspace')
-      return
-    }
-
     try {
       const { error } = await supabase
         .from('workspace_members')
@@ -668,18 +597,12 @@ function WorkspaceMembersSection({
       queryClient.invalidateQueries({ queryKey: ['workspace-members', workspaceId] })
       setMemberToRemove(null)
     } catch (error) {
-      console.error('Error removing member:', error)
       alert('Failed to remove member')
     }
   }
 
   const handleUpdateRole = async () => {
     if (!memberToEditRole) return
-
-    if (memberToEditRole.role === 'owner' && !hasOwnerRole) {
-      alert('Only the workspace owner can change the owner role')
-      return
-    }
 
     try {
       const { error } = await supabase
@@ -692,177 +615,209 @@ function WorkspaceMembersSection({
       queryClient.invalidateQueries({ queryKey: ['workspace-members', workspaceId] })
       setMemberToEditRole(null)
     } catch (error) {
-      console.error('Error updating role:', error)
       alert('Failed to update role')
     }
   }
 
-  const getRoleIcon = (role: string) => {
-    switch (role) {
-      case 'owner':
-        return <Crown className="h-4 w-4 text-yellow-600" />
-      case 'admin':
-        return <Shield className="h-4 w-4 text-blue-600" />
-      case 'editor':
-        return <Edit className="h-4 w-4 text-gray-600" />
-      case 'viewer':
-        return <Eye className="h-4 w-4 text-gray-500" />
-      default:
-        return null
+  const getRoleBadge = (role: string) => {
+    const badges = {
+      owner: { icon: Crown, label: 'Owner', className: 'bg-amber-100 text-amber-800' },
+      admin: { icon: Shield, label: 'Admin', className: 'bg-blue-100 text-blue-800' },
+      editor: { icon: Edit, label: 'Editor', className: 'bg-purple-100 text-purple-800' },
+      viewer: { icon: Eye, label: 'Viewer', className: 'bg-gray-100 text-gray-800' },
     }
+    const badge = badges[role as keyof typeof badges] || badges.viewer
+    const Icon = badge.icon
+    return (
+      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-xs font-medium ${badge.className}`}>
+        <Icon className="h-3 w-3" />
+        {badge.label}
+      </span>
+    )
   }
 
-  const getRoleLabel = (role: string) => {
-    return role.charAt(0).toUpperCase() + role.slice(1)
+  const getInitials = (email?: string, userId?: string) => {
+    const str = email || userId || ''
+    return str.charAt(0).toUpperCase()
+  }
+
+  const getAvatarColor = (email?: string, userId?: string) => {
+    const str = email || userId || ''
+    const colors = [
+      'bg-pink-500', 'bg-purple-500', 'bg-indigo-500', 'bg-blue-500',
+      'bg-cyan-500', 'bg-teal-500', 'bg-green-500', 'bg-amber-500',
+      'bg-orange-500', 'bg-red-500', 'bg-rose-500'
+    ]
+    const index = str.charCodeAt(0) % colors.length
+    return colors[index]
   }
 
   if (!hasAdminRole) {
     return (
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Workspace Members</h2>
-        <div className="space-y-2">
+      <div>
+        <div className="px-6 py-5 border-b border-gray-100">
+          <h3 className="text-lg font-semibold text-gray-900">Team Members</h3>
+          <p className="text-sm text-gray-500 mt-1">View workspace members</p>
+        </div>
+        <div className="px-6 py-6">
           {isLoading ? (
-            <div className="text-sm text-gray-500">Loading members...</div>
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
+            </div>
+          ) : members.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-gray-500">No members found</p>
+            </div>
           ) : (
-            members.map((member) => (
-              <div key={member.user_id} className="flex items-center justify-between py-2">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center">
-                    <span className="text-xs font-semibold text-gray-600">
-                      {(member as any).email?.charAt(0).toUpperCase() || '?'}
-                    </span>
+            <div className="space-y-2">
+              {members.map((member) => (
+                <div key={member.user_id} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 transition-colors">
+                  <div className={`w-10 h-10 rounded-full ${getAvatarColor(member.email, member.user_id)} flex items-center justify-center text-white font-semibold flex-shrink-0`}>
+                    {getInitials(member.email, member.user_id)}
                   </div>
-                  <div>
-                    <div className="text-sm font-medium text-gray-900">
-                      {(member as any).email || 'Unknown'}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <p className="text-sm font-medium text-gray-900 truncate">
+                        {member.email || `User ${member.user_id.substring(0, 8)}...`}
+                      </p>
+                      {member.user_id === currentUserId && (
+                        <span className="text-xs font-medium bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full border border-blue-200">You</span>
+                      )}
                     </div>
-                    <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                      {getRoleIcon(member.role)}
-                      <span>{getRoleLabel(member.role)}</span>
-                    </div>
+                    <div>{getRoleBadge(member.role)}</div>
                   </div>
                 </div>
-              </div>
-            ))
+              ))}
+            </div>
           )}
+          <div className="mt-6 pt-6 border-t border-gray-100">
+            <div className="flex items-start gap-2.5 p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <Shield className="h-4 w-4 text-gray-500 mt-0.5 flex-shrink-0" />
+              <p className="text-sm text-gray-600">Only workspace admins can manage team members</p>
+            </div>
+          </div>
         </div>
-        <p className="text-sm text-gray-500 mt-4">
-          Only workspace admins can manage members.
-        </p>
       </div>
     )
   }
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-gray-900">Workspace Members</h2>
-        <Button
-          onClick={() => setShowAddDialog(true)}
-          size="sm"
-          className="gap-2"
-        >
-          <UserPlus className="h-4 w-4" />
-          Add Member
-        </Button>
+    <div>
+      <div className="px-8 py-6 border-b border-gray-100">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900">Team members</h2>
+            <p className="text-sm text-gray-600 mt-1.5">Manage who has access to this workspace</p>
+          </div>
+          <Button
+            onClick={() => setShowAddDialog(true)}
+            className="h-11 px-5 text-sm font-medium rounded-lg shadow-sm hover:shadow transition-all"
+          >
+            <UserPlus className="h-4 w-4 mr-2" />
+            Add member
+          </Button>
+        </div>
       </div>
-
-      <div className="space-y-2">
-        {isLoading || isLoadingInvitations ? (
-          <div className="text-sm text-gray-500">Loading members...</div>
+      <div className="px-8 py-6">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 text-muted-foreground animate-spin" />
+          </div>
         ) : members.length === 0 && invitations.length === 0 ? (
-          <div className="text-sm text-gray-500 py-4">No members found.</div>
+          <div className="text-center py-8">
+            <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3">
+              <UserPlus className="h-6 w-6 text-gray-400" />
+            </div>
+            <p className="text-gray-900 font-medium mb-1">No members yet</p>
+            <p className="text-sm text-muted-foreground mb-4">Add your first team member to get started</p>
+            <Button
+              onClick={() => setShowAddDialog(true)}
+              size="sm"
+            >
+              Add member
+            </Button>
+          </div>
         ) : (
-          <>
-            {/* Display actual members */}
+          <div className="space-y-1">
             {members.map((member) => {
-            const isCurrentUser = member.user_id === currentUserId
-            const canEdit = hasAdminRole && (member.role !== 'owner' || hasOwnerRole)
-            const canRemove = hasAdminRole && !isCurrentUser && (member.role !== 'owner' || hasOwnerRole)
+              const isCurrentUser = member.user_id === currentUserId
+              const canEdit = hasAdminRole && (member.role !== 'owner' || hasOwnerRole)
+              const canRemove = hasAdminRole && !isCurrentUser && (member.role !== 'owner' || hasOwnerRole)
 
-            return (
-              <div
-                key={member.user_id}
-                className="flex items-center justify-between py-2 px-3 rounded-md hover:bg-gray-50"
-              >
-                <div className="flex items-center gap-3 flex-1">
-                  <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center">
-                    <span className="text-xs font-semibold text-gray-600">
-                      {(member as any).email?.charAt(0).toUpperCase() || '?'}
-                    </span>
+              return (
+                <div
+                  key={member.user_id}
+                  className="flex items-center gap-4 p-4 rounded-xl hover:bg-gray-50 transition-all duration-200 group border border-transparent hover:border-gray-100"
+                >
+                  <div className={`w-12 h-12 rounded-full ${getAvatarColor(member.email, member.user_id)} flex items-center justify-center text-white font-semibold text-base flex-shrink-0 shadow-sm`}>
+                    {getInitials(member.email, member.user_id)}
                   </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-gray-900">
-                        {(member as any).email || 'Unknown'}
-                      </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2.5 mb-1.5">
+                      <p className="text-base font-medium text-gray-900 truncate">
+                        {member.email || `User ${member.user_id.substring(0, 8)}...`}
+                      </p>
                       {isCurrentUser && (
-                        <span className="text-xs text-gray-500">(You)</span>
+                        <span className="text-xs font-medium bg-blue-100 text-blue-700 px-2.5 py-1 rounded-full border border-blue-200">You</span>
                       )}
                     </div>
-                    <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                      {getRoleIcon(member.role)}
-                      <span>{getRoleLabel(member.role)}</span>
+                    <div className="flex items-center gap-2">
+                      {getRoleBadge(member.role)}
                     </div>
                   </div>
+                  <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                    {canEdit && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          setMemberToEditRole(member)
+                          setNewRole(member.role === 'owner' ? 'admin' : member.role as 'admin' | 'editor' | 'viewer')
+                        }}
+                        className="h-9 w-9 p-0 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                      >
+                        <Settings className="h-4 w-4" />
+                      </Button>
+                    )}
+                    {canRemove && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setMemberToRemove(member)}
+                        className="h-9 w-9 p-0 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {canEdit && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setMemberToEditRole(member)
-                        setNewRole(member.role === 'owner' ? 'admin' : member.role as 'admin' | 'editor' | 'viewer')
-                      }}
-                      className="h-7 px-2"
-                    >
-                      Change Role
-                    </Button>
-                  )}
-                  {canRemove && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setMemberToRemove(member)}
-                      className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  )}
+              )
+            })}
+            
+            {invitations.map((invitation) => (
+              <div
+                key={invitation.id}
+                className="flex items-center gap-3 p-3 rounded-lg bg-amber-50 border border-amber-200"
+              >
+                <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+                  <Mail className="h-5 w-5 text-amber-600" />
                 </div>
-              </div>
-            )
-          })}
-          
-          {/* Display pending invitations */}
-          {invitations.map((invitation) => (
-            <div
-              key={invitation.id}
-              className="flex items-center justify-between py-2 px-3 rounded-md bg-yellow-50 border border-yellow-200"
-            >
-              <div className="flex items-center gap-3 flex-1">
-                <div className="w-8 h-8 rounded-full bg-yellow-200 flex items-center justify-center">
-                  <Mail className="h-4 w-4 text-yellow-600" />
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-gray-900">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-sm font-medium text-gray-900 truncate">
                       {invitation.email}
-                    </span>
-                    <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded-full">
+                    </p>
+                    <span className="text-xs px-2 py-0.5 bg-amber-200 text-amber-800 rounded-full font-medium">
                       Pending
                     </span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                    {getRoleIcon(invitation.role)}
-                    <span>{getRoleLabel(invitation.role)}</span>
-                    <span className="text-gray-400">•</span>
-                    <span>Invited {new Date(invitation.created_at).toLocaleDateString()}</span>
+                  <div className="flex items-center gap-2">
+                    {getRoleBadge(invitation.role)}
+                    <span className="text-xs text-muted-foreground">
+                      • Invited {new Date(invitation.created_at).toLocaleDateString()}
+                    </span>
                   </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -877,157 +832,162 @@ function WorkspaceMembersSection({
                         if (error) throw error
                         queryClient.invalidateQueries({ queryKey: ['workspace-invitations', workspaceId] })
                       } catch (error) {
-                        console.error('Error canceling invitation:', error)
                         alert('Failed to cancel invitation')
                       }
                     }
                   }}
-                  className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+                  className="h-8 w-8 p-0 text-destructive hover:text-destructive"
                 >
                   <X className="h-4 w-4" />
                 </Button>
               </div>
-            </div>
-          ))}
-          </>
+            ))}
+          </div>
         )}
       </div>
 
       {/* Add Member Dialog */}
-      {showAddDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold mb-4">Add Member</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium text-gray-700 mb-1 block">
-                  Email Address
-                </label>
-                <Input
-                  type="email"
-                  value={newMemberEmail}
-                  onChange={(e) => setNewMemberEmail(e.target.value)}
-                  placeholder="user@example.com"
-                  className="w-full"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700 mb-1 block">
-                  Role
-                </label>
-                <Select value={newRole} onValueChange={(value: any) => setNewRole(value)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="viewer">Viewer</SelectItem>
-                    <SelectItem value="editor">Editor</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <p className="text-xs text-gray-500">
-                The user must already have a StoryStack account. Enter their email address to add them to this workspace.
-              </p>
+      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Team Member</DialogTitle>
+            <DialogDescription>
+              Invite someone to join this workspace
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-2 block">
+                Email address
+              </label>
+              <Input
+                type="email"
+                value={newMemberEmail}
+                onChange={(e) => setNewMemberEmail(e.target.value)}
+                placeholder="colleague@example.com"
+                onKeyDown={(e) => e.key === 'Enter' && handleAddMember()}
+              />
             </div>
-            <div className="flex gap-2 mt-6">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setShowAddDialog(false)
-                  setNewMemberEmail('')
-                }}
-                className="flex-1"
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleAddMember}
-                disabled={isAddingMember || !newMemberEmail.trim()}
-                className="flex-1"
-              >
-                {isAddingMember ? 'Adding...' : 'Add Member'}
-              </Button>
+            <div>
+              <label className="text-sm font-medium mb-2 block">
+                Role
+              </label>
+              <Select value={newRole} onValueChange={(value: any) => setNewRole(value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="viewer">Viewer - Can view content</SelectItem>
+                  <SelectItem value="editor">Editor - Can edit content</SelectItem>
+                  <SelectItem value="admin">Admin - Can manage workspace</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
+            <p className="text-xs text-muted-foreground bg-gray-50 p-3 rounded-lg">
+              The user must already have a StoryStack account. If they don't have an account, they'll receive an invitation to sign up.
+            </p>
           </div>
-        </div>
-      )}
+          <div className="flex gap-3 mt-6">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowAddDialog(false)
+                setNewMemberEmail('')
+              }}
+              className="flex-1"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddMember}
+              disabled={isAddingMember || !newMemberEmail.trim()}
+              className="flex-1"
+            >
+              {isAddingMember ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Adding...
+                </>
+              ) : (
+                'Add member'
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Remove Member Dialog */}
       <AlertDialog open={!!memberToRemove} onOpenChange={() => setMemberToRemove(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove Member</AlertDialogTitle>
+            <AlertDialogTitle>Remove Team Member?</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to remove {(memberToRemove as any)?.email} from this workspace? They will lose access to all workspace data.
+              {memberToRemove?.email || `User ${memberToRemove?.user_id.substring(0, 8)}...`} will lose access to all workspace data. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => memberToRemove && handleRemoveMember(memberToRemove)}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Remove
+              Remove member
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
       {/* Change Role Dialog */}
-      {memberToEditRole && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold mb-4">Change Role</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium text-gray-700 mb-1 block">
-                  Member: {(memberToEditRole as any).email}
-                </label>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700 mb-1 block">
-                  New Role
-                </label>
-                <Select value={newRole} onValueChange={(value: any) => setNewRole(value)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {memberToEditRole.role !== 'owner' && (
-                      <>
-                        <SelectItem value="viewer">Viewer</SelectItem>
-                        <SelectItem value="editor">Editor</SelectItem>
-                        <SelectItem value="admin">Admin</SelectItem>
-                      </>
-                    )}
-                    {memberToEditRole.role === 'owner' && hasOwnerRole && (
-                      <SelectItem value="admin">Admin</SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="flex gap-2 mt-6">
-              <Button
-                variant="outline"
-                onClick={() => setMemberToEditRole(null)}
-                className="flex-1"
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleUpdateRole}
-                disabled={newRole === memberToEditRole.role}
-                className="flex-1"
-              >
-                Update Role
-              </Button>
+      <Dialog open={!!memberToEditRole} onOpenChange={() => setMemberToEditRole(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change Role</DialogTitle>
+            <DialogDescription>
+              {memberToEditRole?.email || `User ${memberToEditRole?.user_id.substring(0, 8)}...`}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-2 block">
+                New role
+              </label>
+              <Select value={newRole} onValueChange={(value: any) => setNewRole(value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {memberToEditRole?.role !== 'owner' && (
+                    <>
+                      <SelectItem value="viewer">Viewer - Can view content</SelectItem>
+                      <SelectItem value="editor">Editor - Can edit content</SelectItem>
+                      <SelectItem value="admin">Admin - Can manage workspace</SelectItem>
+                    </>
+                  )}
+                  {memberToEditRole?.role === 'owner' && hasOwnerRole && (
+                    <SelectItem value="admin">Admin - Can manage workspace</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
             </div>
           </div>
-        </div>
-      )}
+          <div className="flex gap-3 mt-6">
+            <Button
+              variant="outline"
+              onClick={() => setMemberToEditRole(null)}
+              className="flex-1"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleUpdateRole}
+              disabled={newRole === memberToEditRole?.role}
+              className="flex-1"
+            >
+              Update role
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
-

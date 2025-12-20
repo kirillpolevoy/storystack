@@ -7,26 +7,20 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
-  Image,
   Modal,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as ImagePicker from 'expo-image-picker';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useAuth } from '@/contexts/AuthContext';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
 import {
   updateWorkspaceName,
-  uploadWorkspaceLogo,
-  removeWorkspaceLogo,
-  getWorkspaceLogoUrl,
-  getWorkspaceInitials,
-} from '@/utils/workspaceHelpers';
-import {
+  createWorkspace,
   addWorkspaceMember,
   removeWorkspaceMember,
   updateWorkspaceMemberRole,
+  deleteWorkspace,
 } from '@/utils/workspaceHelpers';
 import { WorkspaceRole } from '@/types';
 import { supabase } from '@/lib/supabase';
@@ -39,10 +33,13 @@ export default function WorkspaceSettingsScreen() {
   const { activeWorkspace, userRole, hasPermission, refreshWorkspaces, refreshUserRole } = useWorkspace();
   const [workspaceName, setWorkspaceName] = useState('');
   const [isSavingName, setIsSavingName] = useState(false);
-  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
-  const [isRemovingLogo, setIsRemovingLogo] = useState(false);
   const [members, setMembers] = useState<any[]>([]);
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
+  const [showCreateWorkspaceModal, setShowCreateWorkspaceModal] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
+  const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
+  const [showDeleteWorkspaceModal, setShowDeleteWorkspaceModal] = useState(false);
+  const [isDeletingWorkspace, setIsDeletingWorkspace] = useState(false);
 
   useEffect(() => {
     if (activeWorkspace) {
@@ -58,28 +55,36 @@ export default function WorkspaceSettingsScreen() {
 
     setIsLoadingMembers(true);
     try {
-      const { data, error } = await supabase
-        .from('workspace_members')
-        .select(`
-          user_id,
-          role,
-          created_at,
-          created_by,
-          profiles:user_id (
-            id,
-            email
-          )
-        `)
-        .eq('workspace_id', activeWorkspace.id)
-        .order('created_at', { ascending: true });
+      // Use the RPC function to get members with emails
+      const { data, error } = await supabase.rpc('get_workspace_members_with_emails', {
+        workspace_id_param: activeWorkspace.id,
+      });
 
       if (error) {
         console.error('[WorkspaceSettings] Error loading members:', error);
+        // Fallback: try direct query without emails
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('workspace_members')
+          .select('user_id, role, created_at, created_by')
+          .eq('workspace_id', activeWorkspace.id)
+          .order('created_at', { ascending: true });
+        
+        if (fallbackError) {
+          console.error('[WorkspaceSettings] Fallback query also failed:', fallbackError);
+          setMembers([]);
+        } else {
+          // Map fallback data to include email placeholder
+          setMembers((fallbackData || []).map((m: any) => ({
+            ...m,
+            email: `User ${m.user_id.substring(0, 8)}...`,
+          })));
+        }
       } else {
         setMembers(data || []);
       }
     } catch (error) {
       console.error('[WorkspaceSettings] Error loading members:', error);
+      setMembers([]);
     } finally {
       setIsLoadingMembers(false);
     }
@@ -90,6 +95,52 @@ export default function WorkspaceSettingsScreen() {
       loadMembers();
     }
   }, [loadMembers, hasPermission]);
+
+  const handleCreateWorkspace = async () => {
+    if (!session?.user?.id || !newWorkspaceName.trim()) {
+      Alert.alert('Error', 'Please enter a workspace name');
+      return;
+    }
+
+    setIsCreatingWorkspace(true);
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      const workspace = await createWorkspace(newWorkspaceName.trim(), session.user.id);
+      
+      // Refresh workspaces and switch to the new one
+      await refreshWorkspaces();
+      
+      // Set the new workspace as active
+      const { error: prefError } = await supabase
+        .from('user_preferences')
+        .upsert({
+          user_id: session.user.id,
+          active_workspace_id: workspace.id,
+          updated_at: new Date().toISOString(),
+        });
+
+      if (prefError) {
+        console.warn('[WorkspaceSettings] Error updating user preferences:', prefError);
+      }
+
+      setShowCreateWorkspaceModal(false);
+      setNewWorkspaceName('');
+      Alert.alert('Success', 'Workspace created! Switching to new workspace...', [
+        {
+          text: 'OK',
+          onPress: () => {
+            // Reload to switch workspace
+            router.replace('/');
+          },
+        },
+      ]);
+    } catch (error) {
+      console.error('[WorkspaceSettings] Error creating workspace:', error);
+      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to create workspace');
+    } finally {
+      setIsCreatingWorkspace(false);
+    }
+  };
 
   const handleSaveName = async () => {
     if (!activeWorkspace || !hasPermission('owner')) {
@@ -119,82 +170,6 @@ export default function WorkspaceSettingsScreen() {
     }
   };
 
-  const handleUploadLogo = async () => {
-    if (!activeWorkspace || !hasPermission('owner') || !session?.user?.id) {
-      return;
-    }
-
-    try {
-      // Request permissions
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Please grant access to your photo library');
-        return;
-      }
-
-      // Pick image
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-
-      if (result.canceled || !result.assets[0]) {
-        return;
-      }
-
-      setIsUploadingLogo(true);
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
-      // Convert to File object for upload
-      const asset = result.assets[0];
-      const response = await fetch(asset.uri);
-      const blob = await response.blob();
-      const file = new File([blob], 'logo.jpg', { type: 'image/jpeg' });
-
-      await uploadWorkspaceLogo(activeWorkspace.id, file, session.user.id);
-      await refreshWorkspaces();
-      Alert.alert('Success', 'Workspace logo updated');
-    } catch (error) {
-      console.error('[WorkspaceSettings] Error uploading logo:', error);
-      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to upload logo');
-    } finally {
-      setIsUploadingLogo(false);
-    }
-  };
-
-  const handleRemoveLogo = async () => {
-    if (!activeWorkspace || !hasPermission('owner')) {
-      return;
-    }
-
-    Alert.alert(
-      'Remove Logo',
-      'Are you sure you want to remove the workspace logo?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            setIsRemovingLogo(true);
-            try {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              await removeWorkspaceLogo(activeWorkspace.id);
-              await refreshWorkspaces();
-              Alert.alert('Success', 'Logo removed');
-            } catch (error) {
-              console.error('[WorkspaceSettings] Error removing logo:', error);
-              Alert.alert('Error', error instanceof Error ? error.message : 'Failed to remove logo');
-            } finally {
-              setIsRemovingLogo(false);
-            }
-          },
-        },
-      ]
-    );
-  };
 
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [newMemberEmail, setNewMemberEmail] = useState('');
@@ -276,8 +251,6 @@ export default function WorkspaceSettingsScreen() {
     );
   }
 
-  const logoUrl = activeWorkspace.logo_path ? getWorkspaceLogoUrl(activeWorkspace.logo_path) : null;
-  const initials = getWorkspaceInitials(activeWorkspace.name);
   const isOwner = userRole === 'owner';
   const isAdmin = hasPermission('admin');
 
@@ -306,92 +279,56 @@ export default function WorkspaceSettingsScreen() {
           </View>
         </View>
 
-        {/* Workspace Branding (Owner only) */}
+        {/* Create New Workspace */}
+        <View className="px-5 py-6 border-b border-gray-200">
+          <Text className="text-[18px] font-semibold text-gray-900 mb-4">Create New Workspace</Text>
+          <Text className="text-[14px] text-gray-500 mb-4">
+            Create a new workspace to organize your content separately
+          </Text>
+          <TouchableOpacity
+            onPress={() => setShowCreateWorkspaceModal(true)}
+            activeOpacity={0.7}
+            className="px-4 py-3 rounded-xl"
+            style={{ backgroundColor: '#b38f5b' }}
+          >
+            <View className="flex-row items-center justify-center gap-2">
+              <MaterialCommunityIcons name="plus" size={20} color="#ffffff" />
+              <Text className="text-[16px] font-semibold text-white">Create New Workspace</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {/* Workspace Name (Owner only) */}
         {isOwner && (
           <View className="px-5 py-6 border-b border-gray-200">
-            <Text className="text-[18px] font-semibold text-gray-900 mb-4">Branding</Text>
-
-            {/* Logo Section */}
-            <View className="items-center mb-6">
-              <View
-                className="h-24 w-24 rounded-full items-center justify-center mb-4"
+            <Text className="text-[18px] font-semibold text-gray-900 mb-4">Workspace Name</Text>
+            <View className="flex-row gap-2">
+              <TextInput
+                value={workspaceName}
+                onChangeText={setWorkspaceName}
+                placeholder="Workspace name"
+                className="flex-1 px-4 py-3 rounded-xl border border-gray-300 text-[16px] text-gray-900"
+                style={{ backgroundColor: '#f9fafb' }}
+                editable={!isSavingName}
+              />
+              <TouchableOpacity
+                onPress={handleSaveName}
+                disabled={isSavingName || workspaceName.trim() === activeWorkspace.name}
+                activeOpacity={0.7}
+                className="px-5 py-3 rounded-xl"
                 style={{
-                  backgroundColor: logoUrl ? 'transparent' : '#b38f5b',
-                  overflow: 'hidden',
+                  backgroundColor:
+                    isSavingName || workspaceName.trim() === activeWorkspace.name
+                      ? '#e5e7eb'
+                      : '#b38f5b',
                 }}
               >
-                {logoUrl ? (
-                  <Image source={{ uri: logoUrl }} className="h-24 w-24 rounded-full" />
+                {isSavingName ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
                 ) : (
-                  <Text className="text-3xl font-bold text-white">{initials}</Text>
+                  <Text className="text-[16px] font-semibold text-white">Save</Text>
                 )}
-              </View>
-
-              <View className="flex-row gap-3">
-                <TouchableOpacity
-                  onPress={handleUploadLogo}
-                  disabled={isUploadingLogo}
-                  activeOpacity={0.7}
-                  className="px-5 py-3 rounded-xl"
-                  style={{
-                    backgroundColor: isUploadingLogo ? '#e5e7eb' : '#b38f5b',
-                  }}
-                >
-                  {isUploadingLogo ? (
-                    <ActivityIndicator size="small" color="#ffffff" />
-                  ) : (
-                    <Text className="text-[16px] font-semibold text-white">Upload Logo</Text>
-                  )}
-                </TouchableOpacity>
-
-                {logoUrl && (
-                  <TouchableOpacity
-                    onPress={handleRemoveLogo}
-                    disabled={isRemovingLogo}
-                    activeOpacity={0.7}
-                    className="px-5 py-3 rounded-xl border border-gray-300"
-                  >
-                    {isRemovingLogo ? (
-                      <ActivityIndicator size="small" color="#6b7280" />
-                    ) : (
-                      <Text className="text-[16px] font-semibold text-gray-700">Remove</Text>
-                    )}
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-
-            {/* Name Section */}
-            <View>
-              <Text className="text-[14px] font-medium text-gray-700 mb-2">Workspace Name</Text>
-              <View className="flex-row gap-2">
-                <TextInput
-                  value={workspaceName}
-                  onChangeText={setWorkspaceName}
-                  placeholder="Workspace name"
-                  className="flex-1 px-4 py-3 rounded-xl border border-gray-300 text-[16px] text-gray-900"
-                  style={{ backgroundColor: '#f9fafb' }}
-                  editable={!isSavingName}
-                />
-                <TouchableOpacity
-                  onPress={handleSaveName}
-                  disabled={isSavingName || workspaceName.trim() === activeWorkspace.name}
-                  activeOpacity={0.7}
-                  className="px-5 py-3 rounded-xl"
-                  style={{
-                    backgroundColor:
-                      isSavingName || workspaceName.trim() === activeWorkspace.name
-                        ? '#e5e7eb'
-                        : '#b38f5b',
-                  }}
-                >
-                  {isSavingName ? (
-                    <ActivityIndicator size="small" color="#ffffff" />
-                  ) : (
-                    <Text className="text-[16px] font-semibold text-white">Save</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
+              </TouchableOpacity>
             </View>
           </View>
         )}
@@ -418,7 +355,8 @@ export default function WorkspaceSettingsScreen() {
             ) : (
               <View>
                 {members.map((member) => {
-                  const userEmail = member.profiles?.email || 'Unknown';
+                  // The RPC function returns email directly, or fallback to user ID
+                  const userEmail = member.email || `User ${member.user_id.substring(0, 8)}...`;
                   const memberRole = member.role as WorkspaceRole;
                   const isCurrentUser = member.user_id === session?.user?.id;
                   const canChangeRole = isAdmin && (!isCurrentUser || isOwner);
@@ -472,6 +410,23 @@ export default function WorkspaceSettingsScreen() {
           </View>
         )}
 
+        {/* Delete Workspace Section */}
+        {isOwner && (
+          <View className="px-5 py-6 border-t border-red-200">
+            <Text className="text-[18px] font-semibold text-red-600 mb-2">Danger Zone</Text>
+            <Text className="text-[14px] text-gray-600 mb-4">
+              Permanently delete this workspace and all its data. This action cannot be undone.
+            </Text>
+            <TouchableOpacity
+              onPress={() => setShowDeleteWorkspaceModal(true)}
+              activeOpacity={0.7}
+              className="px-5 py-3 rounded-xl border border-red-300"
+            >
+              <Text className="text-[16px] font-semibold text-red-600 text-center">Delete Workspace</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Info Section */}
         <View className="px-5 py-6 border-t border-gray-200">
           <Text className="text-[14px] text-gray-500">
@@ -484,6 +439,120 @@ export default function WorkspaceSettingsScreen() {
           )}
         </View>
       </ScrollView>
+
+      {/* Delete Workspace Modal */}
+      <Modal
+        visible={showDeleteWorkspaceModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowDeleteWorkspaceModal(false)}
+      >
+        <View className="flex-1 items-center justify-center bg-black/50">
+          <View className="bg-white rounded-2xl p-6 mx-5 w-full max-w-sm">
+            <Text className="text-[20px] font-bold text-red-600 mb-2">Delete Workspace</Text>
+            <Text className="text-[14px] text-gray-600 mb-4">
+              Are you sure you want to delete &quot;{activeWorkspace?.name}&quot;? This action cannot be undone.
+              All workspace data will be permanently deleted.
+            </Text>
+            <View className="flex-row gap-3">
+              <TouchableOpacity
+                onPress={() => setShowDeleteWorkspaceModal(false)}
+                activeOpacity={0.7}
+                disabled={isDeletingWorkspace}
+                className="flex-1 px-4 py-3 rounded-xl border border-gray-300"
+              >
+                <Text className="text-center text-[16px] font-semibold text-gray-700">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={async () => {
+                  if (!activeWorkspace?.id || !session?.user?.id) return
+                  setIsDeletingWorkspace(true)
+                  try {
+                    await deleteWorkspace(activeWorkspace.id, session.user.id)
+                    await refreshWorkspaces()
+                    router.back()
+                  } catch (error: any) {
+                    console.error('[WorkspaceSettings] Error deleting workspace:', error)
+                    Alert.alert('Error', error.message || 'Failed to delete workspace')
+                  } finally {
+                    setIsDeletingWorkspace(false)
+                    setShowDeleteWorkspaceModal(false)
+                  }
+                }}
+                activeOpacity={0.7}
+                disabled={isDeletingWorkspace}
+                className="flex-1 px-4 py-3 rounded-xl"
+                style={{ backgroundColor: isDeletingWorkspace ? '#e5e7eb' : '#dc2626' }}
+              >
+                {isDeletingWorkspace ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text className="text-center text-[16px] font-semibold text-white">Delete</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Create Workspace Modal */}
+      <Modal
+        visible={showCreateWorkspaceModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setShowCreateWorkspaceModal(false);
+          setNewWorkspaceName('');
+        }}
+      >
+        <View className="flex-1 items-center justify-center bg-black/50">
+          <View className="bg-white rounded-2xl p-6 mx-5 w-full max-w-sm">
+            <Text className="text-[20px] font-bold text-gray-900 mb-2">Create New Workspace</Text>
+            <Text className="text-[14px] text-gray-600 mb-4">
+              Enter a name for your new workspace:
+            </Text>
+            <TextInput
+              value={newWorkspaceName}
+              onChangeText={setNewWorkspaceName}
+              placeholder="My Workspace"
+              placeholderTextColor="#9ca3af"
+              autoCapitalize="words"
+              autoCorrect={false}
+              className="px-4 py-3 rounded-xl border border-gray-300 text-[16px] text-gray-900 mb-4"
+              style={{ backgroundColor: '#f9fafb' }}
+              maxLength={100}
+            />
+            <View className="flex-row gap-3">
+              <TouchableOpacity
+                onPress={() => {
+                  setShowCreateWorkspaceModal(false);
+                  setNewWorkspaceName('');
+                }}
+                activeOpacity={0.7}
+                disabled={isCreatingWorkspace}
+                className="flex-1 px-4 py-3 rounded-xl border border-gray-300"
+              >
+                <Text className="text-center text-[16px] font-semibold text-gray-700">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleCreateWorkspace}
+                activeOpacity={0.7}
+                disabled={isCreatingWorkspace || !newWorkspaceName.trim()}
+                className="flex-1 px-4 py-3 rounded-xl"
+                style={{
+                  backgroundColor: isCreatingWorkspace || !newWorkspaceName.trim() ? '#e5e7eb' : '#b38f5b',
+                }}
+              >
+                {isCreatingWorkspace ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text className="text-center text-[16px] font-semibold text-white">Create</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Add Member Modal */}
       <Modal
