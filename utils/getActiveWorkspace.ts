@@ -147,7 +147,13 @@ export async function getOrCreateDefaultWorkspace(
   // Get user's workspaces
   const workspaces = await getUserWorkspaces(userId);
   if (workspaces.length > 0) {
-    // Use first workspace
+    // Prioritize workspace created by user (their own workspace)
+    const ownWorkspace = workspaces.find((w) => w.created_by === userId);
+    if (ownWorkspace) {
+      await setActiveWorkspaceId(userId, ownWorkspace.id);
+      return ownWorkspace.id;
+    }
+    // Fallback to first workspace if no own workspace found
     const firstWorkspaceId = workspaces[0].id;
     await setActiveWorkspaceId(userId, firstWorkspaceId);
     return firstWorkspaceId;
