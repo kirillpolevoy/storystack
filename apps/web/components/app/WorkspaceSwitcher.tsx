@@ -17,6 +17,7 @@ interface Workspace {
   id: string
   name: string
   logo_path?: string | null
+  created_by?: string
 }
 
 export function WorkspaceSwitcher() {
@@ -77,7 +78,8 @@ export function WorkspaceSwitcher() {
           workspaces (
             id,
             name,
-            logo_path
+            logo_path,
+            created_by
           )
         `)
         .eq('user_id', user.id)
@@ -109,23 +111,38 @@ export function WorkspaceSwitcher() {
     }
   }, [workspacesError])
 
-  // Get active workspace - prefer stored, fallback to first workspace
-  const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || workspaces[0]
+  // Get active workspace - prefer stored, fallback to user's own workspace, then first workspace
+  const activeWorkspace = (() => {
+    if (activeWorkspaceId) {
+      const found = workspaces.find((w) => w.id === activeWorkspaceId)
+      if (found) return found
+    }
+    // Fallback: prioritize user's own workspace
+    if (user?.id) {
+      const ownWorkspace = workspaces.find((w) => w.created_by === user.id)
+      if (ownWorkspace) return ownWorkspace
+    }
+    return workspaces[0]
+  })()
 
-  // Auto-select first workspace if none is set
+  // Auto-select workspace if none is set - prioritize user's own workspace
   useEffect(() => {
-    if (workspaces.length === 0) return
+    if (workspaces.length === 0 || !user?.id) return
     
-    // If no active workspace ID is set, use the first workspace
+    // If no active workspace ID is set, prioritize user's own workspace
     if (!activeWorkspaceId) {
-      const firstWorkspace = workspaces[0]
-      if (firstWorkspace) {
-        console.log('[WorkspaceSwitcher] Auto-selecting first workspace:', firstWorkspace.id)
-        setActiveWorkspaceId(firstWorkspace.id)
-        localStorage.setItem('@storystack:active_workspace_id', firstWorkspace.id)
+      // Find user's own workspace first
+      const ownWorkspace = workspaces.find((w) => w.created_by === user.id)
+      const workspaceToSelect = ownWorkspace || workspaces[0]
+      
+      if (workspaceToSelect) {
+        console.log('[WorkspaceSwitcher] Auto-selecting workspace:', workspaceToSelect.id, ownWorkspace ? '(own)' : '(first available)')
+        setActiveWorkspaceId(workspaceToSelect.id)
+        localStorage.setItem('@storystack:active_workspace_id', workspaceToSelect.id)
         // Invalidate workspace-related queries only
         queryClient.invalidateQueries({ queryKey: ['workspace'] })
         queryClient.invalidateQueries({ queryKey: ['workspaces'] })
+        queryClient.invalidateQueries({ queryKey: ['stories'] })
       }
       return
     }
@@ -133,16 +150,19 @@ export function WorkspaceSwitcher() {
     // Check if the active workspace ID is still valid
     const isValidWorkspace = workspaces.some((w) => w.id === activeWorkspaceId)
     if (!isValidWorkspace && workspaces.length > 0) {
-      // Active workspace ID is invalid, fallback to first workspace
-      const firstWorkspace = workspaces[0]
-      console.log('[WorkspaceSwitcher] Active workspace invalid, switching to:', firstWorkspace.id)
-      setActiveWorkspaceId(firstWorkspace.id)
-      localStorage.setItem('@storystack:active_workspace_id', firstWorkspace.id)
+      // Active workspace ID is invalid, prioritize user's own workspace
+      const ownWorkspace = workspaces.find((w) => w.created_by === user.id)
+      const workspaceToSelect = ownWorkspace || workspaces[0]
+      
+      console.log('[WorkspaceSwitcher] Active workspace invalid, switching to:', workspaceToSelect.id, ownWorkspace ? '(own)' : '(first available)')
+      setActiveWorkspaceId(workspaceToSelect.id)
+      localStorage.setItem('@storystack:active_workspace_id', workspaceToSelect.id)
       // Invalidate workspace-related queries only
       queryClient.invalidateQueries({ queryKey: ['workspace'] })
       queryClient.invalidateQueries({ queryKey: ['workspaces'] })
+      queryClient.invalidateQueries({ queryKey: ['stories'] })
     }
-  }, [workspaces, activeWorkspaceId, queryClient])
+  }, [workspaces, activeWorkspaceId, user?.id, queryClient])
 
   const handleSwitchWorkspace = async (workspaceId: string) => {
     setActiveWorkspaceId(workspaceId)

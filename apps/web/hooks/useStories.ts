@@ -3,12 +3,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { Story } from '@/types'
+import { useActiveWorkspace } from './useActiveWorkspace'
 
 export function useStories() {
   const supabase = createClient()
+  const activeWorkspaceId = useActiveWorkspace()
 
   return useQuery({
-    queryKey: ['stories'],
+    queryKey: ['stories', activeWorkspaceId],
     queryFn: async () => {
       const {
         data: { user },
@@ -18,8 +20,13 @@ export function useStories() {
         throw new Error('Not authenticated')
       }
 
+      if (!activeWorkspaceId) {
+        // No active workspace, return empty array
+        return []
+      }
+
       // Fetch stories with their first asset for thumbnail
-      // RLS policies handle workspace membership, but we filter out soft-deleted stories
+      // Filter by active workspace_id to ensure users only see stories from their active workspace
       const { data, error } = await supabase
         .from('stories')
         .select(`
@@ -34,6 +41,7 @@ export function useStories() {
             )
           )
         `)
+        .eq('workspace_id', activeWorkspaceId) // Filter by active workspace
         .is('deleted_at', null) // Exclude soft-deleted stories
         .order('updated_at', { ascending: false })
 
@@ -86,6 +94,7 @@ export function useStories() {
 export function useCreateStory() {
   const queryClient = useQueryClient()
   const supabase = createClient()
+  const activeWorkspaceId = useActiveWorkspace()
 
   return useMutation({
     mutationFn: async (name: string) => {
@@ -97,10 +106,15 @@ export function useCreateStory() {
         throw new Error('Not authenticated')
       }
 
+      if (!activeWorkspaceId) {
+        throw new Error('No active workspace selected')
+      }
+
       const { data, error } = await supabase
         .from('stories')
         .insert({
           user_id: user.id,
+          workspace_id: activeWorkspaceId, // Set workspace_id when creating story
           name,
           description: null,
         })
@@ -111,7 +125,7 @@ export function useCreateStory() {
       return data as Story
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['stories'] })
+      queryClient.invalidateQueries({ queryKey: ['stories', activeWorkspaceId] })
     },
   })
 }
@@ -119,6 +133,7 @@ export function useCreateStory() {
 export function useUpdateStory() {
   const queryClient = useQueryClient()
   const supabase = createClient()
+  const activeWorkspaceId = useActiveWorkspace()
 
   return useMutation({
     mutationFn: async ({ storyId, name, description }: { storyId: string; name?: string; description?: string | null }) => {
@@ -147,12 +162,13 @@ export function useUpdateStory() {
       return data as Story
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['stories'] })
+      queryClient.invalidateQueries({ queryKey: ['stories', activeWorkspaceId] })
     },
   })
 }
 
 export function useDeleteStory() {
+  const activeWorkspaceId = useActiveWorkspace()
   const queryClient = useQueryClient()
   const supabase = createClient()
 
@@ -178,7 +194,7 @@ export function useDeleteStory() {
       if (error) throw error
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['stories'] })
+      queryClient.invalidateQueries({ queryKey: ['stories', activeWorkspaceId] })
     },
   })
 }
