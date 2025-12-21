@@ -52,22 +52,43 @@ export async function getActiveWorkspaceIdFromDatabase(
 
 /**
  * Get active workspace ID (checks both storage and database, prefers database)
+ * Database is always the source of truth - if database has a value, use it even if storage differs
  */
 export async function getActiveWorkspaceId(userId: string): Promise<string | null> {
   // Try database first (source of truth)
   const dbWorkspaceId = await getActiveWorkspaceIdFromDatabase(userId);
   if (dbWorkspaceId) {
-    // Sync to local storage
+    // Always sync database value to local storage (database wins)
     await setActiveWorkspaceIdToStorage(dbWorkspaceId);
     return dbWorkspaceId;
   }
 
-  // Fall back to local storage
+  // Only fall back to local storage if database has no value
+  // But verify the storage value is valid before using it
   const storageWorkspaceId = await getActiveWorkspaceIdFromStorage();
   if (storageWorkspaceId) {
-    // Sync to database
-    await setActiveWorkspaceIdToDatabase(userId, storageWorkspaceId);
-    return storageWorkspaceId;
+    // Verify user is actually a member of this workspace before syncing to database
+    // This prevents wrong workspace IDs from being synced
+    const { getUserWorkspaces } = await import('./workspaceHelpers');
+    try {
+      const userWorkspaces = await getUserWorkspaces(userId);
+      const isValidWorkspace = userWorkspaces.some((w) => w.id === storageWorkspaceId);
+      
+      if (isValidWorkspace) {
+        // Only sync to database if it's a valid workspace the user belongs to
+        await setActiveWorkspaceIdToDatabase(userId, storageWorkspaceId);
+        return storageWorkspaceId;
+      } else {
+        // Invalid workspace in storage - clear it
+        await setActiveWorkspaceIdToStorage('');
+        return null;
+      }
+    } catch (error) {
+      console.error('[getActiveWorkspace] Error validating storage workspace:', error);
+      // On error, clear invalid storage and return null
+      await setActiveWorkspaceIdToStorage('');
+      return null;
+    }
   }
 
   return null;
@@ -134,20 +155,41 @@ export async function setActiveWorkspaceId(
 /**
  * Get or create default workspace for user
  * If user has no active workspace, returns their first workspace or creates one
+ * Always prioritizes workspace created by user (their own workspace)
  */
 export async function getOrCreateDefaultWorkspace(
   userId: string
 ): Promise<string> {
   // Check if user has an active workspace
   const activeWorkspaceId = await getActiveWorkspaceId(userId);
+  
+  // If we have an active workspace, validate it's still valid
   if (activeWorkspaceId) {
-    return activeWorkspaceId;
+    const workspaces = await getUserWorkspaces(userId);
+    const isValidWorkspace = workspaces.some((w) => w.id === activeWorkspaceId);
+    
+    if (isValidWorkspace) {
+      // Valid workspace - but ensure it's the user's own workspace if they have one
+      const ownWorkspace = workspaces.find((w) => w.created_by === userId);
+      if (ownWorkspace && ownWorkspace.id !== activeWorkspaceId) {
+        // User has their own workspace but active workspace is different - fix it
+        console.log('[getActiveWorkspace] Fixing active workspace: user has own workspace but active is different');
+        await setActiveWorkspaceId(userId, ownWorkspace.id);
+        return ownWorkspace.id;
+      }
+      return activeWorkspaceId;
+    } else {
+      // Invalid workspace - clear it and continue to find/create default
+      console.log('[getActiveWorkspace] Active workspace is invalid, clearing it');
+      await setActiveWorkspaceIdToStorage('');
+      await setActiveWorkspaceIdToDatabase(userId, '');
+    }
   }
 
   // Get user's workspaces
   const workspaces = await getUserWorkspaces(userId);
   if (workspaces.length > 0) {
-    // Prioritize workspace created by user (their own workspace)
+    // ALWAYS prioritize workspace created by user (their own workspace)
     const ownWorkspace = workspaces.find((w) => w.created_by === userId);
     if (ownWorkspace) {
       await setActiveWorkspaceId(userId, ownWorkspace.id);
