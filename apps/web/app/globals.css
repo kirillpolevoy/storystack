@@ -58,39 +58,70 @@
     @apply border-border;
   }
   html {
-    background: #f9fafb !important; /* Match body background to prevent yellow edges - Safari fix */
+    background: #f9fafb !important; /* Match body background to prevent yellow edges - iOS browsers fix */
+    background-color: #f9fafb !important; /* Explicit background-color for Chrome iOS */
     height: 100%;
-    -webkit-tap-highlight-color: transparent; /* Remove yellow tap highlight on iOS Safari */
+    -webkit-tap-highlight-color: transparent; /* Remove yellow tap highlight on iOS browsers */
+    /* Prevent yellow flash on all iOS browsers */
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
   }
   body {
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background: #f9fafb !important; /* Clean, professional gray background - Safari fix */
+    background: #f9fafb !important; /* Clean, professional gray background - iOS browsers fix */
+    background-color: #f9fafb !important; /* Explicit background-color for Chrome iOS */
     min-height: 100%;
-    -webkit-tap-highlight-color: transparent; /* Remove yellow tap highlight on iOS Safari */
+    -webkit-tap-highlight-color: transparent; /* Remove yellow tap highlight on iOS browsers */
+    /* Prevent yellow flash during page transitions on iOS browsers */
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
   }
-  /* Next.js root div - Safari iOS fix for yellow background flash */
+  /* Next.js root div - iOS browsers fix for yellow background flash */
   #__next {
     background: #f9fafb !important;
+    background-color: #f9fafb !important;
     min-height: 100%;
   }
   /* Ensure all root containers have background during transitions */
   [data-nextjs-scroll-focus-boundary] {
     background: #f9fafb !important;
+    background-color: #f9fafb !important;
   }
-  /* Safari iOS specific fixes */
+  /* Universal iOS browser fixes (Safari, Chrome, etc.) */
   @supports (-webkit-touch-callout: none) {
     html, body, #__next, [data-nextjs-scroll-focus-boundary] {
       background-color: #f9fafb !important;
+      background: #f9fafb !important;
       -webkit-overflow-scrolling: touch;
     }
-    /* Prevent yellow flash during page transitions on Safari iOS */
-    body {
+    /* Prevent yellow flash during page transitions on all iOS browsers */
+    html, body {
       -webkit-transform: translateZ(0);
       transform: translateZ(0);
+      will-change: transform; /* Optimize for hardware acceleration */
     }
+  }
+  /* Additional fix for Chrome iOS - target by user agent specific styles */
+  @media screen and (-webkit-min-device-pixel-ratio: 0) {
+    html, body, #__next {
+      background-color: #f9fafb !important;
+      background: #f9fafb !important;
+    }
+  }
+  /* Aggressive fix for all iOS browsers - target all possible root elements */
+  html > body,
+  html > body > div,
+  html > body > div > div {
+    background-color: #f9fafb !important;
+    background: #f9fafb !important;
+  }
+  /* Prevent any yellow background from showing through */
+  * {
+    -webkit-tap-highlight-color: rgba(0, 0, 0, 0) !important;
+    -webkit-tap-highlight-color: transparent !important;
   }
   
   /* CRM-style professional typography */

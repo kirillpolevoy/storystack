@@ -17,7 +17,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
   )
 
   return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <div style={{ backgroundColor: '#f9fafb', minHeight: '100%' }}>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    </div>
   )
 }
 
