@@ -1,24 +1,26 @@
 'use client'
 
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
-import { LogOut, Library, BookOpen, Tag, HelpCircle, User, Settings, ChevronLeft, ChevronRight } from 'lucide-react'
+import { LogOut, Library, BookOpen, Tag, HelpCircle, User, Settings, ChevronLeft, ChevronRight, CreditCard, Mail } from 'lucide-react'
 
 interface SidebarNavProps {
   isMinimized: boolean
+  onNavigate?: () => void
 }
 
-export function SidebarNav({ isMinimized }: SidebarNavProps) {
+export function SidebarNav({ isMinimized, onNavigate }: SidebarNavProps) {
   const pathname = usePathname()
+  const router = useRouter()
 
   return (
     <nav className="space-y-0.5 h-full flex flex-col pt-4">
-        <NavLink href="/app/library" pathname={pathname} isMinimized={isMinimized}>
+        <NavLink href="/app/library" pathname={pathname} isMinimized={isMinimized} onNavigate={onNavigate} router={router}>
           <Library className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-4 w-4 flex-shrink-0"} />
           {!isMinimized && <span>Library</span>}
         </NavLink>
-        <NavLink href="/app/stories" pathname={pathname} isMinimized={isMinimized}>
+        <NavLink href="/app/stories" pathname={pathname} isMinimized={isMinimized} onNavigate={onNavigate} router={router}>
           <BookOpen className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-4 w-4 flex-shrink-0"} />
           {!isMinimized && <span>Stories</span>}
         </NavLink>
@@ -27,25 +29,29 @@ export function SidebarNav({ isMinimized }: SidebarNavProps) {
         {!isMinimized && <div className="h-4" />}
 
         {/* Secondary Navigation - Reduced emphasis */}
-        <NavLink href="/app/tags" pathname={pathname} secondary isMinimized={isMinimized}>
+        <NavLink href="/app/workspace-settings" pathname={pathname} secondary isMinimized={isMinimized} onNavigate={onNavigate} router={router}>
+          <Settings className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-3.5 w-3.5 flex-shrink-0"} />
+          {!isMinimized && <span>Workspaces</span>}
+        </NavLink>
+        <NavLink href="/app/tags" pathname={pathname} secondary isMinimized={isMinimized} onNavigate={onNavigate} router={router}>
           <Tag className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-3.5 w-3.5 flex-shrink-0"} />
-          {!isMinimized && <span>Tag Management</span>}
+          {!isMinimized && <span>Tags</span>}
+        </NavLink>
+        <NavLink href="/app/subscription" pathname={pathname} secondary isMinimized={isMinimized} onNavigate={onNavigate} router={router}>
+          <CreditCard className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-3.5 w-3.5 flex-shrink-0"} />
+          {!isMinimized && <span>Subscriptions</span>}
         </NavLink>
         
-        {/* Extra spacing before support items */}
-        {!isMinimized && <div className="h-2" />}
+        {/* Spacing gap before profile section */}
+        {!isMinimized && <div className="h-4" />}
         
-        <NavLink href="/app/how-to" pathname={pathname} secondary support isMinimized={isMinimized}>
-          <HelpCircle className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-3.5 w-3.5 flex-shrink-0"} />
-          {!isMinimized && <span>How To</span>}
-        </NavLink>
-        <NavLink href="/app/profile" pathname={pathname} secondary isMinimized={isMinimized}>
+        <NavLink href="/app/profile" pathname={pathname} secondary isMinimized={isMinimized} onNavigate={onNavigate} router={router}>
           <User className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-3.5 w-3.5 flex-shrink-0"} />
           {!isMinimized && <span>Profile</span>}
         </NavLink>
-        <NavLink href="/app/workspace-settings" pathname={pathname} secondary isMinimized={isMinimized}>
-          <Settings className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-3.5 w-3.5 flex-shrink-0"} />
-          {!isMinimized && <span>Workspace</span>}
+        <NavLink href="/app/contact" pathname={pathname} secondary support isMinimized={isMinimized} onNavigate={onNavigate} router={router}>
+          <Mail className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-3.5 w-3.5 flex-shrink-0"} />
+          {!isMinimized && <span>Contact Us</span>}
         </NavLink>
       </nav>
   )
@@ -59,6 +65,8 @@ function NavLink({
   secondary = false,
   support = false,
   isMinimized = false,
+  onNavigate,
+  router,
 }: {
   href: string
   pathname: string
@@ -66,10 +74,13 @@ function NavLink({
   secondary?: boolean
   support?: boolean
   isMinimized?: boolean
+  onNavigate?: () => void
+  router?: ReturnType<typeof useRouter>
 }) {
   const isActive = pathname === href || 
                    (href === '/app/library' && pathname === '/app/library') ||
-                   (href === '/app/stories' && pathname.startsWith('/app/stories'))
+                   (href === '/app/stories' && pathname.startsWith('/app/stories')) ||
+                   (href === '/app/contact' && pathname === '/app/contact')
   
   // Use app's standard spacing and typography
   // Consistent height for all nav items when minimized
@@ -95,13 +106,29 @@ function NavLink({
   const tooltipText = isMinimized 
     ? (href.includes('library') ? 'Library' 
       : href.includes('stories') ? 'Stories' 
-      : href.includes('tags') ? 'Tag Management' 
-      : href.includes('how-to') ? 'How To' 
-      : 'Profile')
+      : href.includes('workspace-settings') ? 'Workspaces'
+      : href.includes('tags') ? 'Tags' 
+      : href.includes('subscription') ? 'Subscriptions'
+      : href.includes('profile') ? 'Profile'
+      : href.includes('contact') ? 'Contact Us'
+      : undefined)
     : undefined
 
+  const handleClick = (e: React.MouseEvent) => {
+    if (onNavigate && router) {
+      // Let navigation happen first, then close the sheet after a small delay
+      e.preventDefault()
+      // Use router.push for client-side navigation, then close sheet
+      router.push(href)
+      // Close sheet after navigation starts (small delay to allow transition)
+      setTimeout(() => {
+        onNavigate()
+      }, 150)
+    }
+  }
+
   return (
-    <Link href={href} className="block relative" title={tooltipText}>
+    <Link href={href} className="block relative" title={tooltipText} onClick={onNavigate ? handleClick : undefined}>
       {/* Active indicator using app's accent color */}
       {isActive && (
         <div className={`absolute left-0 top-1/2 -translate-y-1/2 ${isMinimized ? 'w-1 h-8 rounded-r-full' : 'w-[3px] h-[18px] rounded-r-full'} bg-accent`} />
@@ -112,4 +139,3 @@ function NavLink({
     </Link>
   )
 }
-

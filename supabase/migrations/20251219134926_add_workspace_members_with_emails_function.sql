@@ -25,6 +25,7 @@ BEGIN
   LEFT JOIN auth.users u ON u.id = wm.user_id
   WHERE wm.workspace_id = workspace_id_param
     AND is_workspace_member(workspace_id_param)  -- Ensure user can only see members of workspaces they belong to
+    AND u.id IS NOT NULL  -- Exclude soft-deleted users
   ORDER BY wm.created_at ASC;
 END;
 $$;

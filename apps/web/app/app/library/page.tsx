@@ -21,6 +21,7 @@ import { useUpdateAssetTags } from '@/hooks/useUpdateAssetTags'
 import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { initializeBatchPolling, stopBatchPolling, addBatchToPoll, startBatchPolling } from '@/utils/pollBatchStatus'
+import { MobileMenuButton } from '@/components/app/MobileMenuButton'
 
 export default function LibraryPage() {
   const [mounted, setMounted] = useState(false)
@@ -293,15 +294,66 @@ export default function LibraryPage() {
     initializeBatchPolling()
 
     // Listen for batch completion events
-    const handleBatchCompleted = (event: CustomEvent) => {
+    const handleBatchCompleted = async (event: CustomEvent) => {
       console.log('[LibraryPage] 📢 Batch completed event received:', event.detail)
+      
+      // Find assets that were part of this batch and are now completed
+      // This shows the green checkmark success indicator
+      if (supabase) {
+        const { data: batchAssets } = await supabase
+          .from('assets')
+          .select('id, auto_tag_status')
+          .eq('openai_batch_id', event.detail.batchId)
+          .eq('auto_tag_status', 'completed')
+          .limit(100) // Get up to 100 completed assets from this batch
+        
+        if (batchAssets && batchAssets.length > 0) {
+          const completedIds = batchAssets.map(a => a.id)
+          console.log(`[LibraryPage] ✅ Found ${completedIds.length} completed assets from batch, showing success indicators`)
+          
+          // Show success indicators for completed assets
+          setCompletedRetaggingAssetIds((prev) => {
+            const next = new Set(prev)
+            completedIds.forEach(id => next.add(id))
+            return next
+          })
+          
+          // Clear success indicators after 3 seconds
+          setTimeout(() => {
+            setCompletedRetaggingAssetIds((prev) => {
+              const next = new Set(prev)
+              completedIds.forEach(id => next.delete(id))
+              return next
+            })
+          }, 3000)
+        }
+      }
+      
       // Refresh assets to show updated tags - use both invalidation and refetch
+      // Multiple refresh attempts to ensure UI updates
       queryClient.invalidateQueries({ queryKey: ['assets'] })
-      // Add a small delay to ensure database is updated
+      
+      // Immediate refetch
+      refetch()
+      
+      // Additional delayed refreshes to catch any DB replication lag
       setTimeout(() => {
-        console.log('[LibraryPage] 🔄 Refreshing assets after batch completion...')
+        console.log('[LibraryPage] 🔄 Refreshing assets after batch completion (attempt 1)...')
+        queryClient.invalidateQueries({ queryKey: ['assets'] })
         refetch()
       }, 500)
+      
+      setTimeout(() => {
+        console.log('[LibraryPage] 🔄 Refreshing assets after batch completion (attempt 2)...')
+        queryClient.invalidateQueries({ queryKey: ['assets'] })
+        refetch()
+      }, 1500)
+      
+      setTimeout(() => {
+        console.log('[LibraryPage] 🔄 Refreshing assets after batch completion (attempt 3)...')
+        queryClient.invalidateQueries({ queryKey: ['assets'] })
+        refetch()
+      }, 3000)
     }
 
     window.addEventListener('batchCompleted', handleBatchCompleted as EventListener)
@@ -311,7 +363,39 @@ export default function LibraryPage() {
       stopBatchPolling()
       window.removeEventListener('batchCompleted', handleBatchCompleted as EventListener)
     }
-  }, [queryClient, refetch])
+  }, [queryClient, refetch, supabase])
+
+  // Periodic check for completed batches (fallback mechanism)
+  useEffect(() => {
+    if (!supabase) return
+
+    const batchCheckInterval = setInterval(async () => {
+      // Check for assets that were pending but are now completed
+      // This catches batches that completed but the event didn't fire
+      const { data: completedAssets } = await supabase
+        .from('assets')
+        .select('id, auto_tag_status, openai_batch_id')
+        .not('openai_batch_id', 'is', null)
+        .eq('auto_tag_status', 'completed')
+        .limit(10)
+
+      if (completedAssets && completedAssets.length > 0) {
+        // Check if we have any of these assets in our current view
+        const completedIds = completedAssets.map(a => a.id)
+        const hasNewCompleted = completedIds.some(id => 
+          filteredAssets.some(asset => asset.id === id && asset.auto_tag_status === 'pending')
+        )
+
+        if (hasNewCompleted) {
+          console.log('[LibraryPage] 🔄 Found completed batches, refreshing assets...')
+          queryClient.invalidateQueries({ queryKey: ['assets'] })
+          refetch()
+        }
+      }
+    }, 5000) // Check every 5 seconds
+
+    return () => clearInterval(batchCheckInterval)
+  }, [supabase, queryClient, refetch, filteredAssets])
 
   // Poll for retagging status updates
   useEffect(() => {
@@ -619,56 +703,61 @@ export default function LibraryPage() {
     <div className="flex h-screen flex-col bg-white">
       {/* Header - Reduced height, two-row structure */}
       <div className="border-b border-gray-200 bg-white">
-        <div className="px-8 pt-4">
+        <div className="px-4 sm:px-6 lg:px-8 pt-4">
           {/* Row 1: Title + Actions */}
-          <div className="flex items-center justify-between pb-4">
-            <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">
-              Library
-            </h1>
-            <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-2 pb-4">
+            <div className="flex items-center gap-3">
+              <MobileMenuButton />
+              <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 tracking-tight">
+                Library
+              </h1>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
               <Button
                 onClick={handleBulkAddToStory}
                 disabled={selectedAssetIds.size === 0}
-                className="h-9 px-4 text-sm font-semibold bg-accent hover:bg-accent/90 shadow-sm"
+                className="h-9 px-3 sm:px-4 text-xs sm:text-sm font-semibold bg-accent hover:bg-accent/90 shadow-sm"
               >
-                <Plus className="mr-2 h-4 w-4" />
-                Add to Story
+                <Plus className="mr-1.5 sm:mr-2 h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                <span className="hidden sm:inline">Add to Story</span>
+                <span className="sm:hidden">Story</span>
               </Button>
               <Button
                 onClick={handleBulkDeleteLastX}
                 variant="outline"
-                className="h-9 px-4 text-sm font-medium border-gray-300 text-gray-700 hover:bg-gray-50"
+                className="h-9 px-3 sm:px-4 text-xs sm:text-sm font-medium border-gray-300 text-gray-700 hover:bg-gray-50"
               >
-                <Trash2 className="mr-2 h-4 w-4" />
-                Delete Last X
+                <Trash2 className="mr-1.5 sm:mr-2 h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                <span className="hidden sm:inline">Delete Last X</span>
+                <span className="sm:hidden">Delete</span>
               </Button>
               <Button
                 onClick={() => setShowUploadDialog(true)}
                 variant="outline"
-                className="h-9 px-4 text-sm font-medium border-gray-300 text-gray-700 hover:bg-gray-50"
+                className="h-9 px-3 sm:px-4 text-xs sm:text-sm font-medium border-gray-300 text-gray-700 hover:bg-gray-50"
               >
-                <Upload className="mr-2 h-4 w-4" />
+                <Upload className="mr-1.5 sm:mr-2 h-3.5 w-3.5 sm:h-4 sm:w-4" />
                 Upload
               </Button>
             </div>
           </div>
 
           {/* Row 2: Tabs + Count */}
-          <div className="flex items-center justify-between pb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 pb-3">
             <Tabs value={viewFilter} onValueChange={(v) => setViewFilter(v as AssetViewFilter)}>
-              <TabsList className="h-9">
-                <TabsTrigger value="all" className="text-sm px-4">
+              <TabsList className="h-9 w-full sm:w-auto">
+                <TabsTrigger value="all" className="text-xs sm:text-sm px-2 sm:px-4 flex-1 sm:flex-none">
                   All Assets
                 </TabsTrigger>
-                <TabsTrigger value="in-stories" className="text-sm px-4">
+                <TabsTrigger value="in-stories" className="text-xs sm:text-sm px-2 sm:px-4 flex-1 sm:flex-none">
                   Used in Stories
                 </TabsTrigger>
-                <TabsTrigger value="not-in-stories" className="text-sm px-4">
+                <TabsTrigger value="not-in-stories" className="text-xs sm:text-sm px-2 sm:px-4 flex-1 sm:flex-none">
                   Not in Stories
                 </TabsTrigger>
               </TabsList>
             </Tabs>
-            <span className="text-sm text-gray-500 font-medium">
+            <span className="text-xs sm:text-sm text-gray-500 font-medium text-center sm:text-left">
               {(() => {
                 // Use backend count, adjusted for date filter if active
                 const backendCount = data?.pages[0]?.totalCount || 0
@@ -691,7 +780,7 @@ export default function LibraryPage() {
 
       {/* Contained Control Surface */}
       <div className="border-b border-gray-200 bg-gray-50/50">
-        <div className="px-8 py-4">
+        <div className="px-4 sm:px-6 lg:px-8 py-4">
           <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
             <FilterBar
             searchQuery={searchQuery}
@@ -714,7 +803,7 @@ export default function LibraryPage() {
       {/* Content */}
       <div className="flex-1 overflow-hidden bg-white relative">
         {isError ? (
-          <div className="flex h-full items-center justify-center px-8">
+          <div className="flex h-full items-center justify-center px-4 sm:px-6 lg:px-8">
             <div className="text-center max-w-sm">
               <div className="h-12 w-12 rounded-lg bg-red-100 flex items-center justify-center mx-auto mb-4">
                 <ImageIcon className="h-6 w-6 text-red-600" />
@@ -746,7 +835,7 @@ export default function LibraryPage() {
             </div>
           </div>
         ) : isEmpty ? (
-          <div className="flex h-full items-center justify-center px-8">
+          <div className="flex h-full items-center justify-center px-4 sm:px-6 lg:px-8">
             <div className="text-center max-w-md">
               <div className="h-16 w-16 rounded-xl bg-gray-100 flex items-center justify-center mx-auto mb-5">
                 <ImageIcon className="h-8 w-8 text-gray-400" />
@@ -909,7 +998,7 @@ export default function LibraryPage() {
               <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-50">
                 <Trash2 className="h-8 w-8 text-red-600" />
               </div>
-              <h3 className="mb-2 text-center text-2xl font-semibold text-gray-900">
+              <h3 className="mb-2 text-center text-xl sm:text-2xl font-semibold text-gray-900">
                 Delete {selectedAssetIds.size} {selectedAssetIds.size === 1 ? 'asset' : 'assets'}?
               </h3>
               <p className="text-center text-sm leading-relaxed text-gray-600">
@@ -967,7 +1056,7 @@ export default function LibraryPage() {
               <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-50">
                 <Trash2 className="h-8 w-8 text-red-600" />
               </div>
-              <h3 className="mb-2 text-center text-2xl font-semibold text-gray-900">
+              <h3 className="mb-2 text-center text-xl sm:text-2xl font-semibold text-gray-900">
                 Delete Last X Photos
               </h3>
               <p className="mb-4 text-center text-sm leading-relaxed text-gray-600">

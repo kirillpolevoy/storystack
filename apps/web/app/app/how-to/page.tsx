@@ -22,6 +22,7 @@ import {
   SidebarOpen
 } from 'lucide-react'
 import Image from 'next/image'
+import { MobileMenuButton } from '@/components/app/MobileMenuButton'
 
 type Step = {
   id: string
@@ -591,13 +592,16 @@ export default function HowToPage() {
     <div className="flex h-full flex-col bg-gray-50">
       {/* Header */}
       <div className="border-b border-gray-200 bg-white">
-        <div className="px-8 pt-4">
+        <div className="px-4 sm:px-6 lg:px-8 pt-4">
           <div className="flex items-center justify-between pb-4">
-            <div>
-              <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">
-                How To
-              </h1>
-              <p className="text-sm text-gray-500 mt-1">Learn how to get the most out of StoryStack</p>
+            <div className="flex items-center gap-3">
+              <MobileMenuButton />
+              <div>
+                <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 tracking-tight">
+                  How To
+                </h1>
+                <p className="text-xs sm:text-sm text-gray-500 mt-1">Learn how to get the most out of StoryStack</p>
+              </div>
             </div>
           </div>
         </div>

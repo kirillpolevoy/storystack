@@ -132,8 +132,13 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
         
         console.log(`[UploadZone] ✅ Added batch ${data.batchId} to polling queue`)
         
-        // Refresh UI to show pending status
+        // Refresh UI to show pending status - multiple refreshes to ensure visibility
         queryClient.invalidateQueries({ queryKey: ['assets'] })
+        
+        // Additional refresh after a delay to ensure UI updates
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ['assets'] })
+        }, 1000)
         
       } else if (data?.results) {
         // Immediate processing: Results already available (< 20 images)

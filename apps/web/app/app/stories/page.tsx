@@ -32,6 +32,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useQueryClient } from '@tanstack/react-query'
+import { MobileMenuButton } from '@/components/app/MobileMenuButton'
 
 dayjs.extend(relativeTime)
 
@@ -238,21 +239,24 @@ export default function StoriesPage() {
     <div className="flex h-full flex-col bg-gray-50">
       {/* Header */}
       <div className="border-b border-gray-200 bg-white">
-        <div className="px-8 pt-4">
+        <div className="px-4 sm:px-6 lg:px-8 pt-4">
           {/* Row 1: Title + Actions */}
-          <div className="flex items-center justify-between pb-4">
-            <div>
-              <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">
-                Stories
-              </h1>
-              <p className="text-sm text-gray-500 mt-1">Create and organize visual narratives</p>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-2 pb-4">
+            <div className="flex items-center gap-3">
+              <MobileMenuButton />
+              <div>
+                <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 tracking-tight">
+                  Stories
+                </h1>
+                <p className="text-xs sm:text-sm text-gray-500 mt-1">Create and organize visual narratives</p>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <Button
                 onClick={() => setShowCreateModal(true)}
-                className="h-9 px-4 text-sm font-semibold bg-accent hover:bg-accent/90 shadow-sm"
+                className="h-9 px-3 sm:px-4 text-xs sm:text-sm font-semibold bg-accent hover:bg-accent/90 shadow-sm"
               >
-                <Plus className="mr-2 h-4 w-4" />
+                <Plus className="mr-1.5 sm:mr-2 h-3.5 w-3.5 sm:h-4 sm:w-4" />
                 New Story
               </Button>
             </div>
@@ -260,14 +264,14 @@ export default function StoriesPage() {
 
           {/* Row 2: Search Bar */}
           <div className="flex items-center justify-between pb-3">
-            <div className="relative max-w-md flex-1">
+            <div className="relative max-w-md flex-1 w-full">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
               <Input
                 type="text"
                 placeholder="Search stories..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 pr-10 h-9 text-sm border-gray-300 focus:border-accent focus:ring-accent bg-white"
+                className="pl-10 pr-10 h-9 text-xs sm:text-sm border-gray-300 focus:border-accent focus:ring-accent bg-white"
               />
               {searchQuery && (
                 <Button
@@ -285,7 +289,7 @@ export default function StoriesPage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-8">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
         {filteredStories && filteredStories.length === 0 ? (
           <div className="flex flex-1 items-center justify-center min-h-[400px]">
             <div className="text-center max-w-md">

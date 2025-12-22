@@ -235,7 +235,14 @@ async function pollBatch(batchId: string): Promise<void> {
       // Dispatch custom event that components can listen to
       if (typeof window !== 'undefined') {
         console.log(`[BatchPolling] 📢 Dispatching batchCompleted event for batch ${batchId}`)
+        // Dispatch multiple times to ensure it's caught (in case of timing issues)
         window.dispatchEvent(new CustomEvent('batchCompleted', { detail: { batchId } }))
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('batchCompleted', { detail: { batchId } }))
+        }, 100)
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('batchCompleted', { detail: { batchId } }))
+        }, 500)
       }
     } else if (result.error) {
       // Edge function returned an error

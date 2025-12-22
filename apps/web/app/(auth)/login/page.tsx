@@ -59,7 +59,7 @@ export default function LoginPage() {
               Welcome to StoryStack
             </h1>
             <p className="text-[20px] font-medium text-gray-950 leading-[1.4] max-w-md">
-              From assets to stories — before <span className="whitespace-nowrap">posting to social</span>.
+              Where assets become stories
             </p>
           </div>
 

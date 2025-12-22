@@ -34,7 +34,9 @@ export function AssetTile({
   const [isHovered, setIsHovered] = useState(false)
   const [imageSrc, setImageSrc] = useState<string>('')
   
-  // Properly prioritize thumbnail URLs - thumb should be 400px, preview 2000px
+  // Properly prioritize thumbnail URLs - thumb is 800px, preview 2000px
+  // Use thumb for library grid (good quality, smaller file size)
+  // Fallback to preview for larger displays or if thumb unavailable
   const imageUrl = asset.thumbUrl || asset.previewUrl || asset.publicUrl || ''
   
   // Initialize image source

@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { Sidebar } from '@/components/app/Sidebar'
+import { MobileMenuProvider } from '@/components/app/MobileMenuProvider'
 
 // Force dynamic rendering for all app routes
 export const dynamic = 'force-dynamic'
@@ -34,10 +35,12 @@ export default async function AppLayout({
     }
 
     return (
-      <div className="flex h-screen bg-background">
-        <Sidebar />
-        <main className="flex-1 overflow-hidden bg-background">{children}</main>
-      </div>
+      <MobileMenuProvider>
+        <div className="flex h-screen bg-background">
+          <Sidebar />
+          <main className="flex-1 overflow-hidden bg-background lg:ml-0">{children}</main>
+        </div>
+      </MobileMenuProvider>
     )
   } catch (error) {
     console.error('[AppLayout] Error:', error)

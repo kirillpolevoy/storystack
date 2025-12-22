@@ -29,7 +29,7 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Return members with emails
+  -- Return members with emails (exclude soft-deleted users)
   RETURN QUERY
   SELECT 
     wm.workspace_id,
@@ -40,6 +40,7 @@ BEGIN
   FROM workspace_members wm
   LEFT JOIN auth.users u ON u.id = wm.user_id
   WHERE wm.workspace_id = workspace_id_param
+    AND u.id IS NOT NULL  -- Exclude soft-deleted users
   ORDER BY wm.created_at ASC;
 END;
 $$;

@@ -162,7 +162,9 @@ export async function compressImageForAI(file: File): Promise<Blob> {
 }
 
 /**
- * Generate preview (2000px) and thumb (400px) versions of an image
+ * Generate preview (2000px) and thumb (800px) versions of an image
+ * Thumbnails increased to 800px to prevent pixelation on larger screens
+ * where tiles can be 400-600px wide (with 2x DPI displays, need 800-1200px)
  */
 export async function generateThumbnails(file: File): Promise<{
   preview: Blob
@@ -170,7 +172,7 @@ export async function generateThumbnails(file: File): Promise<{
 }> {
   const [preview, thumb] = await Promise.all([
     resizeImage(file, 2000, 0.85),
-    resizeImage(file, 400, 0.8),
+    resizeImage(file, 800, 0.85), // Increased from 400px to 800px, quality from 0.8 to 0.85
   ])
 
   return { preview, thumb }

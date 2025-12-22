@@ -228,6 +228,7 @@ export function useAssets(
           .from('assets')
           .select('id', { count: 'exact', head: true })
           .eq('workspace_id', activeWorkspaceId)
+          .is('deleted_at', null) // Exclude soft-deleted assets
 
         // Apply server-side filters for count
         if (!searchQuery && selectedFilters && selectedFilters.length > 0) {
@@ -268,6 +269,7 @@ export function useAssets(
             .from('assets')
             .select('id')
             .eq('workspace_id', activeWorkspaceId)
+            .is('deleted_at', null) // Exclude soft-deleted assets
 
           // Apply same server-side filters as count query
           if (!searchQuery && selectedFilters && selectedFilters.length > 0) {

@@ -20,7 +20,11 @@ interface Workspace {
   created_by?: string
 }
 
-export function WorkspaceSwitcher() {
+interface WorkspaceSwitcherProps {
+  isMinimized?: boolean
+}
+
+export function WorkspaceSwitcher({ isMinimized = false }: WorkspaceSwitcherProps) {
   const router = useRouter()
   const supabase = createClient()
   const queryClient = useQueryClient()
@@ -222,27 +226,51 @@ export function WorkspaceSwitcher() {
       <PopoverTrigger asChild>
         <Button
           variant="outline"
-          className="h-9 px-3 gap-2 justify-between w-full"
+          className={isMinimized 
+            ? "h-9 w-9 p-0 justify-center" 
+            : "h-9 px-3 gap-2 justify-between w-full"
+          }
+          title={isMinimized ? activeWorkspace.name : undefined}
         >
-          <div className="flex items-center gap-2 min-w-0">
-            {logoUrl ? (
+          {isMinimized ? (
+            // Minimized: Show only icon
+            logoUrl ? (
               <img
                 src={logoUrl}
                 alt={activeWorkspace.name}
-                className="w-6 h-6 rounded-full object-cover flex-shrink-0"
+                className="w-6 h-6 rounded-full object-cover"
               />
             ) : (
-              <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
+              <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center">
                 <span className="text-xs font-semibold text-gray-600">
                   {getInitials(activeWorkspace.name)}
                 </span>
               </div>
-            )}
-            <span className="text-sm font-medium text-gray-900 truncate">
-              {activeWorkspace.name}
-            </span>
-          </div>
-          <ChevronDown className="h-4 w-4 text-gray-500 flex-shrink-0" />
+            )
+          ) : (
+            // Expanded: Show icon, name, and chevron
+            <>
+              <div className="flex items-center gap-2 min-w-0">
+                {logoUrl ? (
+                  <img
+                    src={logoUrl}
+                    alt={activeWorkspace.name}
+                    className="w-6 h-6 rounded-full object-cover flex-shrink-0"
+                  />
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
+                    <span className="text-xs font-semibold text-gray-600">
+                      {getInitials(activeWorkspace.name)}
+                    </span>
+                  </div>
+                )}
+                <span className="text-sm font-medium text-gray-900 truncate">
+                  {activeWorkspace.name}
+                </span>
+              </div>
+              <ChevronDown className="h-4 w-4 text-gray-500 flex-shrink-0" />
+            </>
+          )}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[280px] p-0" align="start">
