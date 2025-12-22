@@ -103,7 +103,6 @@ export default function LibraryScreen() {
   const [deleteProgress, setDeleteProgress] = useState({ current: 0, total: 0 });
   const [showDeleteSuccess, setShowDeleteSuccess] = useState(false);
   const [deletedAssetsCount, setDeletedAssetsCount] = useState(0);
-  const [deletedAssetsForUndo, setDeletedAssetsForUndo] = useState<Asset[]>([]); // Store for undo
   const deleteSuccessOpacity = useRef(new Animated.Value(0)).current;
   const deleteSuccessTranslateY = useRef(new Animated.Value(-60)).current;
   
@@ -1564,7 +1563,14 @@ export default function LibraryScreen() {
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('[Library] 🔔 Realtime subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('[Library] ✅ Realtime subscription active - will receive asset updates');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('[Library] ❌ Realtime subscription error');
+        }
+      });
 
     return () => {
       console.log('[Library] 🛑 Cleaning up realtime subscription...');
@@ -1593,6 +1599,67 @@ export default function LibraryScreen() {
       console.error('[Library] ❌ Failed to start batch polling:', error);
       console.error('[Library] ❌ Error details:', error instanceof Error ? error.stack : String(error));
     }
+
+    // Fallback: Register callback to refresh if realtime doesn't work
+    // This is a backup - realtime should handle updates automatically
+    const unsubscribe = onBatchComplete(async (batchId?: string) => {
+      console.log(`[Library] 🔔 Fallback callback triggered for batch ${batchId} - refreshing assets`);
+      // Small delay to ensure database is updated
+      setTimeout(async () => {
+        if (!isRefreshingForBatchRef.current && !isLoadingRef.current) {
+          isRefreshingForBatchRef.current = true;
+          try {
+            await loadAssets();
+            // Also check for completed assets and show success indicators
+            const { data: completedAssets } = await supabase
+              .from('assets')
+              .select('id, auto_tag_status, tags')
+              .eq('workspace_id', activeWorkspaceId)
+              .eq('auto_tag_status', 'completed')
+              .not('tags', 'is', null)
+              .limit(50);
+            
+            if (completedAssets && completedAssets.length > 0) {
+              // Remove from loading set and add to success indicators
+              setAutoTaggingAssets((prev) => {
+                const next = new Set(prev);
+                completedAssets.forEach((asset: any) => {
+                  if (asset.tags && Array.isArray(asset.tags) && asset.tags.length > 0) {
+                    next.delete(asset.id);
+                  }
+                });
+                return next;
+              });
+              
+              // Show success indicators
+              setRecentlyTaggedAssets((prev) => {
+                const next = new Set(prev);
+                completedAssets.forEach((asset: any) => {
+                  if (asset.tags && Array.isArray(asset.tags) && asset.tags.length > 0 && !prev.has(asset.id)) {
+                    next.add(asset.id);
+                    // Auto-hide after 5.5 seconds
+                    setTimeout(() => {
+                      setRecentlyTaggedAssets((current) => {
+                        const updated = new Set(current);
+                        updated.delete(asset.id);
+                        return updated;
+                      });
+                    }, 5500);
+                  }
+                });
+                return next;
+              });
+            }
+          } catch (error) {
+            console.error('[Library] 🔔❌ Error in fallback refresh:', error);
+          } finally {
+            setTimeout(() => {
+              isRefreshingForBatchRef.current = false;
+            }, 1000);
+          }
+        }
+      }, 1000); // 1 second delay to ensure DB is updated
+    });
 
     const interval = setInterval(async () => {
       // Note: Batch completion is handled by realtime subscription above
@@ -1718,16 +1785,13 @@ export default function LibraryScreen() {
           }
         });
       }
-    }, 30000); // Check every 30 seconds (only for retries, batch completion handled by callback)
+    }, 30000); // Check every 30 seconds (only for retries, batch completion handled by realtime subscription)
 
     return () => {
       clearInterval(interval);
-      if (refreshTimeout) {
-        clearTimeout(refreshTimeout);
-      }
-      unsubscribe(); // Clean up batch completion callback
+      unsubscribe(); // Clean up fallback callback
     };
-  }, [supabase, activeWorkspaceId, loadAssets, newlyImportedAssetIds, showRetryNotificationBanner]);
+  }, [supabase, activeWorkspaceId, loadAssets, autoTaggingAssets, newlyImportedAssetIds, showRetryNotificationBanner, assets]);
 
   // Check for failed/pending assets when screen comes into focus
   useFocusEffect(
@@ -2327,7 +2391,6 @@ export default function LibraryScreen() {
     }
 
     const count = selectedAssets.length;
-    const assetsToDelete = [...selectedAssets]; // Store for undo
     
     // Close confirmation modal
     setShowDeleteConfirmation(false);
@@ -2383,12 +2446,6 @@ export default function LibraryScreen() {
 
       // Complete progress
       setDeleteProgress({ current: count, total: count });
-      
-      // Store for undo (clear after 5 seconds)
-      setDeletedAssetsForUndo(assetsToDelete);
-      setTimeout(() => {
-        setDeletedAssetsForUndo([]);
-      }, 5000);
 
       // Success haptic feedback
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -2445,7 +2502,7 @@ export default function LibraryScreen() {
       // Rollback optimistic update on error
       setAssets((prev) => {
         const existingIds = new Set(prev.map(a => a.id));
-        const toRestore = assetsToDelete.filter(a => !existingIds.has(a.id));
+        const toRestore = selectedAssets.filter(a => !existingIds.has(a.id));
         return [...toRestore, ...prev].sort((a, b) => 
           new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
         );
@@ -2460,45 +2517,6 @@ export default function LibraryScreen() {
     }
   };
 
-  const handleUndoDelete = async () => {
-    if (!supabase || deletedAssetsForUndo.length === 0) {
-      return;
-    }
-
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    
-    try {
-      // Restore assets optimistically
-      setAssets((prev) => {
-        const existingIds = new Set(prev.map(a => a.id));
-        const toRestore = deletedAssetsForUndo.filter(a => !existingIds.has(a.id));
-        return [...toRestore, ...prev].sort((a, b) => 
-          new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
-        );
-      });
-
-      // Re-upload assets to storage and database
-      // Note: This is a simplified undo - in production, you'd want to restore from a backup
-      // For now, we'll just restore the UI state and let the user know
-      Alert.alert(
-        'Undo',
-        'Assets restored. Note: Files may need to be re-uploaded if they were already deleted from storage.',
-        [{ text: 'OK' }]
-      );
-
-      setDeletedAssetsForUndo([]);
-      setShowDeleteSuccess(false);
-      
-      // Refresh to sync with server
-      await loadAssets();
-      
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (error) {
-      console.error('[Library] undo failed', error);
-      Alert.alert('Undo failed', 'Unable to restore deleted photos.');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    }
-  };
 
   const handleAddToStory = () => {
     if (selectedAssets.length === 0) {
@@ -3296,23 +3314,7 @@ export default function LibraryScreen() {
               <Text className="text-[15px] font-semibold text-gray-900" style={{ letterSpacing: -0.2 }}>
                 {deletedAssetsCount} photo{deletedAssetsCount > 1 ? 's' : ''} deleted
               </Text>
-              {deletedAssetsForUndo.length > 0 && (
-                <Text className="mt-0.5 text-[13px] text-gray-600">
-                  Tap to undo
-                </Text>
-              )}
             </View>
-            {deletedAssetsForUndo.length > 0 && (
-              <TouchableOpacity
-                onPress={handleUndoDelete}
-                activeOpacity={0.7}
-                className="ml-2 rounded-xl bg-gray-100 px-4 py-2"
-              >
-                <Text className="text-[14px] font-semibold text-gray-700" style={{ letterSpacing: -0.1 }}>
-                  Undo
-                </Text>
-              </TouchableOpacity>
-            )}
           </View>
         </Animated.View>
       )}

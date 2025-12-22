@@ -15,7 +15,7 @@ import { Asset } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
-import { Upload, Image as ImageIcon, Plus, Sparkles, Trash2, CheckCircle2, Undo2 } from 'lucide-react'
+import { Upload, Image as ImageIcon, Plus, Sparkles, Trash2, CheckCircle2 } from 'lucide-react'
 import { useDeleteAsset } from '@/hooks/useDeleteAsset'
 import { useUpdateAssetTags } from '@/hooks/useUpdateAssetTags'
 import { useQueryClient } from '@tanstack/react-query'
@@ -54,7 +54,6 @@ export default function LibraryPage() {
   const [deleteProgress, setDeleteProgress] = useState({ current: 0, total: 0 })
   const [showDeleteSuccess, setShowDeleteSuccess] = useState(false)
   const [deletedAssetsCount, setDeletedAssetsCount] = useState(0)
-  const [deletedAssetsForUndo, setDeletedAssetsForUndo] = useState<Asset[]>([])
   
   // Bulk delete last X photos state
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false)
@@ -449,12 +448,6 @@ export default function LibraryPage() {
         }
       })
       
-      // Store for undo
-      setDeletedAssetsForUndo(assetsToDelete)
-      setTimeout(() => {
-        setDeletedAssetsForUndo([])
-      }, 5000)
-      
       // Delete assets with progress tracking
       let completed = 0
       const deletePromises = assetIds.map(async (id, index) => {
@@ -541,12 +534,6 @@ export default function LibraryPage() {
       
       await Promise.all(deletePromises)
       
-      // Store for undo (clear after 5 seconds)
-      setDeletedAssetsForUndo(assetsToDelete)
-      setTimeout(() => {
-        setDeletedAssetsForUndo([])
-      }, 5000)
-      
       // Show success notification
       setDeletedAssetsCount(count)
       setShowDeleteSuccess(true)
@@ -572,43 +559,6 @@ export default function LibraryPage() {
     }
   }, [selectedAssetIds, filteredAssets, deleteAsset, handleClearSelection, queryClient])
 
-  const handleUndoDelete = useCallback(async () => {
-    if (deletedAssetsForUndo.length === 0) return
-    
-    try {
-      // Restore assets optimistically
-      queryClient.setQueryData(['assets'], (oldData: any) => {
-        if (!oldData?.pages) return oldData
-        
-        const restoredAssets = deletedAssetsForUndo
-        return {
-          ...oldData,
-          pages: oldData.pages.map((page: any, index: number) => {
-            if (index === 0) {
-              return {
-                ...page,
-                assets: [...restoredAssets, ...page.assets],
-                totalCount: (page.totalCount || page.assets.length) + restoredAssets.length,
-              }
-            }
-            return page
-          }),
-        }
-      })
-      
-      setDeletedAssetsForUndo([])
-      setShowDeleteSuccess(false)
-      
-      // Refresh to sync with server
-      queryClient.invalidateQueries({ queryKey: ['assets'] })
-      await refetch()
-      
-      alert('Assets restored. Note: Files may need to be re-uploaded if they were already deleted from storage.')
-    } catch (error) {
-      console.error('[LibraryPage] Undo failed:', error)
-      alert('Unable to restore deleted assets.')
-    }
-  }, [deletedAssetsForUndo, queryClient, refetch])
 
   const handleAddToStory = useCallback((asset: Asset) => {
     setSelectedAssetIds(new Set([asset.id]))
@@ -1075,23 +1025,7 @@ export default function LibraryPage() {
               <p className="text-sm font-semibold text-gray-900">
                 {deletedAssetsCount} {deletedAssetsCount === 1 ? 'asset' : 'assets'} deleted
               </p>
-              {deletedAssetsForUndo.length > 0 && (
-                <p className="mt-0.5 text-xs text-gray-600">
-                  Tap undo to restore
-                </p>
-              )}
             </div>
-            {deletedAssetsForUndo.length > 0 && (
-              <Button
-                onClick={handleUndoDelete}
-                variant="outline"
-                size="sm"
-                className="ml-2 border-gray-200 bg-gray-50 hover:bg-gray-100"
-              >
-                <Undo2 className="mr-1.5 h-3.5 w-3.5" />
-                Undo
-              </Button>
-            )}
           </div>
         </div>
       )}
