@@ -35,6 +35,9 @@ export function useAssets(
 
   const query = useInfiniteQuery({
     queryKey: ['assets', activeWorkspaceId, searchQuery, selectedFilters, viewFilter],
+    refetchOnMount: true, // Always refetch on mount to ensure fresh data after login
+    refetchOnWindowFocus: false, // Don't refetch on window focus (already disabled in QueryClient)
+    staleTime: 0, // Consider data stale immediately to force refetch after login
     queryFn: async ({ pageParam = 0 }) => {
       try {
         const {
