@@ -40,6 +40,7 @@ import { computeImageHash, checkForDuplicates } from '@/utils/duplicateDetection
 import { DuplicateDetectionDialog } from '@/components/DuplicateDetectionDialog';
 import { extractLocationFromEXIF } from '@/utils/extractLocationFromEXIF';
 import { extractDateFromEXIF } from '@/utils/extractDateFromEXIF';
+import { startBatchPolling, onBatchComplete } from '@/utils/pollBatchStatus';
 
 export default function LibraryScreen() {
   const router = useRouter();
@@ -1339,7 +1340,8 @@ export default function LibraryScreen() {
         // Don't update progress here - we'll update during compression which is the main processing step
       }
 
-      for (let i = 0; i < result.assets.length; i += BATCH_SIZE) {
+      const totalAssets = result.assets.length;
+      for (let i = 0; i < totalAssets; i += BATCH_SIZE) {
         const batch = result.assets.slice(i, i + BATCH_SIZE);
         
         const batchResults = await Promise.all(
@@ -1405,21 +1407,28 @@ export default function LibraryScreen() {
           })
         );
 
-        // Store results in correct order and update progress as we go
-        // Process sequentially to ensure state updates are applied correctly
+        // Store results in correct order
+        let batchProcessedCount = 0;
         for (const result of batchResults) {
           if (result) {
             compressedImages[result.index] = result.compressed;
             imageHashes[result.index] = result.hash;
-            // Update processing progress for each completed image
-            // result.index is the global index (0-based), so we add 1 to get the count
-            // Use the maximum to handle out-of-order completion and React batching
-            setImportProgress(prev => ({ 
-              ...prev, 
-              processed: Math.max(prev.processed, result.index + 1) 
-            }));
+            batchProcessedCount++;
           }
         }
+        
+        // Update processing progress after batch completes
+        // This ensures React processes the update and UI reflects the change
+        setImportProgress(prev => {
+          const newProcessed = prev.processed + batchProcessedCount;
+          return { 
+            ...prev, 
+            processed: Math.min(newProcessed, totalAssets) 
+          };
+        });
+        
+        // Small delay to ensure React renders the update before next batch
+        await new Promise(resolve => setTimeout(resolve, 10));
 
         // Log progress
         console.log(`[Library] Processed batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(result.assets.length / BATCH_SIZE)}`);
@@ -1471,68 +1480,123 @@ export default function LibraryScreen() {
     }
   }, [activeWorkspaceId, loadAssets, session, processImport, showRetryNotificationBanner]);
 
-  // Periodic check for pending/failed assets and batch completion (every 10 seconds)
-  // Only retry assets from the most recent import session
-  // Also checks for completed batches to reload assets
+  // Use Supabase realtime to listen for asset updates (like web app)
+  // This automatically updates UI when assets are tagged
   useEffect(() => {
     if (!supabase || !activeWorkspaceId) return;
 
-    // Ensure batch polling is running (for Batch API async processing)
-    const { startBatchPolling } = require('@/utils/pollBatchStatus');
-    startBatchPolling();
-
-    const interval = setInterval(async () => {
-      // Check for completed batches first (assets with openai_batch_id that are now completed)
-      // This handles Batch API completion - check more frequently than retries
-      if (!isRefreshingForBatchRef.current && !isLoadingRef.current) {
-        const { data: batchAssets } = await supabase
-          .from('assets')
-          .select('id, auto_tag_status, openai_batch_id, tags')
-          .eq('workspace_id', activeWorkspaceId)
-          .not('openai_batch_id', 'is', null)
-          .eq('auto_tag_status', 'completed')
-          .limit(10);
-        
-        if (batchAssets && batchAssets.length > 0) {
-          // Check if any of these assets have tags now (batch completed)
-          const completedWithTags = batchAssets.filter((asset: any) => 
-            asset.tags && Array.isArray(asset.tags) && asset.tags.length > 0
+    console.log('[Library] 🔧 Setting up Supabase realtime subscription for assets...');
+    
+    // Subscribe to asset updates in this workspace
+    const channel = supabase
+      .channel('assets-updates')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'assets',
+          filter: `workspace_id=eq.${activeWorkspaceId}`,
+        },
+        (payload) => {
+          console.log('[Library] 🔔 Realtime update received:', payload.new);
+          const updatedAsset = payload.new as Asset;
+          const oldAsset = payload.old as Asset;
+          
+          // Check if asset was just completed with tags (status changed from pending to completed, or tags were added)
+          const wasJustCompleted = (
+            updatedAsset.auto_tag_status === 'completed' && 
+            updatedAsset.tags && 
+            Array.isArray(updatedAsset.tags) && 
+            updatedAsset.tags.length > 0 &&
+            (oldAsset?.auto_tag_status === 'pending' || !oldAsset?.tags || oldAsset.tags.length === 0)
           );
           
-          if (completedWithTags.length > 0) {
-            // Check if we recently refreshed for these batches
-            const now = Date.now();
-            const shouldRefresh = completedWithTags.every((asset: any) => {
-              const lastRefresh = lastBatchRefreshRef.current.get(asset.openai_batch_id || '');
-              return !lastRefresh || (now - lastRefresh) > 5000; // 5 second debounce per batch
+          if (wasJustCompleted) {
+            console.log(`[Library] 🔔 Asset ${updatedAsset.id} completed with tags:`, updatedAsset.tags);
+            
+            // Remove from loading set
+            setAutoTaggingAssets((prev) => {
+              const next = new Set(prev);
+              next.delete(updatedAsset.id);
+              return next;
             });
             
-            if (shouldRefresh) {
-              console.log(`[Library] ✅ Detected ${completedWithTags.length} batch-completed assets with tags - reloading assets`);
-              // Mark batches as refreshed
-              completedWithTags.forEach((asset: any) => {
-                if (asset.openai_batch_id) {
-                  lastBatchRefreshRef.current.set(asset.openai_batch_id, now);
-                }
-                setAutoTaggingAssets((prev) => {
-                  const next = new Set(prev);
-                  next.delete(asset.id);
-                  return next;
-                });
-              });
-              // Reload assets to show updated tags
-              isRefreshingForBatchRef.current = true;
-              try {
-                await loadAssets();
-              } finally {
-                setTimeout(() => {
-                  isRefreshingForBatchRef.current = false;
-                }, 2000);
+            // Show success indicator (green checkmark)
+            setRecentlyTaggedAssets((prev) => {
+              if (prev.has(updatedAsset.id)) {
+                // Already showing, don't add again (prevents double flash)
+                return prev;
               }
-            }
+              const next = new Set(prev);
+              next.add(updatedAsset.id);
+              return next;
+            });
+            
+            // Remove success indicator after 5.5 seconds (consistent with other success indicators)
+            setTimeout(() => {
+              setRecentlyTaggedAssets((prev) => {
+                const next = new Set(prev);
+                next.delete(updatedAsset.id);
+                return next;
+              });
+            }, 5500);
+            
+            // Update the asset in the current assets array
+            setAssets((prev) => {
+              const index = prev.findIndex(a => a.id === updatedAsset.id);
+              if (index >= 0) {
+                const updated = [...prev];
+                const existingAsset = updated[index];
+                // Preserve publicUrl from existing asset, or generate it if missing
+                const publicUrl = existingAsset.publicUrl || (updatedAsset.storage_path ? supabase?.storage.from('assets').getPublicUrl(updatedAsset.storage_path).data.publicUrl || '' : '');
+                updated[index] = { 
+                  ...existingAsset,
+                  ...updatedAsset,
+                  publicUrl, // Ensure publicUrl is preserved
+                  tags: updatedAsset.tags 
+                };
+                console.log(`[Library] 🔔 Updated asset ${updatedAsset.id} in assets array with tags:`, updatedAsset.tags);
+                return updated;
+              }
+              return prev;
+            });
           }
         }
-      }
+      )
+      .subscribe();
+
+    return () => {
+      console.log('[Library] 🛑 Cleaning up realtime subscription...');
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, activeWorkspaceId]);
+
+  // Periodic check for pending/failed assets (every 30 seconds)
+  // Only retry assets from the most recent import session
+  useEffect(() => {
+    if (!supabase || !activeWorkspaceId) {
+      console.log('[Library] ⏸️  Skipping batch polling setup - missing supabase or workspace');
+      return;
+    }
+
+    console.log('[Library] 🔧 Setting up batch polling...');
+    console.log('[Library] 🔧 Supabase available:', !!supabase);
+    console.log('[Library] 🔧 Active workspace ID:', activeWorkspaceId);
+
+    // Ensure batch polling is running (for Batch API async processing)
+    console.log('[Library] 🔧 Calling startBatchPolling directly...');
+    try {
+      startBatchPolling();
+      console.log('[Library] ✅ startBatchPolling called successfully');
+    } catch (error) {
+      console.error('[Library] ❌ Failed to start batch polling:', error);
+      console.error('[Library] ❌ Error details:', error instanceof Error ? error.stack : String(error));
+    }
+
+    const interval = setInterval(async () => {
+      // Note: Batch completion is handled by realtime subscription above
+      // This periodic check only handles retries for failed/pending assets
       
       // Note: Batch completion is handled above
       // This section handles retries for failed/pending assets
@@ -1654,12 +1718,16 @@ export default function LibraryScreen() {
           }
         });
       }
-    }, 10000); // Check every 10 seconds (more frequent for batch completion detection)
+    }, 30000); // Check every 30 seconds (only for retries, batch completion handled by callback)
 
     return () => {
       clearInterval(interval);
+      if (refreshTimeout) {
+        clearTimeout(refreshTimeout);
+      }
+      unsubscribe(); // Clean up batch completion callback
     };
-  }, [supabase, activeWorkspaceId, autoTaggingAssets, loadAssets, newlyImportedAssetIds, showRetryNotificationBanner]);
+  }, [supabase, activeWorkspaceId, loadAssets, newlyImportedAssetIds, showRetryNotificationBanner]);
 
   // Check for failed/pending assets when screen comes into focus
   useFocusEffect(

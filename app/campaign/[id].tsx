@@ -777,8 +777,10 @@ export default function CampaignDetailScreen() {
         try {
           const compressed = await compressImageForAI(imageUri);
           compressedImages.push(compressed);
-          // Update processing progress
-          setImportProgress(prev => ({ ...prev, processed: prev.processed + 1 }));
+          // Update processing progress after each image
+          setImportProgress(prev => ({ ...prev, processed: i + 1 }));
+          // Small delay to ensure React renders the update
+          await new Promise(resolve => setTimeout(resolve, 10));
         } catch (compressError) {
           console.error(`[CampaignDetail] Failed to compress photo ${i + 1}:`, compressError);
           // If compression fails but we have a hash, we can still proceed
@@ -787,7 +789,8 @@ export default function CampaignDetailScreen() {
             continue; // Skip if both hash and compression failed
           }
           // Still count as processed if we have a hash
-          setImportProgress(prev => ({ ...prev, processed: prev.processed + 1 }));
+          setImportProgress(prev => ({ ...prev, processed: i + 1 }));
+          await new Promise(resolve => setTimeout(resolve, 10));
         }
       }
 
