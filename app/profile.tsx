@@ -4,17 +4,21 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '@/contexts/AuthContext';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { supabase } from '@/lib/supabase';
 import dayjs from 'dayjs';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { MenuDrawer } from '@/components/MenuDrawer';
 import { BottomTabBar } from '@/components/BottomTabBar';
+import { WorkspaceAvatar } from '@/components/WorkspaceAvatar';
+import { WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
 import * as Haptics from 'expo-haptics';
 
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user, session, deleteAccount } = useAuth();
+  const { activeWorkspace } = useWorkspace();
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
@@ -29,6 +33,7 @@ export default function ProfileScreen() {
     confirm: false,
   });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isWorkspaceSheetOpen, setIsWorkspaceSheetOpen] = useState(false);
   const passwordModalScale = useRef(new Animated.Value(0.9)).current;
   const passwordModalOpacity = useRef(new Animated.Value(0)).current;
   const passwordBackdropOpacity = useRef(new Animated.Value(0)).current;
@@ -398,28 +403,49 @@ export default function ProfileScreen() {
           <Text className="text-[20px] font-bold text-gray-900" style={{ letterSpacing: -0.5 }}>
             Profile
           </Text>
-          <TouchableOpacity
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              setIsMenuOpen(true);
-            }}
-            activeOpacity={0.6}
-            className="h-9 w-9 items-center justify-center rounded-full"
-            style={{
-              backgroundColor: 'rgba(179, 143, 91, 0.1)',
-            }}
-          >
-            <MaterialCommunityIcons
-              name="menu"
-              size={20}
-              color="#b38f5b"
-            />
-          </TouchableOpacity>
+          {activeWorkspace && (
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setIsMenuOpen(true);
+              }}
+              activeOpacity={0.7}
+              className="flex-row items-center"
+              style={{
+                paddingLeft: 8,
+                paddingRight: 12,
+                paddingVertical: 6,
+                borderRadius: 20,
+                backgroundColor: 'rgba(0, 0, 0, 0.04)',
+              }}
+            >
+              <WorkspaceAvatar workspace={activeWorkspace} size={24} showName={false} />
+              <MaterialCommunityIcons
+                name="menu"
+                size={18}
+                color="#6b7280"
+                style={{ marginLeft: 8 }}
+              />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
       
       {/* Menu Drawer */}
-      <MenuDrawer visible={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
+      <MenuDrawer
+        visible={isMenuOpen}
+        onClose={() => setIsMenuOpen(false)}
+        workspaceSheetOpen={isWorkspaceSheetOpen}
+        onWorkspaceSheetChange={setIsWorkspaceSheetOpen}
+      />
+
+      {/* Workspace Sheet Modal - Rendered separately so it persists when drawer closes */}
+      <WorkspaceSwitcher
+        position="left"
+        externalModalOpen={isWorkspaceSheetOpen}
+        onExternalModalChange={setIsWorkspaceSheetOpen}
+        showButton={false}
+      />
 
       <ScrollView
         style={{ flex: 1 }}
