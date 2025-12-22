@@ -1466,52 +1466,66 @@ Deno.serve(async (req) => {
   
   // Support GET for batch polling
   if (req.method === 'GET') {
+    console.log(`[auto_tag_asset] 🔵 GET request received at ${new Date().toISOString()}`);
+    console.log(`[auto_tag_asset] 🔵 Request URL: ${req.url}`);
+    console.log(`[auto_tag_asset] 🔵 Request headers:`, Object.fromEntries(req.headers.entries()));
+    
     const url = new URL(req.url);
     const batchId = url.searchParams.get('batch_id');
     
+    console.log(`[auto_tag_asset] 🔵 Extracted batch_id: ${batchId}`);
+    
     if (!batchId) {
+      console.error(`[auto_tag_asset] ❌ GET request missing batch_id parameter`);
       return new Response(JSON.stringify({ error: 'batch_id parameter required' }), {
         status: 400,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
     
+    console.log(`[auto_tag_asset] 🔵 Processing batch ${batchId}...`);
+    
     const openAiKey = Deno.env.get('OPENAI_API_KEY');
     if (!openAiKey) {
+      console.error(`[auto_tag_asset] ❌ OpenAI API key not configured`);
       return new Response(JSON.stringify({ error: 'OpenAI API key not configured' }), {
         status: 500,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
     
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     if (!supabaseUrl || !supabaseServiceKey) {
+      console.error(`[auto_tag_asset] ❌ Supabase configuration missing`);
       return new Response(JSON.stringify({ error: 'Supabase configuration missing' }), {
         status: 500,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
     
     const supabaseClient = createClient(supabaseUrl, supabaseServiceKey);
     
     try {
+      console.log(`[auto_tag_asset] 🔵 Calling processBatchResults for batch ${batchId}...`);
       await processBatchResults(batchId, openAiKey, supabaseClient);
+      console.log(`[auto_tag_asset] ✅ Batch ${batchId} processed successfully`);
       return new Response(JSON.stringify({ 
         success: true, 
         message: 'Batch results processed successfully' 
       }), {
         status: 200,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     } catch (error) {
       console.error(`[auto_tag_asset] ❌ Failed to process batch ${batchId}:`, error);
+      console.error(`[auto_tag_asset] ❌ Error details:`, error instanceof Error ? error.stack : String(error));
       return new Response(JSON.stringify({ 
         error: 'Failed to process batch results',
         details: error instanceof Error ? error.message : String(error)
       }), {
         status: 500,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
   }
@@ -1730,12 +1744,13 @@ Deno.serve(async (req) => {
             }));
             
             // Return success response indicating batch was created
+            // Use 200 instead of 202 to ensure Supabase client handles it correctly
             return new Response(JSON.stringify({ 
               results: tagResults,
               batchId,
               message: 'Batch API job created successfully. Results will be processed asynchronously.',
             }), {
-              status: 202, // Accepted (async processing)
+              status: 200, // OK (changed from 202 to ensure client handles it correctly)
               headers: { 'Content-Type': 'application/json' },
             });
           } catch (batchError) {

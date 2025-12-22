@@ -1498,21 +1498,27 @@ export default function LibraryScreen() {
           filter: `workspace_id=eq.${activeWorkspaceId}`,
         },
         (payload) => {
-          console.log('[Library] 🔔 Realtime update received:', payload.new);
+          console.log('[Library] 🔔 Realtime update received:', {
+            assetId: payload.new?.id,
+            oldStatus: payload.old?.auto_tag_status,
+            newStatus: payload.new?.auto_tag_status,
+            oldTagsCount: payload.old?.tags?.length || 0,
+            newTagsCount: payload.new?.tags?.length || 0,
+          });
           const updatedAsset = payload.new as Asset;
           const oldAsset = payload.old as Asset;
           
-          // Check if asset was just completed with tags (status changed from pending to completed, or tags were added)
-          const wasJustCompleted = (
-            updatedAsset.auto_tag_status === 'completed' && 
-            updatedAsset.tags && 
-            Array.isArray(updatedAsset.tags) && 
-            updatedAsset.tags.length > 0 &&
-            (oldAsset?.auto_tag_status === 'pending' || !oldAsset?.tags || oldAsset.tags.length === 0)
-          );
+          // Check if asset was just completed with tags
+          // More lenient condition: if status is completed and has tags, update it
+          const hasTags = updatedAsset.tags && Array.isArray(updatedAsset.tags) && updatedAsset.tags.length > 0;
+          const isCompleted = updatedAsset.auto_tag_status === 'completed';
+          const wasPending = oldAsset?.auto_tag_status === 'pending';
+          const hadNoTags = !oldAsset?.tags || !Array.isArray(oldAsset.tags) || oldAsset.tags.length === 0;
+          
+          const wasJustCompleted = isCompleted && hasTags && (wasPending || hadNoTags);
           
           if (wasJustCompleted) {
-            console.log(`[Library] 🔔 Asset ${updatedAsset.id} completed with tags:`, updatedAsset.tags);
+            console.log(`[Library] 🔔✅ Asset ${updatedAsset.id} completed with ${updatedAsset.tags.length} tags:`, updatedAsset.tags);
             
             // Remove from loading set
             setAutoTaggingAssets((prev) => {
@@ -1525,10 +1531,12 @@ export default function LibraryScreen() {
             setRecentlyTaggedAssets((prev) => {
               if (prev.has(updatedAsset.id)) {
                 // Already showing, don't add again (prevents double flash)
+                console.log(`[Library] 🔔 Asset ${updatedAsset.id} already showing success indicator, skipping`);
                 return prev;
               }
               const next = new Set(prev);
               next.add(updatedAsset.id);
+              console.log(`[Library] 🔔✅ Added asset ${updatedAsset.id} to success indicators`);
               return next;
             });
             
@@ -1537,11 +1545,12 @@ export default function LibraryScreen() {
               setRecentlyTaggedAssets((prev) => {
                 const next = new Set(prev);
                 next.delete(updatedAsset.id);
+                console.log(`[Library] 🔔 Removed asset ${updatedAsset.id} from success indicators`);
                 return next;
               });
             }, 5500);
             
-            // Update the asset in the current assets array
+            // Update the asset in the current assets array (in place, no full refresh)
             setAssets((prev) => {
               const index = prev.findIndex(a => a.id === updatedAsset.id);
               if (index >= 0) {
@@ -1555,20 +1564,35 @@ export default function LibraryScreen() {
                   publicUrl, // Ensure publicUrl is preserved
                   tags: updatedAsset.tags 
                 };
-                console.log(`[Library] 🔔 Updated asset ${updatedAsset.id} in assets array with tags:`, updatedAsset.tags);
+                console.log(`[Library] 🔔✅ Updated asset ${updatedAsset.id} in assets array with ${updatedAsset.tags.length} tags`);
                 return updated;
+              } else {
+                console.log(`[Library] 🔔⚠️ Asset ${updatedAsset.id} not found in current assets array`);
               }
               return prev;
+            });
+          } else {
+            console.log(`[Library] 🔔⏭️ Skipping update for asset ${updatedAsset.id} - conditions not met:`, {
+              isCompleted,
+              hasTags,
+              wasPending,
+              hadNoTags
             });
           }
         }
       )
-      .subscribe((status) => {
+      .subscribe((status, err) => {
         console.log('[Library] 🔔 Realtime subscription status:', status);
         if (status === 'SUBSCRIBED') {
           console.log('[Library] ✅ Realtime subscription active - will receive asset updates');
         } else if (status === 'CHANNEL_ERROR') {
-          console.error('[Library] ❌ Realtime subscription error');
+          console.error('[Library] ❌ Realtime subscription error:', err);
+          console.error('[Library] ❌ This means realtime updates won\'t work - fallback callback will handle updates');
+          // Don't throw - let the fallback callback handle it
+        } else if (status === 'TIMED_OUT') {
+          console.warn('[Library] ⚠️ Realtime subscription timed out - fallback callback will handle updates');
+        } else if (status === 'CLOSED') {
+          console.log('[Library] 🔔 Realtime subscription closed');
         }
       });
 
@@ -1600,8 +1624,8 @@ export default function LibraryScreen() {
       console.error('[Library] ❌ Error details:', error instanceof Error ? error.stack : String(error));
     }
 
-    // Fallback: Register callback to refresh if realtime doesn't work
-    // This is a backup - realtime should handle updates automatically
+    // Fallback: Register callback to refresh assets if realtime doesn't work
+    // Since realtime is failing, we'll do a smart refresh that updates assets in place
     const unsubscribe = onBatchComplete(async (batchId?: string) => {
       console.log(`[Library] 🔔 Fallback callback triggered for batch ${batchId} - refreshing assets`);
       // Small delay to ensure database is updated
@@ -1609,56 +1633,105 @@ export default function LibraryScreen() {
         if (!isRefreshingForBatchRef.current && !isLoadingRef.current) {
           isRefreshingForBatchRef.current = true;
           try {
-            await loadAssets();
-            // Also check for completed assets and show success indicators
-            const { data: completedAssets } = await supabase
+            // Query recently completed assets (last 5 minutes) to catch batch completions
+            // This is more reliable than checking autoTaggingAssets which might be empty
+            const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+            
+            const { data: completedAssets, error } = await supabase
               .from('assets')
-              .select('id, auto_tag_status, tags')
+              .select('id, auto_tag_status, tags, storage_path, created_at, openai_batch_id')
               .eq('workspace_id', activeWorkspaceId)
               .eq('auto_tag_status', 'completed')
               .not('tags', 'is', null)
-              .limit(50);
+              .gte('created_at', fiveMinutesAgo) // Only recent assets
+              .limit(100);
+            
+            if (error) {
+              console.error('[Library] 🔔❌ Error querying completed assets:', error);
+              // Don't do full refresh - just log error and return
+              return;
+            }
             
             if (completedAssets && completedAssets.length > 0) {
-              // Remove from loading set and add to success indicators
-              setAutoTaggingAssets((prev) => {
-                const next = new Set(prev);
-                completedAssets.forEach((asset: any) => {
-                  if (asset.tags && Array.isArray(asset.tags) && asset.tags.length > 0) {
-                    next.delete(asset.id);
-                  }
-                });
-                return next;
-              });
+              console.log(`[Library] 🔔 Found ${completedAssets.length} recently completed assets, updating in place`);
               
-              // Show success indicators
-              setRecentlyTaggedAssets((prev) => {
-                const next = new Set(prev);
-                completedAssets.forEach((asset: any) => {
-                  if (asset.tags && Array.isArray(asset.tags) && asset.tags.length > 0 && !prev.has(asset.id)) {
-                    next.add(asset.id);
-                    // Auto-hide after 5.5 seconds
-                    setTimeout(() => {
-                      setRecentlyTaggedAssets((current) => {
-                        const updated = new Set(current);
-                        updated.delete(asset.id);
-                        return updated;
+              // Get current asset IDs for comparison
+              const currentAssetIds = new Set(assets.map(a => a.id));
+              
+              // Update assets in place (no full refresh = no flashing)
+              setAssets((prev) => {
+                const updated = [...prev];
+                let hasChanges = false;
+                
+                completedAssets.forEach((completedAsset: any) => {
+                  const index = updated.findIndex(a => a.id === completedAsset.id);
+                  if (index >= 0) {
+                    const existingAsset = updated[index];
+                    // Only update if tags actually changed or were added
+                    const existingTags = existingAsset.tags || [];
+                    const newTags = completedAsset.tags || [];
+                    const tagsChanged = JSON.stringify(existingTags.sort()) !== JSON.stringify(newTags.sort());
+                    
+                    if (tagsChanged && newTags.length > 0) {
+                      // Preserve publicUrl
+                      const publicUrl = existingAsset.publicUrl || 
+                        (completedAsset.storage_path ? supabase?.storage.from('assets').getPublicUrl(completedAsset.storage_path).data.publicUrl || '' : '');
+                      
+                      updated[index] = {
+                        ...existingAsset,
+                        ...completedAsset,
+                        publicUrl,
+                        tags: completedAsset.tags
+                      };
+                      hasChanges = true;
+                      console.log(`[Library] 🔔✅ Updated asset ${completedAsset.id} with ${newTags.length} tags`);
+                      
+                      // Remove from loading set
+                      setAutoTaggingAssets((current) => {
+                        const next = new Set(current);
+                        next.delete(completedAsset.id);
+                        return next;
                       });
-                    }, 5500);
+                      
+                      // Show success indicator (green checkmark)
+                      setRecentlyTaggedAssets((current) => {
+                        if (current.has(completedAsset.id)) {
+                          return current; // Already showing
+                        }
+                        const next = new Set(current);
+                        next.add(completedAsset.id);
+                        console.log(`[Library] 🔔✅ Added asset ${completedAsset.id} to success indicators (fallback)`);
+                        // Auto-hide after 5.5 seconds
+                        setTimeout(() => {
+                          setRecentlyTaggedAssets((latest) => {
+                            const final = new Set(latest);
+                            final.delete(completedAsset.id);
+                            return final;
+                          });
+                        }, 5500);
+                        return next;
+                      });
+                    }
+                  } else if (!currentAssetIds.has(completedAsset.id)) {
+                    // Asset not in current list - skip it (might be from a different workspace or already deleted)
+                    console.log(`[Library] 🔔 Asset ${completedAsset.id} not in current list, skipping`);
                   }
                 });
-                return next;
+                
+                return hasChanges ? updated : prev;
               });
+            } else {
+              console.log('[Library] 🔔 No recently completed assets found in fallback query');
             }
           } catch (error) {
-            console.error('[Library] 🔔❌ Error in fallback refresh:', error);
+            console.error('[Library] 🔔❌ Error in fallback update:', error);
           } finally {
             setTimeout(() => {
               isRefreshingForBatchRef.current = false;
-            }, 1000);
+            }, 500);
           }
         }
-      }, 1000); // 1 second delay to ensure DB is updated
+      }, 2000); // 2 second delay to ensure DB is updated
     });
 
     const interval = setInterval(async () => {

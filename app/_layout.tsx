@@ -93,13 +93,29 @@ function RootLayoutNav() {
     return () => clearTimeout(safetyTimer);
   }, [hasNavigated, showContent]);
 
-  // Initialize batch polling when app loads
+  // Initialize batch polling when app loads and session is available
   useEffect(() => {
-    initializeBatchPolling();
+    console.log('[RootLayout] 🔧 Batch polling effect triggered', { hasSession: !!session, loading });
+    // Only start polling if we have a session (user is logged in)
+    if (session && !loading) {
+      console.log('[RootLayout] 🚀🚀🚀 Initializing batch polling...');
+      console.log('[RootLayout] 🚀 Session user ID:', session.user?.id);
+      try {
+        initializeBatchPolling();
+        console.log('[RootLayout] ✅ initializeBatchPolling called successfully');
+      } catch (error) {
+        console.error('[RootLayout] ❌ Failed to initialize batch polling:', error);
+      }
+    } else {
+      console.log('[RootLayout] ⏸️  Not initializing batch polling - no session or still loading');
+    }
     return () => {
-      stopBatchPolling();
+      if (session) {
+        console.log('[RootLayout] 🛑 Cleaning up batch polling...');
+        stopBatchPolling();
+      }
     };
-  }, []);
+  }, [session, loading]);
 
   useEffect(() => {
     // Optimized: Hide splash as soon as loading screen is ready, proceed immediately after

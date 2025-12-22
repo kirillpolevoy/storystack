@@ -208,14 +208,22 @@ class AutoTagQueue {
     const retryCount = batch[0]?.retryCount || 0;
 
     try {
+      const isBulkRequest = batch.length >= this.bulkThreshold;
       console.log(`[AutoTagQueue] Processing batch of ${batch.length} assets (attempt ${retryCount + 1}/${this.maxRetries + 1})`);
+      console.log(`[AutoTagQueue] ${isBulkRequest ? '🚀 BULK REQUEST' : '📦 Normal batch'}: ${batch.length} ${isBulkRequest ? '>= ' + this.bulkThreshold : '< ' + this.bulkThreshold} images`);
+      console.log(`[AutoTagQueue] Edge function will ${isBulkRequest ? 'use OpenAI Batch API (50% cost savings)' : 'use synchronous API (immediate results)'}`);
       
-      // Log image URLs being sent (for debugging A2 usage)
+      // Log image URLs being sent (for debugging A2 usage) - only log first 3 and last to avoid spam
       batch.forEach((req, idx) => {
         const isA2 = req.imageUrl.includes('/ai/');
-        console.log(`[AutoTagQueue] Image ${idx + 1}: ${req.imageUrl.substring(0, 100)}...`);
-        console.log(`[AutoTagQueue]   Is A2? ${isA2 ? 'YES ✅' : 'NO ⚠️ (A1 - edge function should convert to A2)'}`);
+        if (idx < 3 || idx === batch.length - 1) {
+          console.log(`[AutoTagQueue] Image ${idx + 1}/${batch.length}: ${req.imageUrl.substring(0, 100)}...`);
+          console.log(`[AutoTagQueue]   Is A2? ${isA2 ? 'YES ✅' : 'NO ⚠️ (A1 - edge function should convert to A2)'}`);
+        }
       });
+      if (batch.length > 4) {
+        console.log(`[AutoTagQueue] ... (${batch.length - 4} more images)`);
+      }
 
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'autoTagQueue.ts:187',message:'Sending batch request to edge function',data:{batchSize:batch.length,assetIds:batch.map(r=>r.assetId),imageUrls:batch.map(r=>r.imageUrl?.substring(0,100))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
@@ -261,21 +269,39 @@ class AutoTagQueue {
         
         console.log(`[AutoTagQueue] 📥 Parsed response:`, JSON.stringify(result, null, 2));
         const results = result.results || [];
+        const batchId = result.batchId; // Check for batchId (Batch API async processing)
         
         // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'autoTagQueue.ts:217',message:'Parsed batch results',data:{resultsCount:results.length,expectedCount:batch.length,results:results.map((r:any)=>({assetId:r.assetId,tagsCount:r.tags?.length||0})),batchAssetIds:batch.map(r=>r.assetId)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'autoTagQueue.ts:217',message:'Parsed batch results',data:{resultsCount:results.length,expectedCount:batch.length,results:results.map((r:any)=>({assetId:r.assetId,tagsCount:r.tags?.length||0})),batchAssetIds:batch.map(r=>r.assetId),batchId:batchId||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
         // #endregion
         
-        console.log(`[AutoTagQueue] ✅ Batch success! Processed ${results.length} assets`);
+        // If batchId is present, this is a Batch API async job - add to polling queue
+        if (batchId) {
+          console.log(`[AutoTagQueue] 🚀 Batch API job created: ${batchId} - adding to polling queue`);
+          try {
+            // Dynamically import to avoid circular dependencies
+            const { addBatchToPoll, startBatchPolling } = await import('@/utils/pollBatchStatus');
+            addBatchToPoll(batchId);
+            startBatchPolling();
+            console.log(`[AutoTagQueue] ✅ Added batch ${batchId} to polling queue`);
+          } catch (pollError) {
+            console.error(`[AutoTagQueue] ❌ Failed to add batch to polling queue:`, pollError);
+            // Continue processing - polling will pick it up from database
+          }
+        }
+        
+        console.log(`[AutoTagQueue] ✅ Batch success! Processed ${results.length} assets${batchId ? ` (async batch: ${batchId})` : ''}`);
         console.log(`[AutoTagQueue] Results array:`, JSON.stringify(results, null, 2));
         
-        if (results.length === 0) {
-          console.error(`[AutoTagQueue] ❌❌❌ CRITICAL: Response has empty results array! ❌❌❌`);
+        if (results.length === 0 && !batchId) {
+          console.error(`[AutoTagQueue] ❌❌❌ CRITICAL: Response has empty results array and no batchId! ❌❌❌`);
           console.error(`[AutoTagQueue] Full response object:`, JSON.stringify(result, null, 2));
           // #region agent log
           fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'autoTagQueue.ts:222',message:'Empty results array',data:{batchSize:batch.length,fullResponse:JSON.stringify(result)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
           // #endregion
           // Still process callbacks with empty tags so UI can update
+        } else if (results.length === 0 && batchId) {
+          console.log(`[AutoTagQueue] ℹ️  Empty results array is expected for Batch API (batchId: ${batchId}) - tags will be populated when batch completes`);
         }
         
         // Map results back to requests
@@ -699,10 +725,21 @@ export function queueBulkAutoTag(
   console.log(`[AutoTagQueue] 📦 Bulk enqueuing ${requests.length} assets for SINGLE batch processing`);
   console.log(`[AutoTagQueue] This will send all ${requests.length} images to OpenAI in ONE API call`);
   
+  // Clear any existing queue to ensure we start fresh for bulk operations
+  // This prevents mixing with any existing queued items
+  const queue = autoTagQueue as any;
+  const wasProcessing = queue.processing;
+  const existingQueueLength = queue.queue.length;
+  
+  if (existingQueueLength > 0) {
+    console.log(`[AutoTagQueue] ⚠️  Queue already has ${existingQueueLength} items - clearing for bulk operation`);
+    queue.queue = [];
+  }
+  
   // Add all requests to queue without triggering individual processing
   // We'll process them all together as a bulk batch
   requests.forEach(req => {
-    (autoTagQueue as any).queue.push({
+    queue.queue.push({
       assetId: req.assetId,
       imageUrl: req.imageUrl,
       onSuccess: req.onSuccess,
@@ -712,14 +749,40 @@ export function queueBulkAutoTag(
     });
   });
   
-  console.log(`[AutoTagQueue] Queue now has ${(autoTagQueue as any).queue.length} items`);
+  console.log(`[AutoTagQueue] Queue now has ${queue.queue.length} items (all bulk items)`);
+  
+  // Check if this qualifies for Batch API (20+ images)
+  const willUseBatchAPI = requests.length >= queue.bulkThreshold;
+  if (willUseBatchAPI) {
+    console.log(`[AutoTagQueue] ✅ BULK OPERATION: ${requests.length} >= ${queue.bulkThreshold} images - will use OpenAI Batch API (50% cost savings)`);
+  } else {
+    console.log(`[AutoTagQueue] 📦 Normal batch: ${requests.length} < ${queue.bulkThreshold} images - will use synchronous API`);
+  }
   
   // Trigger bulk batch processing immediately
   // This will send all queued items in a single batch to OpenAI
-  if (!(autoTagQueue as any).processing) {
-    console.log(`[AutoTagQueue] 🚀 Triggering bulk batch processing for ${requests.length} assets`);
-    (autoTagQueue as any).processBatch(true);
+  if (!wasProcessing) {
+    console.log(`[AutoTagQueue] 🚀 Triggering bulk batch processing for ${requests.length} assets (isBulkOperation=true)`);
+    queue.processBatch(true);
   } else {
-    console.log(`[AutoTagQueue] Already processing, bulk batch will be processed after current batch completes`);
+    console.log(`[AutoTagQueue] ⚠️  Already processing, waiting for current batch to complete...`);
+    // Wait for current processing to finish, then process bulk batch
+    const checkInterval = setInterval(() => {
+      if (!queue.processing) {
+        clearInterval(checkInterval);
+        console.log(`[AutoTagQueue] ✅ Previous batch complete, now processing bulk batch of ${requests.length} assets`);
+        queue.processBatch(true);
+      }
+    }, 100);
+    
+    // Safety timeout - if processing takes too long, force it
+    setTimeout(() => {
+      clearInterval(checkInterval);
+      if (queue.processing) {
+        console.log(`[AutoTagQueue] ⚠️  Processing timeout, forcing bulk batch processing`);
+        queue.processing = false; // Reset processing flag
+        queue.processBatch(true);
+      }
+    }, 30000); // 30 second timeout
   }
 }
