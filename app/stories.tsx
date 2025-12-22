@@ -10,6 +10,8 @@ import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { StoryWithAssets } from '@/types';
 import { getStories, deleteStory } from '@/utils/stories';
 import { MenuDrawer } from '@/components/MenuDrawer';
+import { WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
+import { WorkspaceAvatar } from '@/components/WorkspaceAvatar';
 import { BottomTabBar } from '@/components/BottomTabBar';
 import * as Haptics from 'expo-haptics';
 
@@ -17,11 +19,12 @@ export default function StoriesScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
-  const { activeWorkspaceId } = useWorkspace();
+  const { activeWorkspaceId, activeWorkspace } = useWorkspace();
   const [stories, setStories] = useState<StoryWithAssets[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isWorkspaceSheetOpen, setIsWorkspaceSheetOpen] = useState(false);
   
   // Animation refs for empty state
   const iconScale = useRef(new Animated.Value(0)).current;
@@ -335,23 +338,33 @@ export default function StoriesScreen() {
                 </Text>
               </TouchableOpacity>
             )}
-            <TouchableOpacity
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setIsMenuOpen(true);
-              }}
-              activeOpacity={0.6}
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 18,
-                backgroundColor: 'rgba(179, 143, 91, 0.1)',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <MaterialCommunityIcons name="menu" size={20} color="#b38f5b" />
-            </TouchableOpacity>
+            {/* Workspace + Menu Button - Shows context AND provides clear menu access */}
+            {activeWorkspace && (
+              <TouchableOpacity
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setIsMenuOpen(true);
+                }}
+                activeOpacity={0.7}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  paddingLeft: 8,
+                  paddingRight: 12,
+                  paddingVertical: 6,
+                  borderRadius: 20,
+                  backgroundColor: 'rgba(0, 0, 0, 0.04)',
+                }}
+              >
+                <WorkspaceAvatar workspace={activeWorkspace} size={24} showName={false} />
+                <MaterialCommunityIcons
+                  name="menu"
+                  size={18}
+                  color="#6b7280"
+                  style={{ marginLeft: 8 }}
+                />
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 
@@ -540,7 +553,20 @@ export default function StoriesScreen() {
       )}
 
       {/* Menu Drawer */}
-      <MenuDrawer visible={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
+      <MenuDrawer 
+        visible={isMenuOpen} 
+        onClose={() => setIsMenuOpen(false)}
+        workspaceSheetOpen={isWorkspaceSheetOpen}
+        onWorkspaceSheetChange={setIsWorkspaceSheetOpen}
+      />
+      
+      {/* Workspace Sheet Modal - Rendered separately so it persists when drawer closes */}
+      <WorkspaceSwitcher 
+        position="left"
+        externalModalOpen={isWorkspaceSheetOpen}
+        onExternalModalChange={setIsWorkspaceSheetOpen}
+        showButton={false}
+      />
 
       {/* Bottom Tab Bar */}
       <BottomTabBar onAddPress={() => router.push('/')} />

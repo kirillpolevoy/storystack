@@ -25,6 +25,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Create trigger on auth.users INSERT
+DROP TRIGGER IF EXISTS trigger_create_default_workspace ON auth.users;
 CREATE TRIGGER trigger_create_default_workspace
   AFTER INSERT ON auth.users
   FOR EACH ROW

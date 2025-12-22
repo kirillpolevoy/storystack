@@ -26,6 +26,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { StoryHeader } from '@/components/StoryHeader';
 import { MenuDrawer } from '@/components/MenuDrawer';
+import { WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
 import * as Haptics from 'expo-haptics';
 
 // Color palette
@@ -116,6 +117,7 @@ export default function StoryBuilderScreen() {
   const [showStoryPicker, setShowStoryPicker] = useState(false);
   const [existingStories, setExistingStories] = useState<any[]>([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isWorkspaceSheetOpen, setIsWorkspaceSheetOpen] = useState(false);
 
   // Initialize story name from params if provided
   useEffect(() => {
@@ -777,7 +779,20 @@ export default function StoryBuilderScreen() {
         </Modal>
 
         {/* Menu Drawer */}
-        <MenuDrawer visible={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
+        <MenuDrawer 
+          visible={isMenuOpen} 
+          onClose={() => setIsMenuOpen(false)}
+          workspaceSheetOpen={isWorkspaceSheetOpen}
+          onWorkspaceSheetChange={setIsWorkspaceSheetOpen}
+        />
+        
+        {/* Workspace Sheet Modal - Rendered separately so it persists when drawer closes */}
+        <WorkspaceSwitcher 
+          position="left"
+          externalModalOpen={isWorkspaceSheetOpen}
+          onExternalModalChange={setIsWorkspaceSheetOpen}
+          showButton={false}
+        />
       </View>
     </GestureHandlerRootView>
   );

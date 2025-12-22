@@ -649,30 +649,34 @@ export default function TagsPage() {
     <div className="flex h-full flex-col bg-background">
       <div className="border-b border-gray-200 bg-white">
         <div className="px-8 pt-4">
+          {/* Row 1: Title + Actions */}
           <div className="flex items-center justify-between pb-4">
             <div>
-              <h1 className="text-2xl font-semibold text-gray-900 mb-1">
+              <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">
                 Tag Management
               </h1>
-              <p className="text-sm text-gray-500">Organize your content taxonomy</p>
+              <p className="text-sm text-gray-500 mt-1">Organize your content taxonomy</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
               <Button
                 variant="outline"
                 onClick={() => clearPendingAssetsMutation.mutate()}
                 disabled={clearPendingAssetsMutation.isPending}
+                className="h-9 px-4 text-sm font-medium border-gray-300 text-gray-700 hover:bg-gray-50"
               >
                 <RefreshCw className={`mr-2 h-4 w-4 ${clearPendingAssetsMutation.isPending ? 'animate-spin' : ''}`} />
                 Clear Stuck Pending
               </Button>
               <Button
                 onClick={() => setShowNewTagDialog(true)}
+                className="h-9 px-4 text-sm font-semibold bg-accent hover:bg-accent/90 shadow-sm"
               >
-                <Plus className="mr-2 h-5 w-5" />
+                <Plus className="mr-2 h-4 w-4" />
                 New Tag
               </Button>
             </div>
           </div>
+          {/* Row 2: Search */}
           <div className="relative pb-3">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
             <Input
@@ -680,7 +684,7 @@ export default function TagsPage() {
               placeholder="Search tags..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9"
+              className="pl-9 h-9 text-sm"
             />
           </div>
         </div>

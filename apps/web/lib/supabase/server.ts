@@ -12,29 +12,41 @@ export async function createClient() {
     throw new Error(errorMsg)
   }
 
-  const cookieStore = await cookies()
+  try {
+    const cookieStore = await cookies()
 
-  return createServerClient(
-    supabaseUrl,
-    supabaseAnonKey,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
+    return createServerClient(
+      supabaseUrl,
+      supabaseAnonKey,
+      {
+        cookies: {
+          getAll() {
+            try {
+              return cookieStore.getAll()
+            } catch (error) {
+              console.error('[createClient] Error getting cookies:', error)
+              return []
+            }
+          },
+          setAll(cookiesToSet: Array<{ name: string; value: string; options?: any }>) {
+            try {
+              cookiesToSet.forEach(({ name, value, options }) =>
+                cookieStore.set(name, value, options)
+              )
+            } catch (error) {
+              // The `setAll` method was called from a Server Component.
+              // This can be ignored if you have middleware refreshing
+              // user sessions.
+              console.error('[createClient] Error setting cookies:', error)
+            }
+          },
         },
-        setAll(cookiesToSet: Array<{ name: string; value: string; options?: any }>) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {
-            // The `setAll` method was called from a Server Component.
-            // This can be ignored if you have middleware refreshing
-            // user sessions.
-          }
-        },
-      },
-    }
-  )
+      }
+    )
+  } catch (error) {
+    console.error('[createClient] Error creating Supabase client:', error)
+    // Re-throw with more context
+    throw new Error(`Failed to create Supabase client: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 

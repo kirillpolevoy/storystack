@@ -27,7 +27,19 @@ export function SignupForm() {
         password,
       })
 
-      if (error) throw error
+      if (error) {
+        console.error('[SignupForm] Signup error:', error)
+        // Provide more helpful error messages
+        let errorMessage = error.message || 'Failed to sign up'
+        if (error.message?.includes('500')) {
+          errorMessage = 'Server error during signup. Please try again or contact support.'
+        } else if (error.message?.includes('already registered')) {
+          errorMessage = 'An account with this email already exists. Please sign in instead.'
+        } else if (error.message?.includes('password')) {
+          errorMessage = 'Password must be at least 6 characters long.'
+        }
+        throw new Error(errorMessage)
+      }
 
       if (data.session && data.user) {
         // Process workspace invitations for the new user
@@ -52,7 +64,8 @@ export function SignupForm() {
         setError(null)
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to sign up')
+      console.error('[SignupForm] Signup failed:', err)
+      setError(err.message || 'Failed to sign up. Please try again.')
       setLoading(false)
     }
   }

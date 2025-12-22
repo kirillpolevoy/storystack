@@ -2,6 +2,8 @@ import { Text, TouchableOpacity, View } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
+import { WorkspaceAvatar } from './WorkspaceAvatar';
 
 type StoryHeaderProps = {
   onMenuPress?: () => void;
@@ -13,6 +15,7 @@ type StoryHeaderProps = {
 
 export function StoryHeader({ onMenuPress, onAddMorePress, onBackPress, showAddMore = false, showBack = false }: StoryHeaderProps) {
   const insets = useSafeAreaInsets();
+  const { activeWorkspace } = useWorkspace();
 
   return (
     <View
@@ -63,22 +66,29 @@ export function StoryHeader({ onMenuPress, onAddMorePress, onBackPress, showAddM
               </Text>
             </TouchableOpacity>
           )}
-          {onMenuPress && (
+          {/* Workspace + Menu Button - Shows context AND provides clear menu access */}
+          {onMenuPress && activeWorkspace && (
             <TouchableOpacity
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 onMenuPress();
               }}
-              activeOpacity={0.6}
-              className="h-9 w-9 items-center justify-center rounded-full"
+              activeOpacity={0.7}
+              className="flex-row items-center"
               style={{
-                backgroundColor: 'rgba(179, 143, 91, 0.1)',
+                paddingLeft: 8,
+                paddingRight: 12,
+                paddingVertical: 6,
+                borderRadius: 20,
+                backgroundColor: 'rgba(0, 0, 0, 0.04)',
               }}
             >
+              <WorkspaceAvatar workspace={activeWorkspace} size={24} showName={false} />
               <MaterialCommunityIcons
                 name="menu"
-                size={20}
-                color="#b38f5b"
+                size={18}
+                color="#6b7280"
+                style={{ marginLeft: 8 }}
               />
             </TouchableOpacity>
           )}

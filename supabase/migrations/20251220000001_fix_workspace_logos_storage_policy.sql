@@ -51,6 +51,5 @@ CREATE POLICY "workspace_logos_update_owner"
     )
   );
 
-COMMENT ON POLICY "workspace_logos_insert_owner" ON storage.objects IS 'Allow workspace owners to upload logos to their workspace';
-COMMENT ON POLICY "workspace_logos_update_owner" ON storage.objects IS 'Allow workspace owners to update logos in their workspace';
+-- Note: Comments on storage policies require owner permissions, so they're omitted here
 

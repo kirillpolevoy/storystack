@@ -5,13 +5,10 @@ import {
   View, 
   Text, 
   ScrollView, 
-  TextInput, 
   Alert,
   Animated,
   Easing,
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
+  Pressable,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // Try to import BlurView, fallback to regular View if not available
@@ -29,44 +26,57 @@ import { Workspace } from '@/types';
 
 type WorkspaceSwitcherProps = {
   position?: 'left' | 'center' | 'right';
+  onMenuClose?: () => void; // Callback to close parent menu drawer before opening workspace sheet
+  externalModalOpen?: boolean; // External control of modal state
+  onExternalModalChange?: (open: boolean) => void; // Callback when modal state should change externally
+  showButton?: boolean; // Whether to show the button (default: true, false when rendering modal-only)
 };
 
-export function WorkspaceSwitcher({ position = 'left' }: WorkspaceSwitcherProps) {
+export function WorkspaceSwitcher({ position = 'left', onMenuClose, externalModalOpen, onExternalModalChange, showButton = true }: WorkspaceSwitcherProps) {
   const {
     activeWorkspace,
     workspaces,
     switchWorkspace,
-    createNewWorkspace,
     loading,
   } = useWorkspace();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
-  const [newWorkspaceName, setNewWorkspaceName] = useState('');
-  const [isInputFocused, setIsInputFocused] = useState(false);
+  const [internalModalOpen, setInternalModalOpen] = useState(false);
   const insets = useSafeAreaInsets();
+  
+  // Use external state if provided, otherwise use internal state
+  const isModalOpen = externalModalOpen !== undefined ? externalModalOpen : internalModalOpen;
+  const setIsModalOpen = (open: boolean) => {
+    if (onExternalModalChange) {
+      onExternalModalChange(open);
+    } else {
+      setInternalModalOpen(open);
+    }
+  };
 
-  // Consumer-grade animations - smooth and delightful
+  // Apple-grade animations - refined spring physics
   const modalTranslateY = useRef(new Animated.Value(1000)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
   const buttonScale = useRef(new Animated.Value(1)).current;
+  const buttonOpacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     if (isModalOpen) {
+      // Smooth sheet animation
       Animated.parallel([
         Animated.spring(modalTranslateY, {
           toValue: 0,
-          tension: 68,
-          friction: 12,
+          tension: 70,
+          friction: 13,
           useNativeDriver: true,
         }),
         Animated.timing(backdropOpacity, {
           toValue: 1,
-          duration: 200,
+          duration: 220,
           easing: Easing.out(Easing.ease),
           useNativeDriver: true,
         }),
       ]).start();
     } else {
+      // Reset for next open
       modalTranslateY.setValue(1000);
       backdropOpacity.setValue(0);
     }
@@ -74,6 +84,7 @@ export function WorkspaceSwitcher({ position = 'left' }: WorkspaceSwitcherProps)
 
   const handleWorkspacePress = async (workspace: Workspace) => {
     if (workspace.id === activeWorkspace?.id) {
+      // Already active - just close
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       handleClose();
       return;
@@ -82,39 +93,16 @@ export function WorkspaceSwitcher({ position = 'left' }: WorkspaceSwitcherProps)
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       await switchWorkspace(workspace.id);
+      
+      // Close with smooth animation
       handleClose();
     } catch (error) {
       console.error('[WorkspaceSwitcher] Error switching workspace:', error);
-      Alert.alert(
-        'Error',
-        error instanceof Error ? error.message : 'Failed to switch workspace'
-      );
-    }
-  };
-
-  const handleCreateWorkspace = async () => {
-    if (!newWorkspaceName.trim()) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      return;
-    }
-
-    try {
-      setIsCreatingWorkspace(true);
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      await createNewWorkspace(newWorkspaceName.trim());
-      setNewWorkspaceName('');
-      setIsInputFocused(false);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      handleClose();
-    } catch (error) {
-      console.error('[WorkspaceSwitcher] Error creating workspace:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert(
-        'Error',
-        error instanceof Error ? error.message : 'Failed to create workspace'
+        'Unable to Switch',
+        error instanceof Error ? error.message : 'Please try again'
       );
-    } finally {
-      setIsCreatingWorkspace(false);
     }
   };
 
@@ -123,43 +111,65 @@ export function WorkspaceSwitcher({ position = 'left' }: WorkspaceSwitcherProps)
     Animated.parallel([
       Animated.spring(modalTranslateY, {
         toValue: 1000,
-        tension: 68,
-        friction: 12,
+        tension: 70,
+        friction: 13,
         useNativeDriver: true,
       }),
       Animated.timing(backdropOpacity, {
         toValue: 0,
-        duration: 200,
+        duration: 180,
         easing: Easing.in(Easing.ease),
         useNativeDriver: true,
       }),
     ]).start(() => {
       setIsModalOpen(false);
-      setIsInputFocused(false);
-      setNewWorkspaceName('');
     });
   };
 
   const handleButtonPress = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     
-    // Subtle press feedback
-    Animated.sequence([
+    // Subtle press animation
+    Animated.parallel([
       Animated.spring(buttonScale, {
-        toValue: 0.97,
-        tension: 400,
-        friction: 25,
+        toValue: 0.98,
+        tension: 350,
+        friction: 22,
         useNativeDriver: true,
       }),
-      Animated.spring(buttonScale, {
-        toValue: 1,
-        tension: 400,
-        friction: 25,
+      Animated.timing(buttonOpacity, {
+        toValue: 0.8,
+        duration: 100,
         useNativeDriver: true,
       }),
-    ]).start();
+    ]).start(() => {
+      Animated.parallel([
+        Animated.spring(buttonScale, {
+          toValue: 1,
+          tension: 350,
+          friction: 22,
+          useNativeDriver: true,
+        }),
+        Animated.timing(buttonOpacity, {
+          toValue: 1,
+          duration: 100,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    });
     
-    setIsModalOpen(true);
+    // Sequential flow: Close menu drawer first, then open workspace sheet
+    if (onMenuClose) {
+      // Close the drawer first
+      onMenuClose();
+      // Wait for drawer close animation (250ms) before opening workspace sheet
+      setTimeout(() => {
+        setIsModalOpen(true);
+      }, 280); // Slightly longer than drawer close animation for smooth transition
+    } else {
+      // Fallback: open immediately if no menu close callback
+      setIsModalOpen(true);
+    }
   };
 
   if (loading || !activeWorkspace) {
@@ -167,8 +177,8 @@ export function WorkspaceSwitcher({ position = 'left' }: WorkspaceSwitcherProps)
       <View
         style={{
           height: 50,
-          borderRadius: 12,
-          backgroundColor: 'rgba(0, 0, 0, 0.03)',
+          borderRadius: 10,
+          backgroundColor: 'rgba(0, 0, 0, 0.02)',
         }}
       />
     );
@@ -176,60 +186,79 @@ export function WorkspaceSwitcher({ position = 'left' }: WorkspaceSwitcherProps)
 
   return (
     <>
-      {/* Consumer-Grade Button - Clean & Simple */}
-      <Animated.View
-        style={{
-          transform: [{ scale: buttonScale }],
-        }}
-      >
-        <TouchableOpacity
-          onPress={handleButtonPress}
-          activeOpacity={0.7}
+      {/* Menu-Integrated Button - Render if showButton is true */}
+      {showButton && (
+        <Animated.View
           style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingVertical: 12,
-            paddingHorizontal: 16,
-            borderRadius: 12,
-            backgroundColor: 'rgba(0, 0, 0, 0.02)',
-            borderWidth: 1,
-            borderColor: 'rgba(0, 0, 0, 0.06)',
+            transform: [{ scale: buttonScale }],
+            opacity: buttonOpacity,
           }}
         >
-          <WorkspaceAvatar workspace={activeWorkspace} size={36} showName={false} />
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text
+          <Pressable
+            onPress={handleButtonPress}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              paddingVertical: 12,
+              paddingHorizontal: 20,
+              borderRadius: 10,
+              backgroundColor: pressed ? 'rgba(0, 0, 0, 0.03)' : 'transparent',
+            })}
+          >
+            {/* Avatar Container - Matches menu icon styling */}
+            <View
               style={{
-                fontSize: 16,
-                fontWeight: '600',
-                color: '#000000',
-                letterSpacing: -0.3,
-              }}
-              numberOfLines={1}
-            >
-              {activeWorkspace.name}
-            </Text>
-            <Text
-              style={{
-                fontSize: 13,
-                fontWeight: '400',
-                color: '#8e8e93',
-                letterSpacing: -0.1,
-                marginTop: 2,
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                backgroundColor: 'rgba(0, 0, 0, 0.04)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginRight: 12,
+                overflow: 'hidden',
               }}
             >
-              {workspaces.length} {workspaces.length === 1 ? 'workspace' : 'workspaces'}
-            </Text>
-          </View>
-          <MaterialCommunityIcons
-            name="chevron-right"
-            size={20}
-            color="#8e8e93"
-          />
-        </TouchableOpacity>
-      </Animated.View>
+              <WorkspaceAvatar workspace={activeWorkspace} size={28} showName={false} />
+            </View>
+            
+            {/* Workspace Info */}
+            <View style={{ flex: 1 }}>
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontWeight: '600',
+                  color: '#111827',
+                  letterSpacing: -0.2,
+                }}
+                numberOfLines={1}
+              >
+                {activeWorkspace.name}
+              </Text>
+              <Text
+                style={{
+                  fontSize: 13,
+                  fontWeight: '400',
+                  color: '#6b7280',
+                  letterSpacing: -0.1,
+                  marginTop: 1,
+                }}
+              >
+                {workspaces.length} {workspaces.length === 1 ? 'workspace' : 'workspaces'}
+              </Text>
+            </View>
+            
+            {/* Chevron - Subtle indicator */}
+            <MaterialCommunityIcons
+              name="chevron-right"
+              size={18}
+              color="#6b7280"
+              style={{ marginLeft: 4 }}
+            />
+          </Pressable>
+        </Animated.View>
+      )}
 
-      {/* Consumer-Grade Modal Sheet */}
+      {/* Consumer-Grade Modal Sheet - Always render modal */}
       <Modal
         visible={isModalOpen}
         transparent
@@ -237,24 +266,20 @@ export function WorkspaceSwitcher({ position = 'left' }: WorkspaceSwitcherProps)
         onRequestClose={handleClose}
         statusBarTranslucent
       >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
-        >
+        <View style={{ flex: 1 }}>
           {/* Backdrop */}
-          <TouchableOpacity
-            activeOpacity={1}
+          <Pressable
             onPress={handleClose}
             style={{ flex: 1 }}
           >
             <Animated.View
               style={{
                 flex: 1,
-                backgroundColor: 'rgba(0, 0, 0, 0.35)',
+                backgroundColor: 'rgba(0, 0, 0, 0.4)',
                 opacity: backdropOpacity,
               }}
             />
-          </TouchableOpacity>
+          </Pressable>
 
           {/* Sheet Content */}
           <Animated.View
@@ -267,34 +292,34 @@ export function WorkspaceSwitcher({ position = 'left' }: WorkspaceSwitcherProps)
             }}
           >
             <BlurView
-              intensity={90}
+              intensity={95}
               tint="light"
               style={{
-                borderTopLeftRadius: 24,
-                borderTopRightRadius: 24,
-                backgroundColor: 'rgba(255, 255, 255, 0.98)',
+                borderTopLeftRadius: 20,
+                borderTopRightRadius: 20,
+                backgroundColor: 'rgba(255, 255, 255, 0.99)',
                 paddingBottom: Math.max(insets.bottom, 20),
                 shadowColor: '#000',
                 shadowOffset: { width: 0, height: -2 },
-                shadowOpacity: 0.1,
-                shadowRadius: 16,
-                elevation: 16,
+                shadowOpacity: 0.12,
+                shadowRadius: 20,
+                elevation: 20,
               }}
             >
               {/* Handle Indicator */}
               <View
                 style={{
                   alignItems: 'center',
-                  paddingTop: 10,
-                  paddingBottom: 6,
+                  paddingTop: 8,
+                  paddingBottom: 4,
                 }}
               >
                 <View
                   style={{
-                    width: 40,
-                    height: 4,
+                    width: 36,
+                    height: 3.5,
                     borderRadius: 2,
-                    backgroundColor: 'rgba(0, 0, 0, 0.15)',
+                    backgroundColor: 'rgba(0, 0, 0, 0.2)',
                   }}
                 />
               </View>
@@ -302,17 +327,17 @@ export function WorkspaceSwitcher({ position = 'left' }: WorkspaceSwitcherProps)
               {/* Header */}
               <View
                 style={{
-                  paddingHorizontal: 24,
-                  paddingTop: 4,
-                  paddingBottom: 16,
+                  paddingHorizontal: 20,
+                  paddingTop: 8,
+                  paddingBottom: 12,
                 }}
               >
                 <Text
                   style={{
-                    fontSize: 28,
+                    fontSize: 22,
                     fontWeight: '700',
                     color: '#000000',
-                    letterSpacing: -0.6,
+                    letterSpacing: -0.5,
                   }}
                 >
                   Workspaces
@@ -321,41 +346,62 @@ export function WorkspaceSwitcher({ position = 'left' }: WorkspaceSwitcherProps)
 
               {/* Workspaces List */}
               <ScrollView
-                style={{ maxHeight: 400 }}
+                style={{ maxHeight: 420 }}
                 showsVerticalScrollIndicator={false}
                 bounces={true}
                 contentContainerStyle={{
-                  paddingBottom: 12,
+                  paddingBottom: 8,
                 }}
               >
                 {workspaces.map((workspace) => {
                   const isActive = workspace.id === activeWorkspace?.id;
                   return (
-                    <TouchableOpacity
+                    <Pressable
                       key={workspace.id}
                       onPress={() => handleWorkspacePress(workspace)}
-                      activeOpacity={0.7}
-                      style={{
+                      style={({ pressed }) => ({
                         flexDirection: 'row',
                         alignItems: 'center',
-                        paddingHorizontal: 24,
-                        paddingVertical: 14,
+                        paddingVertical: 12,
+                        paddingHorizontal: 20,
                         marginHorizontal: 12,
-                        marginVertical: 2,
-                        borderRadius: 12,
-                        backgroundColor: isActive 
-                          ? 'rgba(179, 143, 91, 0.1)' 
-                          : 'transparent',
-                      }}
+                        marginVertical: 1,
+                        borderRadius: 10,
+                        backgroundColor: pressed
+                          ? isActive 
+                            ? 'rgba(179, 143, 91, 0.15)' 
+                            : 'rgba(0, 0, 0, 0.03)'
+                          : isActive 
+                            ? 'rgba(179, 143, 91, 0.08)' 
+                            : 'transparent',
+                      })}
                     >
-                      <WorkspaceAvatar workspace={workspace} size={40} showName={false} />
-                      <View style={{ flex: 1, marginLeft: 12 }}>
+                      {/* Avatar */}
+                      <View
+                        style={{
+                          width: 40,
+                          height: 40,
+                          borderRadius: 10,
+                          backgroundColor: isActive 
+                            ? 'rgba(179, 143, 91, 0.12)' 
+                            : 'rgba(0, 0, 0, 0.04)',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          marginRight: 12,
+                          overflow: 'hidden',
+                        }}
+                      >
+                        <WorkspaceAvatar workspace={workspace} size={36} showName={false} />
+                      </View>
+                      
+                      {/* Workspace Info */}
+                      <View style={{ flex: 1 }}>
                         <Text
                           style={{
-                            fontSize: 17,
+                            fontSize: 16,
                             fontWeight: isActive ? '600' : '500',
-                            color: '#000000',
-                            letterSpacing: -0.3,
+                            color: isActive ? '#111827' : '#374151',
+                            letterSpacing: -0.2,
                           }}
                           numberOfLines={1}
                         >
@@ -364,130 +410,46 @@ export function WorkspaceSwitcher({ position = 'left' }: WorkspaceSwitcherProps)
                         {isActive && (
                           <Text
                             style={{
-                              fontSize: 14,
+                              fontSize: 13,
                               fontWeight: '400',
-                              color: '#8e8e93',
-                              letterSpacing: -0.2,
-                              marginTop: 2,
+                              color: '#6b7280',
+                              letterSpacing: -0.1,
+                              marginTop: 1,
                             }}
                           >
-                            Current
+                            Current workspace
                           </Text>
                         )}
                       </View>
+                      
+                      {/* Active Indicator */}
                       {isActive && (
                         <View
                           style={{
-                            width: 22,
-                            height: 22,
-                            borderRadius: 11,
+                            width: 20,
+                            height: 20,
+                            borderRadius: 10,
                             backgroundColor: '#b38f5b',
                             alignItems: 'center',
                             justifyContent: 'center',
+                            marginLeft: 8,
                           }}
                         >
                           <MaterialCommunityIcons
                             name="check"
-                            size={14}
+                            size={12}
                             color="#ffffff"
                           />
                         </View>
                       )}
-                    </TouchableOpacity>
+                    </Pressable>
                   );
                 })}
               </ScrollView>
 
-              {/* Divider */}
-              <View
-                style={{
-                  height: 0.5,
-                  backgroundColor: 'rgba(0, 0, 0, 0.12)',
-                  marginHorizontal: 24,
-                  marginVertical: 12,
-                }}
-              />
-
-              {/* Create New Workspace Section */}
-              <View
-                style={{
-                  paddingHorizontal: 24,
-                  paddingBottom: 8,
-                }}
-              >
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 8,
-                  }}
-                >
-                  <TextInput
-                    value={newWorkspaceName}
-                    onChangeText={setNewWorkspaceName}
-                    placeholder="New workspace name"
-                    placeholderTextColor="#8e8e93"
-                    onFocus={() => setIsInputFocused(true)}
-                    onBlur={() => setIsInputFocused(false)}
-                    onSubmitEditing={handleCreateWorkspace}
-                    editable={!isCreatingWorkspace}
-                    returnKeyType="done"
-                    style={{
-                      flex: 1,
-                      height: 48,
-                      paddingHorizontal: 14,
-                      borderRadius: 12,
-                      backgroundColor: isInputFocused 
-                        ? '#ffffff' 
-                        : 'rgba(0, 0, 0, 0.04)',
-                      borderWidth: isInputFocused ? 1.5 : 0,
-                      borderColor: '#b38f5b',
-                      fontSize: 16,
-                      fontWeight: '400',
-                      color: '#000000',
-                      letterSpacing: -0.2,
-                    }}
-                  />
-                  <TouchableOpacity
-                    onPress={handleCreateWorkspace}
-                    disabled={isCreatingWorkspace || !newWorkspaceName.trim()}
-                    activeOpacity={0.7}
-                    style={{
-                      width: 48,
-                      height: 48,
-                      borderRadius: 12,
-                      backgroundColor:
-                        isCreatingWorkspace || !newWorkspaceName.trim()
-                          ? 'rgba(0, 0, 0, 0.05)'
-                          : '#b38f5b',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      shadowColor: '#b38f5b',
-                      shadowOffset: { width: 0, height: 2 },
-                      shadowOpacity: !newWorkspaceName.trim() ? 0 : 0.25,
-                      shadowRadius: 4,
-                      elevation: 3,
-                    }}
-                  >
-                    {isCreatingWorkspace ? (
-                      <ActivityIndicator size="small" color="#8e8e93" />
-                    ) : (
-                      <MaterialCommunityIcons
-                        name="plus"
-                        size={20}
-                        color={
-                          isCreatingWorkspace || !newWorkspaceName.trim()
-                            ? '#8e8e93'
-                            : '#ffffff'
-                        }
-                      />
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
             </BlurView>
           </Animated.View>
-        </KeyboardAvoidingView>
+        </View>
       </Modal>
     </>
   );

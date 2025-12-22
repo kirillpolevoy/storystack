@@ -37,6 +37,12 @@ ALTER TABLE workspace_invitations ENABLE ROW LEVEL SECURITY;
 -- 4. CREATE RLS POLICIES
 -- ============================================================================
 
+-- Drop existing policies if they exist
+DROP POLICY IF EXISTS "workspace_invitations_select_member" ON workspace_invitations;
+DROP POLICY IF EXISTS "workspace_invitations_insert_admin" ON workspace_invitations;
+DROP POLICY IF EXISTS "workspace_invitations_update_admin" ON workspace_invitations;
+DROP POLICY IF EXISTS "workspace_invitations_delete_admin" ON workspace_invitations;
+
 -- SELECT: Workspace members can view invitations for their workspace
 CREATE POLICY "workspace_invitations_select_member"
   ON workspace_invitations FOR SELECT

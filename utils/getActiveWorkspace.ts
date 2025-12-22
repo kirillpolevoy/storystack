@@ -81,12 +81,14 @@ export async function getActiveWorkspaceId(userId: string): Promise<string | nul
       } else {
         // Invalid workspace in storage - clear it
         await setActiveWorkspaceIdToStorage('');
+        await setActiveWorkspaceIdToDatabase(userId, null); // Use null, not empty string
         return null;
       }
     } catch (error) {
       console.error('[getActiveWorkspace] Error validating storage workspace:', error);
       // On error, clear invalid storage and return null
       await setActiveWorkspaceIdToStorage('');
+      await setActiveWorkspaceIdToDatabase(userId, null); // Use null, not empty string
       return null;
     }
   }
@@ -112,19 +114,22 @@ export async function setActiveWorkspaceIdToStorage(
  */
 export async function setActiveWorkspaceIdToDatabase(
   userId: string,
-  workspaceId: string
+  workspaceId: string | null
 ): Promise<void> {
   if (!supabase) {
     return;
   }
 
   try {
+    // Convert empty string to null (database expects UUID or NULL, not empty string)
+    const workspaceIdValue = workspaceId === '' ? null : workspaceId;
+    
     // Upsert user preferences
     const { error } = await supabase
       .from('user_preferences')
       .upsert({
         user_id: userId,
-        active_workspace_id: workspaceId,
+        active_workspace_id: workspaceIdValue,
         updated_at: new Date().toISOString(),
       });
 
@@ -143,12 +148,15 @@ export async function setActiveWorkspaceIdToDatabase(
  */
 export async function setActiveWorkspaceId(
   userId: string,
-  workspaceId: string
+  workspaceId: string | null
 ): Promise<void> {
+  // Convert null to empty string for storage (storage can handle empty strings)
+  const storageValue = workspaceId || '';
+  
   // Save to both locations
   await Promise.all([
-    setActiveWorkspaceIdToStorage(workspaceId),
-    setActiveWorkspaceIdToDatabase(userId, workspaceId),
+    setActiveWorkspaceIdToStorage(storageValue),
+    setActiveWorkspaceIdToDatabase(userId, workspaceId), // Database gets null, not empty string
   ]);
 }
 
@@ -182,7 +190,7 @@ export async function getOrCreateDefaultWorkspace(
       // Invalid workspace - clear it and continue to find/create default
       console.log('[getActiveWorkspace] Active workspace is invalid, clearing it');
       await setActiveWorkspaceIdToStorage('');
-      await setActiveWorkspaceIdToDatabase(userId, '');
+      await setActiveWorkspaceIdToDatabase(userId, null); // Use null, not empty string
     }
   }
 

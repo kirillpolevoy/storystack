@@ -148,6 +148,7 @@ CREATE POLICY "assets_delete_editor"
 -- ============================================================================
 
 -- SELECT: Any workspace member can view workspace logos
+DROP POLICY IF EXISTS "workspace_logos_select_member" ON storage.objects;
 CREATE POLICY "workspace_logos_select_member"
   ON storage.objects FOR SELECT
   USING (
@@ -162,6 +163,7 @@ CREATE POLICY "workspace_logos_select_member"
   );
 
 -- INSERT: Owner only can upload workspace logos
+DROP POLICY IF EXISTS "workspace_logos_insert_owner" ON storage.objects;
 CREATE POLICY "workspace_logos_insert_owner"
   ON storage.objects FOR INSERT
   WITH CHECK (
@@ -178,6 +180,7 @@ CREATE POLICY "workspace_logos_insert_owner"
   );
 
 -- UPDATE: Owner only can update workspace logos
+DROP POLICY IF EXISTS "workspace_logos_update_owner" ON storage.objects;
 CREATE POLICY "workspace_logos_update_owner"
   ON storage.objects FOR UPDATE
   USING (
@@ -204,6 +207,7 @@ CREATE POLICY "workspace_logos_update_owner"
   );
 
 -- DELETE: Owner only can delete workspace logos
+DROP POLICY IF EXISTS "workspace_logos_delete_owner" ON storage.objects;
 CREATE POLICY "workspace_logos_delete_owner"
   ON storage.objects FOR DELETE
   USING (

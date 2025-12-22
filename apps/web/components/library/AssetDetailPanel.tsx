@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
-import Image from 'next/image'
 import { Asset } from '@/types'
 import { useUpdateAssetTags } from '@/hooks/useUpdateAssetTags'
 import { useUpdateAssetLocation } from '@/hooks/useUpdateAssetLocation'
@@ -69,6 +68,8 @@ export function AssetDetailPanel({
   const [showTagSuggestions, setShowTagSuggestions] = useState(false)
   const [showLocationSuggestions, setShowLocationSuggestions] = useState(false)
   const [localAvailableTags, setLocalAvailableTags] = useState<string[]>([])
+  const [imageError, setImageError] = useState(false)
+  const [imageSrc, setImageSrc] = useState<string>('')
   const lastAssetIdRef = useRef<string | null>(null)
 
   const { data: availableTags } = useAvailableTags()
@@ -396,6 +397,14 @@ export function AssetDetailPanel({
   }
 
   const imageUrl = currentAsset.previewUrl || currentAsset.publicUrl || ''
+  
+  // Initialize image source with error handling
+  useEffect(() => {
+    if (imageUrl) {
+      setImageSrc(imageUrl)
+      setImageError(false)
+    }
+  }, [imageUrl])
   // Use original_filename if available, otherwise fall back to storage_path filename
   const filename = currentAsset.original_filename || currentAsset.storage_path?.split('/').pop() || 'Unknown'
   const dateToDisplay = currentAsset.date_taken || currentAsset.created_at
@@ -408,16 +417,24 @@ export function AssetDetailPanel({
   const content = (
     <div className="space-y-5">
       {/* Hero Image - Compact but prominent */}
-          {imageUrl && (
+          {imageSrc && !imageError ? (
         <div className="relative w-full aspect-square overflow-hidden rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200/50 shadow-sm group">
-          <Image
-            src={imageUrl}
+          <img
+            src={imageSrc}
             alt={currentAsset.tags?.[0] || 'Asset'}
-            fill
-            className="object-contain p-2 z-0 transition-opacity duration-300"
-            sizes="(max-width: 768px) 100vw, 420px"
-            priority
-            unoptimized
+            className="absolute inset-0 w-full h-full object-contain p-2 z-0 transition-opacity duration-300"
+            onError={() => {
+              // Try fallback URLs in order
+              if (imageSrc === currentAsset.previewUrl && currentAsset.publicUrl) {
+                setImageSrc(currentAsset.publicUrl)
+              } else if (imageSrc === currentAsset.publicUrl && currentAsset.thumbUrl) {
+                setImageSrc(currentAsset.thumbUrl)
+              } else {
+                // All URLs failed
+                setImageError(true)
+              }
+            }}
+            loading="eager"
           />
           
           {/* Success Indicator - shows briefly after tagging completes (matches AssetTile) */}
@@ -450,7 +467,26 @@ export function AssetDetailPanel({
             </div>
           )}
         </div>
-      )}
+      ) : imageError ? (
+        <div className="relative w-full aspect-square overflow-hidden rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200/50 shadow-sm flex items-center justify-center">
+          <div className="text-center p-4">
+            <svg
+              className="mx-auto h-12 w-12 text-gray-400"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+              />
+            </svg>
+            <p className="text-sm text-gray-500 mt-2">Image unavailable</p>
+          </div>
+        </div>
+      ) : null}
 
       {/* Content */}
       <div className="space-y-5">

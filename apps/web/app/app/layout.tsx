@@ -41,6 +41,16 @@ export default async function AppLayout({
     )
   } catch (error) {
     console.error('[AppLayout] Error:', error)
+    console.error('[AppLayout] Error details:', error instanceof Error ? error.message : String(error))
+    console.error('[AppLayout] Error stack:', error instanceof Error ? error.stack : 'No stack')
+    
+    // Check if this is a redirect error (which is expected in Next.js)
+    if (error && typeof error === 'object' && 'digest' in error) {
+      // This is a Next.js redirect, re-throw it
+      throw error
+    }
+    
+    // For other errors, redirect to login
     redirect('/login')
   }
 }

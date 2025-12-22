@@ -39,7 +39,18 @@ export function LoginForm() {
         console.error('[LoginForm] Login error:', error)
         console.error('[LoginForm] Error message:', error.message)
         console.error('[LoginForm] Error status:', error.status)
-        throw error
+        
+        // Provide more user-friendly error messages
+        let errorMessage = error.message || 'Failed to sign in'
+        if (error.status === 400 && error.message?.includes('Invalid login credentials')) {
+          errorMessage = 'Invalid email or password. Please check your credentials and try again.'
+        } else if (error.status === 429) {
+          errorMessage = 'Too many login attempts. Please wait a moment and try again.'
+        } else if (error.status === 500) {
+          errorMessage = 'Server error. Please try again later or contact support.'
+        }
+        
+        throw new Error(errorMessage)
       }
 
       console.log('[LoginForm] Login successful, session:', data.session ? 'exists' : 'missing')

@@ -21,9 +21,38 @@ export default function OnboardingScreen() {
     if (isFirstTime && session) {
       await markOnboardingCompleted(session.user.id);
       // For first-time onboarding, redirect to tag setup first
-      // Check if user already has tags set up
+      // Check if user already has tags set up in any workspace
       const { hasTagsSetUp } = await import('@/utils/tagSetup');
-      const hasTags = await hasTagsSetUp(session.user.id);
+      // Check if user has tags in any workspace they belong to
+      const { supabase } = await import('@/lib/supabase');
+      let hasTags = false;
+      
+      if (supabase) {
+        try {
+          // Get user's workspaces
+          const { data: memberships } = await supabase
+            .from('workspace_members')
+            .select('workspace_id')
+            .eq('user_id', session.user.id)
+            .limit(10);
+          
+          if (memberships && memberships.length > 0) {
+            // Check if any workspace has tags
+            for (const membership of memberships) {
+              const workspaceId = (membership as { workspace_id: string }).workspace_id;
+              if (workspaceId) {
+                const workspaceHasTags = await hasTagsSetUp(workspaceId, session.user.id);
+                if (workspaceHasTags) {
+                  hasTags = true;
+                  break;
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.warn('[Onboarding] Error checking for tags:', error);
+        }
+      }
       
       if (!hasTags) {
         // Redirect to tag management for setup

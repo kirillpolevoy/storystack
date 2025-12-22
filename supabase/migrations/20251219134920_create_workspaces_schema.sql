@@ -244,6 +244,7 @@ END;
 $$;
 
 -- Trigger for story_assets INSERT/UPDATE
+DROP TRIGGER IF EXISTS trigger_check_story_asset_workspace ON story_assets;
 CREATE TRIGGER trigger_check_story_asset_workspace
   BEFORE INSERT OR UPDATE ON story_assets
   FOR EACH ROW
@@ -282,6 +283,7 @@ END;
 $$;
 
 -- Trigger for asset_tags INSERT/UPDATE
+DROP TRIGGER IF EXISTS trigger_check_asset_tag_workspace ON asset_tags;
 CREATE TRIGGER trigger_check_asset_tag_workspace
   BEFORE INSERT OR UPDATE ON asset_tags
   FOR EACH ROW
@@ -313,18 +315,21 @@ END;
 $$;
 
 -- Add updated_at trigger to workspaces
+DROP TRIGGER IF EXISTS update_workspaces_updated_at ON workspaces;
 CREATE TRIGGER update_workspaces_updated_at
   BEFORE UPDATE ON workspaces
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
 
 -- Add updated_at trigger to tags
+DROP TRIGGER IF EXISTS update_tags_updated_at ON tags;
 CREATE TRIGGER update_tags_updated_at
   BEFORE UPDATE ON tags
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
 
 -- Add updated_at trigger to user_preferences
+DROP TRIGGER IF EXISTS update_user_preferences_updated_at ON user_preferences;
 CREATE TRIGGER update_user_preferences_updated_at
   BEFORE UPDATE ON user_preferences
   FOR EACH ROW

@@ -77,6 +77,20 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
   const prevAssetIdRef = useRef<string | undefined>(undefined);
   const isDismissingRef = useRef(false);
   
+  // Refs to store latest values for use in gesture handlers
+  const localTagsRef = useRef<TagVocabulary[]>([]);
+  const locationRef = useRef<string>('');
+  const assetRef = useRef<Asset | null>(null);
+  // Track saved locations per asset ID to preserve them during navigation
+  const savedLocationsRef = useRef<Map<string, string>>(new Map());
+  
+  // Keep refs updated
+  useEffect(() => {
+    localTagsRef.current = localTags;
+    locationRef.current = location;
+    assetRef.current = asset;
+  }, [localTags, location, asset]);
+  
   const assetId = asset?.id;
   const isMultiEdit = (multipleAssets?.length ?? 0) > 1;
   
@@ -169,6 +183,23 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
       activeAnimationsRef.current = [];
     };
   }, []);
+
+  // Auto-save location when keyboard is dismissed
+  useEffect(() => {
+    if (!visible) return;
+
+    const keyboardDidHideListener = Keyboard.addListener('keyboardDidHide', () => {
+      // Auto-save if there are unsaved changes (location or tags)
+      // This handles cases where keyboard is dismissed programmatically
+      if (checkHasUnsavedChanges()) {
+        handleSaveSilent();
+      }
+    });
+
+    return () => {
+      keyboardDidHideListener.remove();
+    };
+  }, [visible]);
   
   // Reset animations when asset changes - simplified Apple-grade logic
   useEffect(() => {
@@ -300,6 +331,61 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
       panelOpacity.setValue(1);
     }
   }, [isPanelVisible]);
+  
+  // Helper function to check if there are unsaved changes (using refs for gesture handler access)
+  const checkHasUnsavedChanges = (): boolean => {
+    const currentAsset = assetRef.current;
+    if (!currentAsset || isMultiEdit) return false;
+    const currentTags = localTagsRef.current;
+    const currentLocation = locationRef.current;
+    
+    const currentTagsStr = JSON.stringify((currentAsset.tags ?? []).sort());
+    const localTagsStr = JSON.stringify(currentTags.sort());
+    const tagsChanged = currentTagsStr !== localTagsStr;
+    const assetLocation = currentAsset.location || null;
+    const locationChanged = currentLocation.trim() !== (assetLocation || '');
+    return tagsChanged || locationChanged;
+  };
+
+  // Helper function to save without closing (for auto-save on swipe)
+  const handleSaveSilent = async (): Promise<void> => {
+    const currentAsset = assetRef.current;
+    if (!currentAsset || isMultiEdit) return;
+    
+    const finalTags: TagVocabulary[] = [...localTagsRef.current];
+    const locationValue = locationRef.current.trim() || null;
+    
+    // Save the tags we're about to save - use this for bottom display
+    setSavedTags(localTagsRef.current);
+    
+    // Store saved location in ref for this asset ID
+    if (locationValue) {
+      savedLocationsRef.current.set(currentAsset.id, locationValue);
+    } else {
+      savedLocationsRef.current.delete(currentAsset.id);
+    }
+    
+    // Optimistically update asset prop immediately so bottom display shows new tags
+    if (currentAsset && onAssetChange) {
+      onAssetChange({ ...currentAsset, tags: finalTags, location: locationValue });
+    }
+    
+    // Save to database - await to ensure it completes before navigation
+    try {
+      await onUpdateTags(finalTags, locationValue);
+      console.log('[TagModal] Successfully auto-saved tags/location on swipe');
+    } catch (error) {
+      console.error('[TagModal] Failed to auto-save tags/location on swipe:', error);
+      // Revert optimistic update on error
+      if (currentAsset && onAssetChange) {
+        onAssetChange({ ...currentAsset, tags: currentAsset.tags ?? [], location: currentAsset.location || null });
+        setLocation(currentAsset.location || '');
+      }
+      setSavedTags(currentAsset?.tags ?? []);
+      // Remove from saved locations on error
+      savedLocationsRef.current.delete(currentAsset.id);
+    }
+  };
   
   // Single pan gesture that handles both horizontal and vertical swipes
   // TEMPORARILY SIMPLIFIED TO DEBUG CRASHES
@@ -521,41 +607,57 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
               const targetAsset = prev;
               const callback = onChange;
               
-              // Apple-grade fast transition: 180ms (premium feel)
-              // CRITICAL: COMPLETELY HIDE current photo IMMEDIATELY
-              setShouldHideCurrentPhoto(true); // Remove from render tree completely
-              currentPhotoOpacity.setValue(0); // INSTANT hide - no animation delay
-              
-              const anim = Animated.parallel([
-                Animated.spring(photoTranslateX, {
-                  toValue: SCREEN_WIDTH,
-                  tension: 100, // Snappier for premium feel
-                  friction: 8,
-                  useNativeDriver: true,
-                }),
-                Animated.timing(overlayOpacity, {
-                  toValue: 1,
-                  duration: 180, // Fast, Apple-grade timing
-                  easing: Easing.out(Easing.cubic),
-                  useNativeDriver: true,
-                }),
-              ]);
-              
-              activeAnimationsRef.current.push(anim);
-              
-              anim.start((finished) => {
-                activeAnimationsRef.current = activeAnimationsRef.current.filter(a => a !== anim);
+              // Auto-save location and tags before navigating (if there are unsaved changes)
+              // We need to await this to ensure the save completes before changing assets
+              const performSwipe = async () => {
+                // Save current asset's location/tags before navigating
+                let savedLocation: string | null = null;
+                let savedTags: TagVocabulary[] = [];
+                if (checkHasUnsavedChanges()) {
+                  const currentAsset = assetRef.current;
+                  savedLocation = locationRef.current.trim() || null;
+                  savedTags = [...localTagsRef.current];
+                  await handleSaveSilent();
+                  // After save, the parent's assets array should be updated
+                  // But we need to wait a tick for React to process the state update
+                  await new Promise(resolve => setTimeout(resolve, 50));
+                }
                 
-                if (!isMountedRef.current || !finished) return;
+                // Apple-grade fast transition: 180ms (premium feel)
+                // CRITICAL: COMPLETELY HIDE current photo IMMEDIATELY
+                setShouldHideCurrentPhoto(true); // Remove from render tree completely
+                currentPhotoOpacity.setValue(0); // INSTANT hide - no animation delay
                 
-                // Reset translate - overlay is showing new photo
-                photoTranslateX.setValue(0);
-                updateSwipeDirectionRef.current(null);
+                const anim = Animated.parallel([
+                  Animated.spring(photoTranslateX, {
+                    toValue: SCREEN_WIDTH,
+                    tension: 100, // Snappier for premium feel
+                    friction: 8,
+                    useNativeDriver: true,
+                  }),
+                  Animated.timing(overlayOpacity, {
+                    toValue: 1,
+                    duration: 180, // Fast, Apple-grade timing
+                    easing: Easing.out(Easing.cubic),
+                    useNativeDriver: true,
+                  }),
+                ]);
                 
-                // Change asset immediately - no delay
-                if (isMountedRef.current && callback !== undefined && targetAsset) {
-                  isTransitioningRef.current = true;
-                  handleAssetChangeSafeRef.current(targetAsset);
+                activeAnimationsRef.current.push(anim);
+                
+                anim.start((finished) => {
+                  activeAnimationsRef.current = activeAnimationsRef.current.filter(a => a !== anim);
+                  
+                  if (!isMountedRef.current || !finished) return;
+                  
+                  // Reset translate - overlay is showing new photo
+                  photoTranslateX.setValue(0);
+                  updateSwipeDirectionRef.current(null);
+                  
+                  // Change asset immediately - no delay
+                  if (isMountedRef.current && callback !== undefined && targetAsset) {
+                    isTransitioningRef.current = true;
+                    handleAssetChangeSafeRef.current(targetAsset);
                   
                   // Immediate transition: fade out overlay, fade in new photo
                   // No setTimeout delay - Apple-grade instant transitions
@@ -579,15 +681,19 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                       isTransitioningRef.current = false;
                     }
                   });
-                } else {
-                  // Reset if no callback
-                  overlayOpacity.setValue(0);
-                  currentPhotoOpacity.setValue(1);
-                  setShouldHideCurrentPhoto(false);
-                  isSwipingRef.current = false;
-                  isTransitioningRef.current = false;
-                }
-              });
+                  } else {
+                    // Reset if no callback
+                    overlayOpacity.setValue(0);
+                    currentPhotoOpacity.setValue(1);
+                    setShouldHideCurrentPhoto(false);
+                    isSwipingRef.current = false;
+                    isTransitioningRef.current = false;
+                  }
+                });
+              };
+              
+              // Execute the swipe (with save if needed)
+              performSwipe();
             } else if (translationX < 0 && shouldSwipe && canRight && next && onChange) {
               // Cancel any pending animations
               activeAnimationsRef.current.forEach(anim => anim.stop());
@@ -602,41 +708,57 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
               const targetAsset = next;
               const callback = onChange;
               
-              // Apple-grade fast transition: 180ms (premium feel)
-              // CRITICAL: COMPLETELY HIDE current photo IMMEDIATELY
-              setShouldHideCurrentPhoto(true); // Remove from render tree completely
-              currentPhotoOpacity.setValue(0); // INSTANT hide - no animation delay
-              
-              const anim = Animated.parallel([
-                Animated.spring(photoTranslateX, {
-                  toValue: -SCREEN_WIDTH,
-                  tension: 100, // Snappier for premium feel
-                  friction: 8,
-                  useNativeDriver: true,
-                }),
-                Animated.timing(overlayOpacity, {
-                  toValue: 1,
-                  duration: 180, // Fast, Apple-grade timing
-                  easing: Easing.out(Easing.cubic),
-                  useNativeDriver: true,
-                }),
-              ]);
-              
-              activeAnimationsRef.current.push(anim);
-              
-              anim.start((finished) => {
-                activeAnimationsRef.current = activeAnimationsRef.current.filter(a => a !== anim);
+              // Auto-save location and tags before navigating (if there are unsaved changes)
+              // We need to await this to ensure the save completes before changing assets
+              const performSwipe = async () => {
+                // Save current asset's location/tags before navigating
+                let savedLocation: string | null = null;
+                let savedTags: TagVocabulary[] = [];
+                if (checkHasUnsavedChanges()) {
+                  const currentAsset = assetRef.current;
+                  savedLocation = locationRef.current.trim() || null;
+                  savedTags = [...localTagsRef.current];
+                  await handleSaveSilent();
+                  // After save, the parent's assets array should be updated
+                  // But we need to wait a tick for React to process the state update
+                  await new Promise(resolve => setTimeout(resolve, 50));
+                }
                 
-                if (!isMountedRef.current || !finished) return;
+                // Apple-grade fast transition: 180ms (premium feel)
+                // CRITICAL: COMPLETELY HIDE current photo IMMEDIATELY
+                setShouldHideCurrentPhoto(true); // Remove from render tree completely
+                currentPhotoOpacity.setValue(0); // INSTANT hide - no animation delay
                 
-                // Reset translate - overlay is showing new photo
-                photoTranslateX.setValue(0);
-                updateSwipeDirectionRef.current(null);
+                const anim = Animated.parallel([
+                  Animated.spring(photoTranslateX, {
+                    toValue: -SCREEN_WIDTH,
+                    tension: 100, // Snappier for premium feel
+                    friction: 8,
+                    useNativeDriver: true,
+                  }),
+                  Animated.timing(overlayOpacity, {
+                    toValue: 1,
+                    duration: 180, // Fast, Apple-grade timing
+                    easing: Easing.out(Easing.cubic),
+                    useNativeDriver: true,
+                  }),
+                ]);
                 
-                // Change asset immediately - no delay
-                if (isMountedRef.current && callback !== undefined && targetAsset) {
-                  isTransitioningRef.current = true;
-                  handleAssetChangeSafeRef.current(targetAsset);
+                activeAnimationsRef.current.push(anim);
+                
+                anim.start((finished) => {
+                  activeAnimationsRef.current = activeAnimationsRef.current.filter(a => a !== anim);
+                  
+                  if (!isMountedRef.current || !finished) return;
+                  
+                  // Reset translate - overlay is showing new photo
+                  photoTranslateX.setValue(0);
+                  updateSwipeDirectionRef.current(null);
+                  
+                  // Change asset immediately - no delay
+                  if (isMountedRef.current && callback !== undefined && targetAsset) {
+                    isTransitioningRef.current = true;
+                    handleAssetChangeSafeRef.current(targetAsset);
                   
                   // Immediate transition: fade out overlay, fade in new photo
                   // No setTimeout delay - Apple-grade instant transitions
@@ -669,9 +791,13 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                   isTransitioningRef.current = false;
                 }
               });
-            } else {
-              // Apple-grade snappy bounce-back when swipe doesn't complete
-              setShouldHideCurrentPhoto(false); // Ensure current photo is visible
+            };
+            
+            // Execute the swipe (with save if needed)
+            performSwipe();
+          } else {
+            // Apple-grade snappy bounce-back when swipe doesn't complete
+            setShouldHideCurrentPhoto(false); // Ensure current photo is visible
               const anim = Animated.parallel([
                 Animated.spring(photoTranslateX, {
                   toValue: 0,
@@ -966,7 +1092,10 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
         // Location is now stored in separate column, not in tags
         const assetTags = asset.tags ?? [];
         setLocalTags(assetTags);
-        setLocation(asset.location || '');
+        // Use saved location from ref if available (preserves unsaved changes during navigation)
+        // Otherwise use asset.location from prop
+        const savedLocation = savedLocationsRef.current.get(asset.id);
+        setLocation(savedLocation !== undefined ? savedLocation : (asset.location || ''));
         
         if (assetChanged) {
           // Reset savedTags when asset changes (new photo selected)
@@ -1095,6 +1224,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
     setIsInputFocused(false);
   };
   
+
   const handleSave = async (skipClose = false) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     
@@ -2011,7 +2141,13 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                       setIsInputFocused(true);
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                     }}
-                    onBlur={() => setIsInputFocused(false)}
+                    onBlur={() => {
+                      setIsInputFocused(false);
+                      // Auto-save location when keyboard is dismissed
+                      if (checkHasUnsavedChanges()) {
+                        handleSaveSilent();
+                      }
+                    }}
                     style={{
                       flex: 1,
                       fontSize: 16,

@@ -17,13 +17,11 @@ BEGIN
   FOR user_record IN 
     SELECT DISTINCT u.id, u.email
     FROM auth.users u
-    WHERE EXISTS (
+    WHERE (EXISTS (
       SELECT 1 FROM assets WHERE user_id = u.id
     ) OR EXISTS (
       SELECT 1 FROM stories WHERE user_id = u.id
-    ) OR EXISTS (
-      SELECT 1 FROM tag_config WHERE user_id = u.id
-    )
+    ))
     AND NOT EXISTS (
       SELECT 1 FROM workspace_members wm WHERE wm.user_id = u.id
     )
@@ -84,13 +82,26 @@ WHERE s.workspace_id IS NULL
 -- ============================================================================
 
 -- Extract unique tags from assets.tags array and create tags in workspace
+-- Skip if tags table doesn't exist or migration already completed
 DO $$
 DECLARE
   asset_record RECORD;
   tag_name TEXT;
   tag_id_val UUID;
   workspace_id_val UUID;
+  tags_table_exists BOOLEAN;
 BEGIN
+  -- Check if tags table exists
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.tables 
+    WHERE table_schema = 'public' AND table_name = 'tags'
+  ) INTO tags_table_exists;
+  
+  IF NOT tags_table_exists THEN
+    RAISE NOTICE 'Tags table does not exist, skipping tag migration';
+    RETURN;
+  END IF;
+  
   -- Loop through assets that have tags array
   FOR asset_record IN 
     SELECT DISTINCT a.id, a.workspace_id, a.tags
@@ -98,6 +109,13 @@ BEGIN
     WHERE a.workspace_id IS NOT NULL
       AND a.tags IS NOT NULL
       AND array_length(a.tags, 1) > 0
+      -- Only process assets that haven't been migrated yet
+      AND NOT EXISTS (
+        SELECT 1 FROM asset_tags at
+        JOIN tags t ON t.id = at.tag_id
+        WHERE at.asset_id = a.id
+        LIMIT 1
+      )
   LOOP
     workspace_id_val := asset_record.workspace_id;
     
@@ -109,24 +127,30 @@ BEGIN
         CONTINUE;
       END IF;
       
-      -- Get or create tag
-      SELECT id INTO tag_id_val
-      FROM tags
-      WHERE workspace_id = workspace_id_val
-        AND LOWER(name) = LOWER(TRIM(tag_name))
-      LIMIT 1;
-      
-      -- Create tag if it doesn't exist
-      IF tag_id_val IS NULL THEN
-        INSERT INTO tags (workspace_id, name)
-        VALUES (workspace_id_val, TRIM(tag_name))
-        RETURNING id INTO tag_id_val;
-      END IF;
-      
-      -- Link asset to tag (ignore if already exists)
-      INSERT INTO asset_tags (asset_id, tag_id)
-      VALUES (asset_record.id, tag_id_val)
-      ON CONFLICT (asset_id, tag_id) DO NOTHING;
+      BEGIN
+        -- Get or create tag
+        SELECT id INTO tag_id_val
+        FROM tags
+        WHERE workspace_id = workspace_id_val
+          AND LOWER(name) = LOWER(TRIM(tag_name))
+        LIMIT 1;
+        
+        -- Create tag if it doesn't exist
+        IF tag_id_val IS NULL THEN
+          INSERT INTO tags (workspace_id, name)
+          VALUES (workspace_id_val, TRIM(tag_name))
+          RETURNING id INTO tag_id_val;
+        END IF;
+        
+        -- Link asset to tag (ignore if already exists)
+        INSERT INTO asset_tags (asset_id, tag_id)
+        VALUES (asset_record.id, tag_id_val)
+        ON CONFLICT (asset_id, tag_id) DO NOTHING;
+      EXCEPTION
+        WHEN OTHERS THEN
+          -- Log error but continue with next tag
+          RAISE NOTICE 'Error processing tag % for asset %: %', tag_name, asset_record.id, SQLERRM;
+      END;
     END LOOP;
   END LOOP;
 END $$;
@@ -135,17 +159,30 @@ END $$;
 -- STEP 5: MIGRATE tag_config FROM user_id TO workspace_id
 -- ============================================================================
 
--- Update tag_config.workspace_id from user's default workspace
-UPDATE tag_config tc
-SET workspace_id = (
-  SELECT wm.workspace_id
-  FROM workspace_members wm
-  WHERE wm.user_id = tc.user_id
-    AND wm.role = 'owner'
-  LIMIT 1
-)
-WHERE tc.workspace_id IS NULL
-  AND tc.user_id IS NOT NULL;
+-- Skip if tag_config.user_id column doesn't exist (already migrated)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' 
+    AND table_name = 'tag_config' 
+    AND column_name = 'user_id'
+  ) THEN
+    -- Update tag_config.workspace_id from user's default workspace
+    UPDATE tag_config tc
+    SET workspace_id = (
+      SELECT wm.workspace_id
+      FROM workspace_members wm
+      WHERE wm.user_id = tc.user_id
+        AND wm.role = 'owner'
+      LIMIT 1
+    )
+    WHERE tc.workspace_id IS NULL
+      AND tc.user_id IS NOT NULL;
+  ELSE
+    RAISE NOTICE 'tag_config.user_id column does not exist, skipping migration';
+  END IF;
+END $$;
 
 -- Handle duplicate tag_configs per workspace (keep the first one)
 -- If multiple users had tag_configs, we'll merge them or keep the first
@@ -292,6 +329,8 @@ ALTER TABLE tag_config
 -- ============================================================================
 
 -- Ensure one tag_config per workspace
+ALTER TABLE tag_config 
+  DROP CONSTRAINT IF EXISTS tag_config_workspace_id_unique;
 ALTER TABLE tag_config 
   ADD CONSTRAINT tag_config_workspace_id_unique UNIQUE (workspace_id);
 

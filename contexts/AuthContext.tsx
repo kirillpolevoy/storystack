@@ -40,16 +40,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // Handle refresh token errors gracefully
           const errorMessage = error.message || '';
           const errorName = (error as any)?.name || '';
+          const errorCode = (error as any)?.status || (error as any)?.code || '';
+          
+          // More comprehensive refresh token error detection
           const isRefreshTokenError = 
+            errorName === 'AuthApiError' ||
             errorMessage.includes('Refresh Token') || 
             errorMessage.includes('refresh_token') ||
             errorMessage.includes('Invalid Refresh Token') ||
             errorMessage.includes('refresh token not found') ||
+            errorMessage.includes('Refresh Token Not Found') ||
             errorMessage.toLowerCase().includes('refresh') && errorMessage.toLowerCase().includes('token') ||
-            (errorName === 'AuthApiError' && (errorMessage.toLowerCase().includes('refresh') || errorMessage.toLowerCase().includes('token')));
+            (errorName === 'AuthApiError' && (errorMessage.toLowerCase().includes('refresh') || errorMessage.toLowerCase().includes('token'))) ||
+            errorCode === 401; // 401 Unauthorized often indicates token issues
             
           if (isRefreshTokenError) {
-            console.warn('[AuthContext] Invalid refresh token, clearing session:', errorMessage);
+            console.warn('[AuthContext] Invalid refresh token, clearing session:', { errorMessage, errorName, errorCode });
             // Clear invalid session from storage and let user sign in again
             supabase.auth.signOut().catch(() => {
               // Ignore errors during sign out
@@ -68,16 +74,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Handle AuthApiError specifically
         const errorMessage = error?.message || '';
         const errorName = error?.name || '';
+        const errorCode = error?.status || error?.code || '';
+        
+        // More comprehensive refresh token error detection
         const isRefreshTokenError = 
+          errorName === 'AuthApiError' ||
           errorMessage.includes('Refresh Token') || 
           errorMessage.includes('refresh_token') ||
           errorMessage.includes('Invalid Refresh Token') ||
           errorMessage.includes('refresh token not found') ||
+          errorMessage.includes('Refresh Token Not Found') ||
           errorMessage.toLowerCase().includes('refresh') && errorMessage.toLowerCase().includes('token') ||
-          (errorName === 'AuthApiError' && (errorMessage.toLowerCase().includes('refresh') || errorMessage.toLowerCase().includes('token')));
+          (errorName === 'AuthApiError' && (errorMessage.toLowerCase().includes('refresh') || errorMessage.toLowerCase().includes('token'))) ||
+          errorCode === 401;
           
         if (isRefreshTokenError) {
-          console.warn('[AuthContext] Invalid refresh token (catch), clearing session:', errorMessage);
+          console.warn('[AuthContext] Invalid refresh token (catch), clearing session:', { errorMessage, errorName, errorCode });
           supabase.auth.signOut().catch(() => {});
           setSession(null);
         } else {
@@ -97,6 +109,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
       try {
+        // Handle SIGNED_OUT event (can occur when refresh token is invalid)
+        if (_event === 'SIGNED_OUT') {
+          console.log('[AuthContext] User signed out');
+          setSession(null);
+          setLoading(false);
+          return;
+        }
+        
         // Handle refresh token errors that might occur during automatic refresh
         if (_event === 'TOKEN_REFRESHED' && !session) {
           console.warn('[AuthContext] Token refresh failed - clearing session');
@@ -139,16 +159,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Catch any errors during auth state change (including refresh token errors)
         const errorMessage = error?.message || '';
         const errorName = error?.name || '';
+        const errorCode = error?.status || error?.code || '';
+        
+        // More comprehensive refresh token error detection
         const isRefreshTokenError = 
+          errorName === 'AuthApiError' ||
           errorMessage.includes('Refresh Token') || 
           errorMessage.includes('refresh_token') ||
           errorMessage.includes('Invalid Refresh Token') ||
           errorMessage.includes('refresh token not found') ||
+          errorMessage.includes('Refresh Token Not Found') ||
           errorMessage.toLowerCase().includes('refresh') && errorMessage.toLowerCase().includes('token') ||
-          (errorName === 'AuthApiError' && errorMessage.toLowerCase().includes('refresh'));
+          (errorName === 'AuthApiError' && (errorMessage.toLowerCase().includes('refresh') || errorMessage.toLowerCase().includes('token'))) ||
+          errorCode === 401;
           
         if (isRefreshTokenError) {
-          console.warn('[AuthContext] Refresh token error in auth state change:', errorMessage);
+          console.warn('[AuthContext] Refresh token error in auth state change:', { errorMessage, errorName, errorCode });
           try {
             await supabase.auth.signOut();
           } catch (signOutError) {
@@ -385,14 +411,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.log('[AuthContext] Deleted user preferences');
       }
 
-      // 10. Delete user's storage files (avatars)
+      // 10. Delete user's storage files from all buckets
+      // Delete from avatars bucket
       try {
-        const { data: files } = await supabase.storage
+        const { data: avatarFiles } = await supabase.storage
           .from('avatars')
           .list(userId);
         
-        if (files && files.length > 0) {
-          const filePaths = files.map(file => `${userId}/${file.name}`);
+        if (avatarFiles && avatarFiles.length > 0) {
+          const filePaths = avatarFiles.map(file => `${userId}/${file.name}`);
           const { error: avatarError } = await supabase.storage
             .from('avatars')
             .remove(filePaths);
@@ -407,6 +434,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (storageError: any) {
         console.warn('[AuthContext] Error deleting avatar storage files:', storageError);
         errors.push(`Failed to delete avatar files: ${storageError.message}`);
+      }
+
+      // Delete from workspace_logos bucket (if user owns any workspace logos)
+      try {
+        // Get all workspaces created by this user
+        const { data: userWorkspaces } = await supabase
+          .from('workspaces')
+          .select('id, logo_path')
+          .eq('created_by', userId);
+        
+        if (userWorkspaces && userWorkspaces.length > 0) {
+          const logoPaths = userWorkspaces
+            .map(w => w.logo_path)
+            .filter((path): path is string => !!path);
+          
+          if (logoPaths.length > 0) {
+            const { error: logoError } = await supabase.storage
+              .from('workspace_logos')
+              .remove(logoPaths);
+            
+            if (logoError) {
+              console.warn('[AuthContext] Error deleting workspace logo files:', logoError);
+              // Don't add to errors - workspace logos might be shared or already deleted
+            } else {
+              console.log('[AuthContext] Deleted workspace logo files');
+            }
+          }
+        }
+      } catch (logoError: any) {
+        console.warn('[AuthContext] Error deleting workspace logo files:', logoError);
+        // Don't add to errors - this is non-critical
       }
 
       // Check if we had critical errors
@@ -456,15 +514,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const result = await response.json();
 
         if (!response.ok) {
-          throw new Error(result.error || 'Failed to delete auth user');
+          console.error('[AuthContext] Edge function error response:', {
+            status: response.status,
+            statusText: response.statusText,
+            result: result,
+            errorDetails: result.details,
+            errorCode: result.code,
+            fullError: result.details?.fullError,
+          });
+          
+          // Log the full error details if available
+          if (result.details) {
+            console.error('[AuthContext] Error details:', JSON.stringify(result.details, null, 2));
+          }
+          
+          const errorMessage = result.error || `Failed to delete auth user: ${response.status} ${response.statusText}`;
+          throw new Error(errorMessage);
         }
 
         console.log('[AuthContext] Deleted auth user via Edge Function');
       } catch (edgeFunctionError: any) {
         console.error('[AuthContext] Error deleting auth user via Edge Function:', edgeFunctionError);
+        console.error('[AuthContext] Error details:', JSON.stringify(edgeFunctionError, null, 2));
         // If Edge Function doesn't exist or fails, continue with sign out
         // The auth user will remain but all data is deleted
-        errors.push(`Failed to delete auth user: ${edgeFunctionError.message}`);
+        const errorMessage = edgeFunctionError.message || 'Unknown error';
+        errors.push(`Failed to delete auth user: ${errorMessage}`);
       }
 
       // Sign out after successful deletion (or if auth user deletion failed)

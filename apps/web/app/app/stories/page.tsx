@@ -237,22 +237,20 @@ export default function StoriesPage() {
   return (
     <div className="flex h-full flex-col bg-gray-50">
       {/* Header */}
-      <div className="border-b border-gray-200 bg-white shadow-sm">
-        <div className="px-8 pt-6 pb-4">
+      <div className="border-b border-gray-200 bg-white">
+        <div className="px-8 pt-4">
           {/* Row 1: Title + Actions */}
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between pb-4">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 tracking-tight mb-1">
+              <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">
                 Stories
               </h1>
-              <p className="text-sm text-gray-500 font-medium">
-                Create and organize visual narratives
-              </p>
+              <p className="text-sm text-gray-500 mt-1">Create and organize visual narratives</p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <Button
                 onClick={() => setShowCreateModal(true)}
-                className="h-10 px-5 text-sm font-semibold bg-accent hover:bg-accent/90 shadow-sm hover:shadow-md transition-all duration-200"
+                className="h-9 px-4 text-sm font-semibold bg-accent hover:bg-accent/90 shadow-sm"
               >
                 <Plus className="mr-2 h-4 w-4" />
                 New Story
@@ -261,25 +259,27 @@ export default function StoriesPage() {
           </div>
 
           {/* Row 2: Search Bar */}
-          <div className="relative max-w-md">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <Input
-              type="text"
-              placeholder="Search stories..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 pr-10 h-10 text-sm border-gray-300 focus:border-accent focus:ring-accent bg-white"
-            />
-            {searchQuery && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2 rounded-md hover:bg-gray-100"
-                onClick={() => setSearchQuery('')}
-              >
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            )}
+          <div className="flex items-center justify-between pb-3">
+            <div className="relative max-w-md flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <Input
+                type="text"
+                placeholder="Search stories..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10 pr-10 h-9 text-sm border-gray-300 focus:border-accent focus:ring-accent bg-white"
+              />
+              {searchQuery && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 rounded-md hover:bg-gray-100"
+                  onClick={() => setSearchQuery('')}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       </div>

@@ -26,6 +26,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { TagHeader } from '@/components/TagHeader';
 import { TagListCard } from '@/components/TagListCard';
 import { MenuDrawer } from '@/components/MenuDrawer';
+import { WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
 import { BottomTabBar } from '@/components/BottomTabBar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
@@ -63,6 +64,7 @@ export default function TagManagementScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isInfoExpanded, setIsInfoExpanded] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isWorkspaceSheetOpen, setIsWorkspaceSheetOpen] = useState(false);
   const newTagInputRef = useRef<TextInput>(null);
   const scrollViewRef = useRef<ScrollView>(null);
   const insets = useSafeAreaInsets();
@@ -1373,7 +1375,20 @@ export default function TagManagementScreen() {
       />
       
       {/* Menu Drawer */}
-      <MenuDrawer visible={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
+      <MenuDrawer 
+        visible={isMenuOpen} 
+        onClose={() => setIsMenuOpen(false)}
+        workspaceSheetOpen={isWorkspaceSheetOpen}
+        onWorkspaceSheetChange={setIsWorkspaceSheetOpen}
+      />
+      
+      {/* Workspace Sheet Modal - Rendered separately so it persists when drawer closes */}
+      <WorkspaceSwitcher 
+        position="left"
+        externalModalOpen={isWorkspaceSheetOpen}
+        onExternalModalChange={setIsWorkspaceSheetOpen}
+        showButton={false}
+      />
 
       {isLoading ? (
         <View className="flex-1 items-center justify-center">

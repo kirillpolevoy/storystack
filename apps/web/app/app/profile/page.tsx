@@ -289,14 +289,16 @@ export default function ProfilePage() {
   return (
     <div className="flex h-full flex-col bg-gray-50">
       {/* Header */}
-      <div className="border-b border-gray-200 bg-white shadow-sm">
-        <div className="px-8 pt-6 pb-4">
-          <h1 className="text-3xl font-bold text-gray-900 tracking-tight mb-1">
-            Profile
-          </h1>
-          <p className="text-sm text-gray-500 font-medium">
-            Manage your account and preferences
-          </p>
+      <div className="border-b border-gray-200 bg-white">
+        <div className="px-8 pt-4">
+          <div className="flex items-center justify-between pb-4">
+            <div>
+              <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">
+                Profile
+              </h1>
+              <p className="text-sm text-gray-500 mt-1">Manage your account and preferences</p>
+            </div>
+          </div>
         </div>
       </div>
 

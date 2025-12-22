@@ -1,8 +1,7 @@
 'use client'
 
-import Image from 'next/image'
 import { Asset } from '@/types'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Button } from '@/components/ui/button'
@@ -33,9 +32,19 @@ export function AssetTile({
   const [isLoading, setIsLoading] = useState(true)
   const [isStoryBadgeOpen, setIsStoryBadgeOpen] = useState(false)
   const [isHovered, setIsHovered] = useState(false)
+  const [imageSrc, setImageSrc] = useState<string>('')
   
   // Properly prioritize thumbnail URLs - thumb should be 400px, preview 2000px
   const imageUrl = asset.thumbUrl || asset.previewUrl || asset.publicUrl || ''
+  
+  // Initialize image source
+  useEffect(() => {
+    if (imageUrl) {
+      setImageSrc(imageUrl)
+      setImageError(false)
+      setIsLoading(true)
+    }
+  }, [imageUrl])
   
   const storyCount = asset.story_count || 0
   const storyNames = asset.story_names || []
@@ -177,26 +186,31 @@ export function AssetTile({
           )}
         </div>
       )}
-      {imageUrl && !imageError ? (
+      {imageSrc && !imageError ? (
         <>
           {isLoading && (
             <div className="absolute inset-0 bg-gray-100 animate-pulse" />
           )}
-          <Image
-            src={imageUrl}
+          <img
+            src={imageSrc}
             alt={asset.tags?.[0] || 'Asset'}
-            fill
-            className={`object-cover transition-opacity duration-200 ${
+            className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ${
               isLoading ? 'opacity-0' : 'opacity-100'
             }`}
-            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, (max-width: 1280px) 25vw, 20vw"
             onError={() => {
-              setImageError(true)
-              setIsLoading(false)
+              // Try fallback URLs in order
+              if (imageSrc === asset.thumbUrl && asset.previewUrl) {
+                setImageSrc(asset.previewUrl)
+              } else if (imageSrc === asset.previewUrl && asset.publicUrl) {
+                setImageSrc(asset.publicUrl)
+              } else {
+                // All URLs failed
+                setImageError(true)
+                setIsLoading(false)
+              }
             }}
             onLoad={() => setIsLoading(false)}
             loading="lazy"
-            quality={85}
           />
         </>
       ) : (
@@ -215,6 +229,7 @@ export function AssetTile({
                 d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
               />
             </svg>
+            <p className="text-xs text-gray-500 mt-2">Image unavailable</p>
           </div>
         </div>
       )}

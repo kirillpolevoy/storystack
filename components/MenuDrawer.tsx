@@ -21,9 +21,11 @@ type MenuItem = {
 type MenuDrawerProps = {
   visible: boolean;
   onClose: () => void;
+  workspaceSheetOpen?: boolean;
+  onWorkspaceSheetChange?: (open: boolean) => void;
 };
 
-export function MenuDrawer({ visible, onClose }: MenuDrawerProps) {
+export function MenuDrawer({ visible, onClose, workspaceSheetOpen, onWorkspaceSheetChange }: MenuDrawerProps) {
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
@@ -242,11 +244,10 @@ export function MenuDrawer({ visible, onClose }: MenuDrawerProps) {
 
           {/* Menu Content */}
           <View style={{ flex: 1, paddingTop: 8 }}>
-            {/* Workspace Switcher Section - Premium placement */}
+            {/* Workspace Switcher Section - Seamlessly integrated */}
             <View
               style={{
-                paddingHorizontal: 20,
-                paddingBottom: 20,
+                paddingBottom: 16,
                 borderBottomWidth: 1,
                 borderBottomColor: 'rgba(0, 0, 0, 0.08)',
                 marginBottom: 8,
@@ -256,15 +257,20 @@ export function MenuDrawer({ visible, onClose }: MenuDrawerProps) {
                 style={{
                   fontSize: 13,
                   fontWeight: '600',
-                  color: '#8e8e93',
+                  color: '#6b7280',
                   letterSpacing: -0.1,
-                  marginBottom: 12,
+                  marginBottom: 8,
+                  marginHorizontal: 20,
                   textTransform: 'uppercase',
                 }}
               >
                 Workspace
               </Text>
-              <WorkspaceSwitcher />
+              <WorkspaceSwitcher 
+                onMenuClose={handleClose} 
+                externalModalOpen={workspaceSheetOpen}
+                onExternalModalChange={onWorkspaceSheetChange}
+              />
             </View>
 
             {/* Main Navigation Section */}

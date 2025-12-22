@@ -9,28 +9,46 @@ type WorkspaceAvatarProps = {
   showName?: boolean;
 };
 
-// Generate a consistent color for a workspace based on its ID
+// Apple-style color system: Systematic HSL-based palette ensuring clear distinction
+// Base accent: #b38f5b (HSL: ~35°, 35%, 53%) - warm gold
+// Strategy: Wider hue range (15-55°) with varied lightness (40-65%) for maximum distinction
+// Maintains warm, earthy feel while ensuring each workspace is clearly identifiable
 function getWorkspaceColor(workspaceId: string): string {
-  // Simple hash function to generate consistent color
+  // Curated palette with wider hue variation and varied lightness for clear distinction
+  // Each color is perceptually distinct while staying within warm gold/bronze/amber/terracotta family
+  // Format: {hue, saturation, lightness} in HSL
+  const palette = [
+    { h: 35, s: 35, l: 53 },   // Base: #b38f5b (warm gold) - app accent
+    { h: 18, s: 45, l: 48 },   // Terracotta: #b86d4e (warmer, more orange)
+    { h: 45, s: 40, l: 58 },   // Bright amber: #d4a85a (yellower)
+    { h: 25, s: 42, l: 42 },   // Deep rust: #9e6b4e (darker, redder)
+    { h: 38, s: 36, l: 65 },   // Light honey: #d8b070 (lighter, warmer)
+    { h: 30, s: 38, l: 52 },   // Warm caramel: #b9875f (medium)
+    { h: 15, s: 38, l: 45 },   // Burnt sienna: #9e6b52 (darker, more red)
+    { h: 42, s: 34, l: 60 },   // Butterscotch: #c9a068 (lighter, yellow)
+    { h: 22, s: 40, l: 44 },   // Dark amber: #9b6f4e (darker)
+    { h: 36, s: 33, l: 62 },   // Golden tan: #d0a46c (light)
+    { h: 20, s: 35, l: 40 },   // Deep brown: #916948 (very dark)
+    { h: 40, s: 36, l: 56 },   // Light bronze: #c19a64 (medium-light)
+    { h: 28, s: 34, l: 47 },   // Coffee: #a07852 (medium-dark)
+    { h: 48, s: 38, l: 59 },   // Warm beige: #c9a066 (light, yellow)
+    { h: 32, s: 36, l: 43 },   // Chestnut: #96704e (dark)
+  ];
+  
+  // Simple hash function to generate consistent index
   let hash = 0;
   for (let i = 0; i < workspaceId.length; i++) {
     hash = workspaceId.charCodeAt(i) + ((hash << 5) - hash);
   }
   
-  // Generate a color from the hash (warm, professional colors)
-  const hue = Math.abs(hash % 360);
-  // Use a warm color palette (hue 0-60 and 300-360)
-  const adjustedHue = hue < 60 ? hue : 300 + (hue - 60) % 60;
+  // Select a distinct color from the palette
+  const index = Math.abs(hash) % palette.length;
+  const color = palette[index];
   
-  // Convert to HSL and then to a nice color
-  // Using a fixed saturation and lightness for consistency
-  const saturation = 65;
-  const lightness = 50;
-  
-  // Convert HSL to RGB (simplified)
-  const h = adjustedHue / 360;
-  const s = saturation / 100;
-  const l = lightness / 100;
+  // Convert HSL to RGB
+  const h = color.h / 360;
+  const s = color.s / 100;
+  const l = color.l / 100;
   
   const c = (1 - Math.abs(2 * l - 1)) * s;
   const x = c * (1 - Math.abs(((h * 6) % 2) - 1));

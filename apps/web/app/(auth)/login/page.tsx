@@ -51,14 +51,26 @@ export default async function LoginPage() {
       const supabase = await createClient()
       const {
         data: { user },
+        error: authError,
       } = await supabase.auth.getUser()
 
-      if (user) {
+      if (authError) {
+        console.error('[LoginPage] Auth error:', authError)
+        // Continue to show login page on auth error
+      } else if (user) {
         redirect('/app/library')
       }
     } catch (error) {
       // If there's an error checking auth, still show login page
       console.error('[LoginPage] Error checking auth:', error)
+      console.error('[LoginPage] Error details:', error instanceof Error ? error.message : String(error))
+      
+      // Check if this is a redirect error (which is expected in Next.js)
+      if (error && typeof error === 'object' && 'digest' in error) {
+        // This is a Next.js redirect, re-throw it
+        throw error
+      }
+      // For other errors, continue to show login page
     }
   }
 

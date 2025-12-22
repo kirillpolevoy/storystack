@@ -15,44 +15,57 @@ function getTagSetupKey(userId: string | null): string {
 }
 
 /**
- * Check if the user has set up at least one tag
+ * Check if tags are set up for a workspace (workspace-scoped)
  */
-export async function hasTagsSetUp(userId?: string | null): Promise<boolean> {
+export async function hasTagsSetUp(workspaceId?: string | null, userId?: string | null): Promise<boolean> {
   try {
-    // Try to get userId from session if not provided
-    let currentUserId = userId;
-    if (!currentUserId) {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        currentUserId = user?.id || null;
-      } catch (error) {
-        console.error('[TagSetup] Error getting user:', error);
-        return false;
-      }
-    }
-
-    if (!currentUserId) {
+    // Workspace ID is required - tags are workspace-specific
+    if (!workspaceId) {
+      console.warn('[TagSetup] No workspace ID provided - tags are workspace-scoped');
       return false;
     }
 
-    // Check Supabase first - look for custom_tags in tag_config
+    // Check Supabase - look for tags in multiple places (workspace-specific)
     if (supabase) {
       try {
-        const { data: config, error } = await supabase
-          .from('tag_config')
-          .select('custom_tags')
-          .eq('user_id', currentUserId)
-          .single();
+        // First check: Check the normalized tags table (primary source of truth)
+        // This matches how getAllAvailableTags works
+        const { data: tags, error: tagsError } = await supabase
+          .from('tags')
+          .select('name')
+          .eq('workspace_id', workspaceId)
+          .limit(1);
 
-        if (!error && config?.custom_tags && Array.isArray(config.custom_tags) && config.custom_tags.length > 0) {
+        if (!tagsError && tags && tags.length > 0) {
+          console.log(`[TagSetup] ✅ Found ${tags.length} tag(s) in tags table for workspace ${workspaceId}`);
           return true;
         }
 
-        // Also check if user has any assets with tags
+        // Second check: Check tag_config for custom_tags (workspace-specific)
+        const { data: config, error } = await supabase
+          .from('tag_config')
+          .select('custom_tags, auto_tags')
+          .eq('workspace_id', workspaceId)
+          .maybeSingle();
+
+        if (!error && config) {
+          // Check if workspace has custom tags
+          if (config.custom_tags && Array.isArray(config.custom_tags) && config.custom_tags.length > 0) {
+            console.log(`[TagSetup] ✅ Found ${config.custom_tags.length} custom tag(s) in tag_config for workspace ${workspaceId}`);
+            return true;
+          }
+          // Check if workspace has auto tags enabled
+          if (config.auto_tags && Array.isArray(config.auto_tags) && config.auto_tags.length > 0) {
+            console.log(`[TagSetup] ✅ Found ${config.auto_tags.length} auto tag(s) in tag_config for workspace ${workspaceId}`);
+            return true;
+          }
+        }
+
+        // Third check: Check if workspace has any assets with tags
         const { data: assets } = await supabase
           .from('assets')
           .select('tags')
-          .eq('user_id', currentUserId)
+          .eq('workspace_id', workspaceId)
           .limit(1);
 
         if (assets && assets.length > 0) {
@@ -61,21 +74,26 @@ export async function hasTagsSetUp(userId?: string | null): Promise<boolean> {
             return assetTags.length > 0;
           });
           if (hasTags) {
+            console.log(`[TagSetup] ✅ Found assets with tags in workspace ${workspaceId}`);
             return true;
           }
         }
+
+        console.log(`[TagSetup] ⚠️  No tags found for workspace ${workspaceId} in tags table, tag_config, or assets`);
       } catch (error) {
         console.warn('[TagSetup] Error checking Supabase for tags:', error);
       }
     }
 
-    // Fallback to AsyncStorage
+    // Fallback to AsyncStorage (workspace-specific)
     try {
-      const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${currentUserId}`;
-      const customTagsJson = await AsyncStorage.getItem(userSpecificKey);
-      const customTags = customTagsJson ? JSON.parse(customTagsJson) : [];
-      if (Array.isArray(customTags) && customTags.length > 0) {
-        return true;
+      if (workspaceId) {
+        const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${workspaceId}`;
+        const customTagsJson = await AsyncStorage.getItem(workspaceSpecificKey);
+        const customTags = customTagsJson ? JSON.parse(customTagsJson) : [];
+        if (Array.isArray(customTags) && customTags.length > 0) {
+          return true;
+        }
       }
     } catch (error) {
       console.warn('[TagSetup] Error checking AsyncStorage for tags:', error);

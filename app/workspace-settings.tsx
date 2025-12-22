@@ -16,7 +16,6 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
 import {
   updateWorkspaceName,
-  createWorkspace,
   addWorkspaceMember,
   removeWorkspaceMember,
   updateWorkspaceMemberRole,
@@ -35,9 +34,6 @@ export default function WorkspaceSettingsScreen() {
   const [isSavingName, setIsSavingName] = useState(false);
   const [members, setMembers] = useState<any[]>([]);
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
-  const [showCreateWorkspaceModal, setShowCreateWorkspaceModal] = useState(false);
-  const [newWorkspaceName, setNewWorkspaceName] = useState('');
-  const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
   const [showDeleteWorkspaceModal, setShowDeleteWorkspaceModal] = useState(false);
   const [isDeletingWorkspace, setIsDeletingWorkspace] = useState(false);
 
@@ -93,52 +89,6 @@ export default function WorkspaceSettingsScreen() {
   useEffect(() => {
     loadMembers();
   }, [loadMembers]);
-
-  const handleCreateWorkspace = async () => {
-    if (!session?.user?.id || !newWorkspaceName.trim()) {
-      Alert.alert('Error', 'Please enter a workspace name');
-      return;
-    }
-
-    setIsCreatingWorkspace(true);
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      const workspace = await createWorkspace(newWorkspaceName.trim(), session.user.id);
-      
-      // Refresh workspaces and switch to the new one
-      await refreshWorkspaces();
-      
-      // Set the new workspace as active
-      const { error: prefError } = await supabase
-        .from('user_preferences')
-        .upsert({
-          user_id: session.user.id,
-          active_workspace_id: workspace.id,
-          updated_at: new Date().toISOString(),
-        });
-
-      if (prefError) {
-        console.warn('[WorkspaceSettings] Error updating user preferences:', prefError);
-      }
-
-      setShowCreateWorkspaceModal(false);
-      setNewWorkspaceName('');
-      Alert.alert('Success', 'Workspace created! Switching to new workspace...', [
-        {
-          text: 'OK',
-          onPress: () => {
-            // Reload to switch workspace
-            router.replace('/');
-          },
-        },
-      ]);
-    } catch (error) {
-      console.error('[WorkspaceSettings] Error creating workspace:', error);
-      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to create workspace');
-    } finally {
-      setIsCreatingWorkspace(false);
-    }
-  };
 
   const handleSaveName = async () => {
     if (!activeWorkspace || !hasPermission('owner')) {
@@ -275,25 +225,6 @@ export default function WorkspaceSettingsScreen() {
             <Text className="text-[20px] font-bold text-gray-900">Workspace Settings</Text>
             <View className="w-10" />
           </View>
-        </View>
-
-        {/* Create New Workspace */}
-        <View className="px-5 py-6 border-b border-gray-200">
-          <Text className="text-[18px] font-semibold text-gray-900 mb-4">Create New Workspace</Text>
-          <Text className="text-[14px] text-gray-500 mb-4">
-            Create a new workspace to organize your content separately
-          </Text>
-          <TouchableOpacity
-            onPress={() => setShowCreateWorkspaceModal(true)}
-            activeOpacity={0.7}
-            className="px-4 py-3 rounded-xl"
-            style={{ backgroundColor: '#b38f5b' }}
-          >
-            <View className="flex-row items-center justify-center gap-2">
-              <MaterialCommunityIcons name="plus" size={20} color="#ffffff" />
-              <Text className="text-[16px] font-semibold text-white">Create New Workspace</Text>
-            </View>
-          </TouchableOpacity>
         </View>
 
         {/* Workspace Name (Owner only) */}
@@ -486,65 +417,6 @@ export default function WorkspaceSettingsScreen() {
                   <ActivityIndicator size="small" color="#ffffff" />
                 ) : (
                   <Text className="text-center text-[16px] font-semibold text-white">Delete</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Create Workspace Modal */}
-      <Modal
-        visible={showCreateWorkspaceModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          setShowCreateWorkspaceModal(false);
-          setNewWorkspaceName('');
-        }}
-      >
-        <View className="flex-1 items-center justify-center bg-black/50">
-          <View className="bg-white rounded-2xl p-6 mx-5 w-full max-w-sm">
-            <Text className="text-[20px] font-bold text-gray-900 mb-2">Create New Workspace</Text>
-            <Text className="text-[14px] text-gray-600 mb-4">
-              Enter a name for your new workspace:
-            </Text>
-            <TextInput
-              value={newWorkspaceName}
-              onChangeText={setNewWorkspaceName}
-              placeholder="My Workspace"
-              placeholderTextColor="#9ca3af"
-              autoCapitalize="words"
-              autoCorrect={false}
-              className="px-4 py-3 rounded-xl border border-gray-300 text-[16px] text-gray-900 mb-4"
-              style={{ backgroundColor: '#f9fafb' }}
-              maxLength={100}
-            />
-            <View className="flex-row gap-3">
-              <TouchableOpacity
-                onPress={() => {
-                  setShowCreateWorkspaceModal(false);
-                  setNewWorkspaceName('');
-                }}
-                activeOpacity={0.7}
-                disabled={isCreatingWorkspace}
-                className="flex-1 px-4 py-3 rounded-xl border border-gray-300"
-              >
-                <Text className="text-center text-[16px] font-semibold text-gray-700">Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleCreateWorkspace}
-                activeOpacity={0.7}
-                disabled={isCreatingWorkspace || !newWorkspaceName.trim()}
-                className="flex-1 px-4 py-3 rounded-xl"
-                style={{
-                  backgroundColor: isCreatingWorkspace || !newWorkspaceName.trim() ? '#e5e7eb' : '#b38f5b',
-                }}
-              >
-                {isCreatingWorkspace ? (
-                  <ActivityIndicator size="small" color="#ffffff" />
-                ) : (
-                  <Text className="text-center text-[16px] font-semibold text-white">Create</Text>
                 )}
               </TouchableOpacity>
             </View>
