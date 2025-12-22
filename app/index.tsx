@@ -1336,6 +1336,7 @@ export default function LibraryScreen() {
           locations[j] = null;
           datesTaken[j] = null;
         }
+        // Don't update progress here - we'll update during compression which is the main processing step
       }
 
       for (let i = 0; i < result.assets.length; i += BATCH_SIZE) {
@@ -1404,18 +1405,21 @@ export default function LibraryScreen() {
           })
         );
 
-        // Store results in correct order
-        let processedInBatch = 0;
-        batchResults.forEach((result) => {
+        // Store results in correct order and update progress as we go
+        // Process sequentially to ensure state updates are applied correctly
+        for (const result of batchResults) {
           if (result) {
             compressedImages[result.index] = result.compressed;
             imageHashes[result.index] = result.hash;
-            processedInBatch++;
+            // Update processing progress for each completed image
+            // result.index is the global index (0-based), so we add 1 to get the count
+            // Use the maximum to handle out-of-order completion and React batching
+            setImportProgress(prev => ({ 
+              ...prev, 
+              processed: Math.max(prev.processed, result.index + 1) 
+            }));
           }
-        });
-
-        // Update processing progress
-        setImportProgress(prev => ({ ...prev, processed: prev.processed + processedInBatch }));
+        }
 
         // Log progress
         console.log(`[Library] Processed batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(result.assets.length / BATCH_SIZE)}`);
