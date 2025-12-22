@@ -5,10 +5,9 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ArrowLeft, X, Settings, Mail, UserPlus, Trash2, Crown, Shield, Edit, Eye, Check, Loader2, Image } from 'lucide-react'
+import { ArrowLeft, X, Settings, Mail, UserPlus, Trash2, Crown, Shield, Edit, Eye, Check, Loader2 } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { deleteWorkspace } from '@/utils/workspaceHelpers'
-import { regenerateThumbnailsForAssets } from '@/scripts/regenerateThumbnails'
 import {
   Select,
   SelectContent,
@@ -73,8 +72,6 @@ export default function WorkspaceSettingsPage() {
   const [hasChanges, setHasChanges] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
-  const [isRegeneratingThumbnails, setIsRegeneratingThumbnails] = useState(false)
-  const [thumbnailRegenProgress, setThumbnailRegenProgress] = useState<{ processed: number; succeeded: number; failed: number } | null>(null)
 
   const { data: user } = useQuery({
     queryKey: ['user'],
@@ -376,89 +373,6 @@ export default function WorkspaceSettingsPage() {
                   hasAdminRole={member ? hasRole('admin') : false}
                   hasOwnerRole={member ? hasRole('owner') : false}
                 />
-              </div>
-            )}
-
-            {/* Thumbnail Regeneration Section */}
-            {member && (hasRole('admin') || hasRole('owner')) && (
-              <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-                <div className="px-8 py-6 border-b border-gray-100">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2.5 rounded-xl bg-accent/10">
-                      <Image className="h-5 w-5 text-accent" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-semibold text-gray-900">Regenerate Thumbnails</h2>
-                      <p className="text-sm text-gray-600 mt-1">Fix pixelation by regenerating thumbnails at higher resolution</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="px-8 py-6">
-                  <p className="text-base text-gray-700 mb-6 leading-relaxed">
-                    Regenerate thumbnails for existing assets to fix pixelation issues. This will update thumbnails from 400px to 800px resolution. The process runs in batches and may take some time depending on the number of assets.
-                  </p>
-                  {thumbnailRegenProgress && (
-                    <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-blue-900">Progress</span>
-                        <span className="text-sm text-blue-700">
-                          {thumbnailRegenProgress.processed} processed
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-4 text-sm">
-                        <span className="text-green-700">✓ {thumbnailRegenProgress.succeeded} succeeded</span>
-                        {thumbnailRegenProgress.failed > 0 && (
-                          <span className="text-red-700">✗ {thumbnailRegenProgress.failed} failed</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  <Button
-                    onClick={async () => {
-                      if (!workspace?.id) return
-                      
-                      setIsRegeneratingThumbnails(true)
-                      setThumbnailRegenProgress(null)
-                      
-                      try {
-                        const results = await regenerateThumbnailsForAssets(10, workspace.id)
-                        setThumbnailRegenProgress(results)
-                        
-                        if (results.succeeded > 0) {
-                          // Invalidate assets query to refresh thumbnails
-                          queryClient.invalidateQueries({ queryKey: ['assets'] })
-                        }
-                        
-                        if (results.failed > 0) {
-                          alert(`Regeneration complete: ${results.succeeded} succeeded, ${results.failed} failed. Check console for details.`)
-                        } else if (results.processed === 0) {
-                          alert('No assets need thumbnail regeneration.')
-                        } else {
-                          alert(`Successfully regenerated ${results.succeeded} thumbnails!`)
-                        }
-                      } catch (error) {
-                        console.error('[WorkspaceSettings] Thumbnail regeneration error:', error)
-                        alert(`Failed to regenerate thumbnails: ${error instanceof Error ? error.message : String(error)}`)
-                      } finally {
-                        setIsRegeneratingThumbnails(false)
-                      }
-                    }}
-                    disabled={isRegeneratingThumbnails}
-                    className="h-11 px-6 text-sm font-medium bg-accent hover:bg-accent/90 text-white rounded-lg shadow-sm hover:shadow transition-all"
-                  >
-                    {isRegeneratingThumbnails ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Regenerating...
-                      </>
-                    ) : (
-                      <>
-                        <Image className="h-4 w-4 mr-2" />
-                        Regenerate Thumbnails
-                      </>
-                    )}
-                  </Button>
-                </div>
               </div>
             )}
 
