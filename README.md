@@ -33,7 +33,7 @@ A React Native mobile application for organizing, tagging, and building photo st
 
 ## Current Version
 
-**v1.1.6** (Build 11)
+**v1.2.0** (Build 13)
 
 Latest improvements:
 - Enhanced batch autotagging with better error handling
