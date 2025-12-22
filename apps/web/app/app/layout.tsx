@@ -36,9 +36,9 @@ export default async function AppLayout({
 
     return (
       <MobileMenuProvider>
-        <div className="flex h-screen bg-background">
+        <div className="flex h-screen bg-background" style={{ backgroundColor: '#f9fafb' }}>
           <Sidebar />
-          <main className="flex-1 overflow-hidden bg-background lg:ml-0">{children}</main>
+          <main className="flex-1 overflow-hidden bg-background lg:ml-0" style={{ backgroundColor: '#f9fafb' }}>{children}</main>
         </div>
       </MobileMenuProvider>
     )

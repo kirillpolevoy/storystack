@@ -12,6 +12,14 @@ export const metadata: Metadata = {
   title: 'StoryStack',
   description: 'Centralized hub for asset and content management',
   metadataBase: new URL(siteUrl),
+  viewport: {
+    width: 'device-width',
+    initialScale: 1,
+    maximumScale: 1,
+    userScalable: false,
+    viewportFit: 'cover',
+  },
+  themeColor: '#f9fafb',
   openGraph: {
     title: 'StoryStack',
     description: 'Centralized hub for asset and content management',
@@ -47,9 +55,11 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en">
-      <body className={inter.className}>
-        <Providers>{children}</Providers>
+    <html lang="en" style={{ backgroundColor: '#f9fafb' }}>
+      <body className={inter.className} style={{ backgroundColor: '#f9fafb' }}>
+        <div style={{ backgroundColor: '#f9fafb', minHeight: '100vh' }}>
+          <Providers>{children}</Providers>
+        </div>
       </body>
     </html>
   )

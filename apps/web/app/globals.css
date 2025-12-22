@@ -58,16 +58,39 @@
     @apply border-border;
   }
   html {
-    background: #f9fafb; /* Match body background to prevent yellow edges */
+    background: #f9fafb !important; /* Match body background to prevent yellow edges - Safari fix */
     height: 100%;
+    -webkit-tap-highlight-color: transparent; /* Remove yellow tap highlight on iOS Safari */
   }
   body {
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background: #f9fafb; /* Clean, professional gray background */
+    background: #f9fafb !important; /* Clean, professional gray background - Safari fix */
     min-height: 100%;
+    -webkit-tap-highlight-color: transparent; /* Remove yellow tap highlight on iOS Safari */
+  }
+  /* Next.js root div - Safari iOS fix for yellow background flash */
+  #__next {
+    background: #f9fafb !important;
+    min-height: 100%;
+  }
+  /* Ensure all root containers have background during transitions */
+  [data-nextjs-scroll-focus-boundary] {
+    background: #f9fafb !important;
+  }
+  /* Safari iOS specific fixes */
+  @supports (-webkit-touch-callout: none) {
+    html, body, #__next, [data-nextjs-scroll-focus-boundary] {
+      background-color: #f9fafb !important;
+      -webkit-overflow-scrolling: touch;
+    }
+    /* Prevent yellow flash during page transitions on Safari iOS */
+    body {
+      -webkit-transform: translateZ(0);
+      transform: translateZ(0);
+    }
   }
   
   /* CRM-style professional typography */

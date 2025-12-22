@@ -647,7 +647,7 @@ export default function TagsPage() {
   })
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex h-full flex-col bg-background" style={{ backgroundColor: '#f9fafb' }}>
       <div className="border-b border-gray-200 bg-white">
         <div className="px-4 sm:px-6 lg:px-8 pt-4">
           {/* Row 1: Title + Actions */}
