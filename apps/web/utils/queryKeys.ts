@@ -21,7 +21,7 @@ export const workspaceQueryKeys = {
     filters?: string[],
     viewFilter?: string
   ) => {
-    const key = ['assets', workspaceId] as const
+    const key: unknown[] = ['assets', workspaceId]
     if (searchQuery !== undefined) key.push(searchQuery)
     if (filters !== undefined) key.push(filters)
     if (viewFilter !== undefined) key.push(viewFilter)
