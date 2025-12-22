@@ -165,8 +165,6 @@ export default function TagsPage() {
 
       return tagConfigs
     },
-    staleTime: 0, // Always fetch fresh data
-    gcTime: 0, // Don't cache
   })
 
   // Filter tags based on search
