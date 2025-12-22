@@ -39,6 +39,7 @@ import { ImportLoadingOverlay } from '@/components/ImportLoadingOverlay';
 import { computeImageHash, checkForDuplicates } from '@/utils/duplicateDetection';
 import { DuplicateDetectionDialog } from '@/components/DuplicateDetectionDialog';
 import { extractLocationFromEXIF } from '@/utils/extractLocationFromEXIF';
+import { extractDateFromEXIF } from '@/utils/extractDateFromEXIF';
 
 export default function LibraryScreen() {
   const router = useRouter();
@@ -59,7 +60,7 @@ export default function LibraryScreen() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
-  const [importProgress, setImportProgress] = useState({ total: 0, imported: 0, currentPhoto: 0 });
+  const [importProgress, setImportProgress] = useState({ total: 0, processed: 0, imported: 0, currentPhoto: 0 });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedTags, setSelectedTags] = useState<TagVocabulary[]>([]);
   const [selectedAssets, setSelectedAssets] = useState<Asset[]>([]);
@@ -71,6 +72,7 @@ export default function LibraryScreen() {
   const [successfullyAutoTaggedCount, setSuccessfullyAutoTaggedCount] = useState(0);
   const [allAvailableTags, setAllAvailableTags] = useState<TagVocabulary[]>([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isWorkspaceSheetOpen, setIsWorkspaceSheetOpen] = useState(false);
   const [hasStartedAutoTagging, setHasStartedAutoTagging] = useState(false);
   const hasSeenAutoTaggingActive = useRef(false); // Track if we've seen autoTaggingAssets.size > 0
   const optimisticTagUpdatesRef = useRef<Map<string, { tags: TagVocabulary[], timestamp: number }>>(new Map()); // Track optimistic tag updates
@@ -81,6 +83,7 @@ export default function LibraryScreen() {
     compressedImages: Array<{ uri: string; width: number; height: number; size: number }>;
     duplicateIndices: number[];
     locations: (string | null)[];
+    datesTaken: (Date | null)[];
   } | null>(null);
   const [showRetryNotification, setShowRetryNotification] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
@@ -89,6 +92,9 @@ export default function LibraryScreen() {
   const retryNotificationTranslateY = useRef(new Animated.Value(-60)).current;
   const [newlyImportedAssetIds, setNewlyImportedAssetIds] = useState<Set<string>>(new Set());
   const [recentlyTaggedAssets, setRecentlyTaggedAssets] = useState<Set<string>>(new Set()); // Track recently successfully tagged assets
+  const isLoadingRef = useRef(false); // Track loading state to prevent concurrent refreshes
+  const lastBatchRefreshRef = useRef<Map<string, number>>(new Map()); // Track when we last refreshed for each batch
+  const isRefreshingForBatchRef = useRef(false); // Prevent concurrent batch-triggered refreshes
   
   // Premium delete flow state
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
@@ -240,7 +246,7 @@ export default function LibraryScreen() {
         console.log('[Library] All import and auto-tagging complete, hiding overlay in 1.5s');
         const timer = setTimeout(async () => {
           setIsImporting(false);
-          setImportProgress({ total: 0, imported: 0, currentPhoto: 0 });
+          setImportProgress({ total: 0, processed: 0, imported: 0, currentPhoto: 0 });
           setHasStartedAutoTagging(false);
           hasSeenAutoTaggingActive.current = false;
           
@@ -269,7 +275,7 @@ export default function LibraryScreen() {
             console.log('[Library] No auto-tagging needed, hiding overlay in 1.5s');
             hideTimer = setTimeout(async () => {
               setIsImporting(false);
-              setImportProgress({ total: 0, imported: 0, currentPhoto: 0 });
+              setImportProgress({ total: 0, processed: 0, imported: 0, currentPhoto: 0 });
               
               // Check for pending/failed assets when overlay is dismissed
               await checkForRetriesOnOverlayDismiss();
@@ -335,6 +341,7 @@ export default function LibraryScreen() {
   const loadAssets = useCallback(async (isPullRefresh = false) => {
     if (!activeWorkspaceId) {
       setIsLoading(false);
+      isLoadingRef.current = false;
       setIsRefreshing(false);
       return;
     }
@@ -342,6 +349,7 @@ export default function LibraryScreen() {
     if (!supabase) {
       setAssets([]);
       setIsLoading(false);
+      isLoadingRef.current = false;
       setIsRefreshing(false);
       return;
     }
@@ -352,6 +360,7 @@ export default function LibraryScreen() {
       console.warn('[Library] Invalid workspace ID format, skipping load:', activeWorkspaceId);
       setAssets([]);
       setIsLoading(false);
+      isLoadingRef.current = false;
       setIsRefreshing(false);
       return;
     }
@@ -362,6 +371,7 @@ export default function LibraryScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } else {
       setIsLoading(true);
+      isLoadingRef.current = true;
     }
     
     // Use user ID from session (already available from AuthContext)
@@ -369,6 +379,7 @@ export default function LibraryScreen() {
       console.warn('[Library] No authenticated user, skipping asset load');
       setAssets([]);
       setIsLoading(false);
+      isLoadingRef.current = false;
       setIsRefreshing(false);
       return;
     }
@@ -383,7 +394,7 @@ export default function LibraryScreen() {
     // Note: tags array is kept for backward compatibility during migration
     const { data: assetData, error: assetError } = await supabase
       .from('assets')
-      .select('id, workspace_id, storage_path, source, tags, location, created_at, auto_tag_status, deleted_at')
+      .select('id, workspace_id, storage_path, source, tags, location, created_at, auto_tag_status, deleted_at, openai_batch_id')
       .eq('workspace_id', activeWorkspaceId)
       .is('deleted_at', null) // Exclude soft-deleted assets
       .order('created_at', { ascending: false })
@@ -391,6 +402,9 @@ export default function LibraryScreen() {
 
     if (assetError) {
       console.error('[Library] asset fetch failed', assetError);
+      setIsLoading(false);
+      isLoadingRef.current = false;
+      setIsRefreshing(false);
     } else if (assetData) {
       // Batch process URLs and tags for better performance
       const mapped = (assetData as Asset[]).map((asset) => {
@@ -422,6 +436,10 @@ export default function LibraryScreen() {
         mapped.forEach(asset => {
           if (asset.auto_tag_status === 'pending') {
             next.add(asset.id);
+            // If asset has openai_batch_id, it's part of a Batch API job - batch polling will handle completion
+            if (asset.openai_batch_id) {
+              console.log(`[Library] Asset ${asset.id} is part of batch ${asset.openai_batch_id} - batch polling will handle completion`);
+            }
           } else if (asset.auto_tag_status === 'completed' || asset.auto_tag_status === 'failed') {
             next.delete(asset.id);
           }
@@ -463,6 +481,7 @@ export default function LibraryScreen() {
     }
 
     setIsLoading(false);
+    isLoadingRef.current = false;
     setIsRefreshing(false);
   }, [activeWorkspaceId, session]);
 
@@ -612,7 +631,8 @@ export default function LibraryScreen() {
     compressedImages: Array<{ uri: string; width: number; height: number; size: number }>,
     imageHashes: string[],
     skipDuplicates: boolean,
-    locations: (string | null)[] = []
+    locations: (string | null)[] = [],
+    datesTaken: (Date | null)[] = []
   ) => {
     if (!activeWorkspaceId || !supabase || !session?.user?.id) {
       return;
@@ -620,7 +640,7 @@ export default function LibraryScreen() {
 
     const userId = session.user.id;
     setIsImporting(true);
-    setImportProgress({ total: assetsToImport.length, imported: 0, currentPhoto: 0 });
+    setImportProgress({ total: assetsToImport.length, processed: assetsToImport.length, imported: 0, currentPhoto: 0 });
     setSuccessfullyAutoTaggedCount(0); // Reset count for new import session
 
     // Track newly imported asset IDs for this import session
@@ -647,10 +667,14 @@ export default function LibraryScreen() {
         setImportProgress(prev => ({ ...prev, currentPhoto: i + 1 }));
         console.log(`[Library] Uploading photo ${i + 1}/${assetsToImport.length}...`);
 
-        // Use location extracted BEFORE compression (EXIF data is lost during compression)
+        // Use location and date extracted BEFORE compression (EXIF data is lost during compression)
         const locationValue = locations[i] || null;
+        const dateTakenValue = datesTaken[i] || null;
         if (locationValue) {
           console.log(`[Library] Using pre-extracted location for photo ${i + 1}: ${locationValue}`);
+        }
+        if (dateTakenValue) {
+          console.log(`[Library] Using pre-extracted date taken for photo ${i + 1}: ${dateTakenValue.toISOString()}`);
         }
 
         // Prepare initial tags array (location is now stored in separate column)
@@ -674,13 +698,13 @@ export default function LibraryScreen() {
 
         const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const fileName = `${uniqueSuffix}.jpg`;
-        // Use new workspace-based storage path
-        // Format: workspaces/{workspace_id}/assets/{asset_id}/{filename}
+        // Store directly as A2 (optimized for AI) - no A1 needed
+        // Format: workspaces/{workspace_id}/assets/{asset_id}/ai/{filename}
         // We'll use a temp ID for now, then update after insert
         const tempAssetId = uniqueSuffix;
-        const filePath = `workspaces/${activeWorkspaceId}/assets/${tempAssetId}/${fileName}`;
+        const filePath = `workspaces/${activeWorkspaceId}/assets/${tempAssetId}/ai/${fileName}`;
 
-        // Upload compressed image to storage
+        // Upload A2 compressed image directly to storage (no A1 version)
         const { error: uploadError } = await supabase.storage.from('assets').upload(filePath, arrayBuffer, {
           contentType: 'image/jpeg',
           upsert: false,
@@ -707,6 +731,11 @@ export default function LibraryScreen() {
         if (locationValue) {
           insertData.location = locationValue;
         }
+        
+        // Add date_taken if available (from EXIF)
+        if (dateTakenValue) {
+          insertData.date_taken = dateTakenValue.toISOString();
+        }
 
         // Add file_hash if available (column may not exist yet)
         const hash = imageHashes[i];
@@ -732,6 +761,9 @@ export default function LibraryScreen() {
             };
             if (locationValue) {
               retryInsertData.location = locationValue;
+            }
+            if (dateTakenValue) {
+              retryInsertData.date_taken = dateTakenValue.toISOString();
             }
             const { data: retryInserted, error: retryError } = await supabase
               .from('assets')
@@ -930,14 +962,153 @@ export default function LibraryScreen() {
     await loadAssets();
     
     // Batch trigger auto-tagging for all imported assets
-    // This is more efficient than individual calls, especially for 20+ assets
-    // The queue will use OpenAI Batch API for 20+ images (50% cost savings)
+    // Directly call edge function with all assets (matches web app pattern)
+    // Edge function will automatically use Batch API for 20+ images (50% cost savings)
     if (importedAssetsForTagging.length > 0) {
-      console.log(`[Library] Triggering batch auto-tagging for ${importedAssetsForTagging.length} imported assets`);
+      console.log(`[Library] 🚀 Triggering batch auto-tagging for ${importedAssetsForTagging.length} imported assets`);
+      console.log(`[Library] Asset IDs:`, importedAssetsForTagging.map(a => a.assetId));
       
-      // Use queueBulkAutoTag for efficient batch processing
-      // This will send all images in a single batch to OpenAI (uses Batch API for 20+)
-      queueBulkAutoTag(importedAssetsForTagging);
+      const isBulkOperation = importedAssetsForTagging.length >= 20;
+      console.log(`[Library] ${isBulkOperation ? '✅ BULK OPERATION' : '📦 Normal batch'}: ${importedAssetsForTagging.length} ${isBulkOperation ? '>= 20' : '< 20'} images`);
+      console.log(`[Library] Edge function will ${isBulkOperation ? 'use OpenAI Batch API (50% cost savings)' : 'use synchronous API (immediate results)'}`);
+      
+      // Prepare batch request (matches web app pattern)
+      const batchRequest = {
+        assets: importedAssetsForTagging.map(asset => ({
+          assetId: asset.assetId,
+          imageUrl: asset.publicUrl,
+        })),
+      };
+      
+      console.log(`[Library] 📤 Calling edge function 'auto_tag_asset' with batch request:`, {
+        assetCount: batchRequest.assets.length,
+        firstAssetId: batchRequest.assets[0]?.assetId,
+        firstImageUrl: batchRequest.assets[0]?.imageUrl?.substring(0, 100) + '...',
+        batchRequestStructure: {
+          hasAssets: !!batchRequest.assets,
+          assetsIsArray: Array.isArray(batchRequest.assets),
+          assetsLength: batchRequest.assets?.length,
+        },
+      });
+      
+      try {
+        // Call edge function directly (matches web app pattern)
+        const { data, error } = await supabase.functions.invoke('auto_tag_asset', {
+          body: batchRequest,
+        });
+        
+        console.log(`[Library] 📥 Edge function response received:`, { 
+          data, 
+          error,
+          hasBatchId: !!data?.batchId,
+          hasResults: !!data?.results,
+          resultsCount: data?.results?.length,
+          responseKeys: data ? Object.keys(data) : [],
+          dataString: data ? JSON.stringify(data).substring(0, 500) : 'null',
+        });
+        
+        if (error) {
+          console.error('[Library] ❌ Batch auto-tagging error:', error);
+          console.error('[Library] Error details:', JSON.stringify(error, null, 2));
+          
+          // Check if error contains batchId (might be in error context for 202 status)
+          if (error.context?.data?.batchId) {
+            console.log(`[Library] ⚠️  Error response contains batchId - might be 202 Accepted status`);
+            const batchId = error.context.data.batchId;
+            console.log(`[Library] ✅ Batch API job created (from error context): ${batchId}`);
+            
+            // Add batch to polling queue
+            const { addBatchToPoll, startBatchPolling } = await import('@/utils/pollBatchStatus');
+            addBatchToPoll(batchId);
+            startBatchPolling();
+            console.log(`[Library] ✅ Added batch ${batchId} to polling queue`);
+            
+            // Refresh UI to show pending status
+            await loadAssets();
+            return;
+          }
+          
+          // Mark assets as failed
+          importedAssetsForTagging.forEach(async (asset) => {
+            setAutoTaggingAssets((prev) => {
+              const next = new Set(prev);
+              next.delete(asset.assetId);
+              return next;
+            });
+          });
+          return;
+        }
+        
+        // Handle response based on type (batch API vs immediate processing)
+        // Check for batchId first - this indicates Batch API was used (20+ images)
+        if (data?.batchId) {
+          // Batch API: Async processing (20+ images)
+          console.log(`[Library] ✅ Batch API job created: ${data.batchId}`);
+          console.log(`[Library] Using OpenAI Batch API (async processing, 50% cost savings)`);
+          console.log(`[Library] ✅ Batch will be processed asynchronously - assets will update when complete`);
+          
+          // Add batch to polling queue (matches web app pattern)
+          const { addBatchToPoll, startBatchPolling } = await import('@/utils/pollBatchStatus');
+          addBatchToPoll(data.batchId);
+          startBatchPolling();
+          console.log(`[Library] ✅ Added batch ${data.batchId} to polling queue`);
+          
+          // Refresh UI to show pending status
+          await loadAssets();
+          
+        } else if (data?.results) {
+          // Immediate processing: Results already available (< 20 images)
+          console.log(`[Library] ✅ Immediate processing complete for ${importedAssetsForTagging.length} assets`);
+          console.log(`[Library] Results:`, data.results);
+          
+          // Process results and update UI
+          data.results.forEach((result: any) => {
+            if (result.assetId) {
+              setAutoTaggingAssets((prev) => {
+                const next = new Set(prev);
+                next.delete(result.assetId);
+                return next;
+              });
+              setSuccessfullyAutoTaggedCount((prev) => prev + 1);
+              setRecentlyTaggedAssets((prev) => {
+                if (prev.has(result.assetId)) {
+                  return prev;
+                }
+                const next = new Set(prev);
+                next.add(result.assetId);
+                return next;
+              });
+              setTimeout(() => {
+                setRecentlyTaggedAssets((prev) => {
+                  const next = new Set(prev);
+                  next.delete(result.assetId);
+                  return next;
+                });
+              }, 5500);
+            }
+          });
+          
+          // Refresh UI to show updated tags
+          await loadAssets();
+          
+        } else {
+          console.warn(`[Library] ⚠️ Unexpected response format:`, data);
+          // Still refresh UI to be safe
+          await loadAssets();
+        }
+      } catch (error) {
+        console.error('[Library] ❌ Exception in batch auto-tagging:', error);
+        console.error('[Library] Exception details:', error instanceof Error ? error.message : String(error));
+        
+        // Mark assets as failed
+        importedAssetsForTagging.forEach(async (asset) => {
+          setAutoTaggingAssets((prev) => {
+            const next = new Set(prev);
+            next.delete(asset.assetId);
+            return next;
+          });
+        });
+      }
     }
     
     // Store the newly imported asset IDs for retry notification
@@ -1066,9 +1237,9 @@ export default function LibraryScreen() {
 
     // Strongly encourage tag setup before import (but allow skipping)
     let shouldProceedWithImport = true;
-    if (session?.user?.id) {
+    if (session?.user?.id && activeWorkspaceId) {
       const { hasTagsSetUp } = await import('@/utils/tagSetup');
-      const hasTags = await hasTagsSetUp(session.user.id);
+      const hasTags = await hasTagsSetUp(activeWorkspaceId, session.user.id);
       
       if (!hasTags) {
         // Show alert and wait for user choice
@@ -1126,7 +1297,7 @@ export default function LibraryScreen() {
 
       // Show import overlay IMMEDIATELY when photos are selected
       setIsImporting(true);
-      setImportProgress({ total: result.assets.length, imported: 0, currentPhoto: 0 });
+      setImportProgress({ total: result.assets.length, processed: 0, imported: 0, currentPhoto: 0 });
 
       // Step 1: Process and compress all images in batches
       console.log('[Library] Processing and compressing images for duplicate detection...');
@@ -1135,11 +1306,13 @@ export default function LibraryScreen() {
 
       const BATCH_SIZE = 5; // Process 5 images at a time to avoid blocking UI
 
-      // Extract locations BEFORE compression (EXIF data is lost during compression)
+      // Extract locations and dates BEFORE compression (EXIF data is lost during compression)
       const locations: (string | null)[] = [];
-      console.log('[Library] Extracting locations from EXIF before compression...');
+      const datesTaken: (Date | null)[] = [];
+      console.log('[Library] Extracting locations and dates from EXIF before compression...');
       for (let j = 0; j < result.assets.length; j++) {
         try {
+          // Extract location
           const locationTag = await extractLocationFromEXIF(result.assets[j]);
           locations[j] = locationTag;
           if (locationTag) {
@@ -1149,9 +1322,19 @@ export default function LibraryScreen() {
             const exif = result.assets[j].exif;
             console.log(`[Library] ⚠️  No location found for photo ${j + 1}. EXIF data:`, exif ? JSON.stringify(exif).substring(0, 200) : 'No EXIF data');
           }
+          
+          // Extract date taken
+          const dateTaken = extractDateFromEXIF(result.assets[j]);
+          datesTaken[j] = dateTaken;
+          if (dateTaken) {
+            console.log(`[Library] ✅ Extracted date taken for photo ${j + 1}: ${dateTaken.toISOString()}`);
+          } else {
+            console.log(`[Library] ⚠️  No date taken found for photo ${j + 1}`);
+          }
         } catch (locationError) {
-          console.warn(`[Library] Failed to extract location for photo ${j + 1}:`, locationError);
+          console.warn(`[Library] Failed to extract location/date for photo ${j + 1}:`, locationError);
           locations[j] = null;
+          datesTaken[j] = null;
         }
       }
 
@@ -1222,12 +1405,17 @@ export default function LibraryScreen() {
         );
 
         // Store results in correct order
+        let processedInBatch = 0;
         batchResults.forEach((result) => {
           if (result) {
             compressedImages[result.index] = result.compressed;
             imageHashes[result.index] = result.hash;
+            processedInBatch++;
           }
         });
+
+        // Update processing progress
+        setImportProgress(prev => ({ ...prev, processed: prev.processed + processedInBatch }));
 
         // Log progress
         console.log(`[Library] Processed batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(result.assets.length / BATCH_SIZE)}`);
@@ -1240,13 +1428,13 @@ export default function LibraryScreen() {
       if (validCompressedImages.length === 0) {
         Alert.alert('Error', 'No photos could be processed for import.');
         setIsImporting(false);
-        setImportProgress({ total: 0, imported: 0, currentPhoto: 0 });
+        setImportProgress({ total: 0, processed: 0, imported: 0, currentPhoto: 0 });
         return;
       }
 
       // Step 2: Check for duplicates
       console.log('[Library] Checking for duplicates...');
-      const duplicateIndices = await checkForDuplicates(userId, validHashes);
+      const duplicateIndices = await checkForDuplicates(userId, validHashes, activeWorkspaceId || undefined);
 
       if (duplicateIndices.length > 0) {
         // Show duplicate dialog
@@ -1256,14 +1444,15 @@ export default function LibraryScreen() {
           compressedImages: validCompressedImages,
           duplicateIndices,
           locations: locations.slice(0, validCompressedImages.length), // Include locations
+          datesTaken: datesTaken.slice(0, validCompressedImages.length), // Include dates taken
         });
         setShowDuplicateDialog(true);
         return;
       }
 
       // No duplicates found, proceed with import
-      // Pass locations array (extracted before compression)
-      await processImport(result.assets.slice(0, validCompressedImages.length), validCompressedImages, imageHashes, false, locations.slice(0, validCompressedImages.length));
+      // Pass locations and dates arrays (extracted before compression)
+      await processImport(result.assets.slice(0, validCompressedImages.length), validCompressedImages, imageHashes, false, locations.slice(0, validCompressedImages.length), datesTaken.slice(0, validCompressedImages.length));
     } catch (error) {
       console.error('[Library] Import failed with unexpected error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
@@ -1278,13 +1467,73 @@ export default function LibraryScreen() {
     }
   }, [activeWorkspaceId, loadAssets, session, processImport, showRetryNotificationBanner]);
 
-  // Periodic check for pending/failed assets (every 30 seconds) to retry background processing
+  // Periodic check for pending/failed assets and batch completion (every 10 seconds)
   // Only retry assets from the most recent import session
+  // Also checks for completed batches to reload assets
   useEffect(() => {
-    if (!supabase) return;
+    if (!supabase || !activeWorkspaceId) return;
+
+    // Ensure batch polling is running (for Batch API async processing)
+    const { startBatchPolling } = require('@/utils/pollBatchStatus');
+    startBatchPolling();
 
     const interval = setInterval(async () => {
-      // Only check newly imported assets, not all assets in the campaign
+      // Check for completed batches first (assets with openai_batch_id that are now completed)
+      // This handles Batch API completion - check more frequently than retries
+      if (!isRefreshingForBatchRef.current && !isLoadingRef.current) {
+        const { data: batchAssets } = await supabase
+          .from('assets')
+          .select('id, auto_tag_status, openai_batch_id, tags')
+          .eq('workspace_id', activeWorkspaceId)
+          .not('openai_batch_id', 'is', null)
+          .eq('auto_tag_status', 'completed')
+          .limit(10);
+        
+        if (batchAssets && batchAssets.length > 0) {
+          // Check if any of these assets have tags now (batch completed)
+          const completedWithTags = batchAssets.filter((asset: any) => 
+            asset.tags && Array.isArray(asset.tags) && asset.tags.length > 0
+          );
+          
+          if (completedWithTags.length > 0) {
+            // Check if we recently refreshed for these batches
+            const now = Date.now();
+            const shouldRefresh = completedWithTags.every((asset: any) => {
+              const lastRefresh = lastBatchRefreshRef.current.get(asset.openai_batch_id || '');
+              return !lastRefresh || (now - lastRefresh) > 5000; // 5 second debounce per batch
+            });
+            
+            if (shouldRefresh) {
+              console.log(`[Library] ✅ Detected ${completedWithTags.length} batch-completed assets with tags - reloading assets`);
+              // Mark batches as refreshed
+              completedWithTags.forEach((asset: any) => {
+                if (asset.openai_batch_id) {
+                  lastBatchRefreshRef.current.set(asset.openai_batch_id, now);
+                }
+                setAutoTaggingAssets((prev) => {
+                  const next = new Set(prev);
+                  next.delete(asset.id);
+                  return next;
+                });
+              });
+              // Reload assets to show updated tags
+              isRefreshingForBatchRef.current = true;
+              try {
+                await loadAssets();
+              } finally {
+                setTimeout(() => {
+                  isRefreshingForBatchRef.current = false;
+                }, 2000);
+              }
+            }
+          }
+        }
+      }
+      
+      // Note: Batch completion is handled above
+      // This section handles retries for failed/pending assets
+
+      // Only check newly imported assets, not all assets in the workspace
       if (newlyImportedAssetIds.size === 0) {
         return; // No recent imports to retry
       }
@@ -1307,11 +1556,13 @@ export default function LibraryScreen() {
       }
       
       // Filter assets that need retry (pending or failed with no tags)
+      // Exclude assets that are part of a batch (they'll be handled by batch polling)
       const assetsNeedingRetry = importedAssets.filter((asset: any) => {
         const hasNoTags = !asset.tags || asset.tags.length === 0;
         const isPendingOrFailed = asset.auto_tag_status === 'pending' || asset.auto_tag_status === 'failed';
         const notCurrentlyProcessing = !autoTaggingAssets.has(asset.id);
-        return hasNoTags && isPendingOrFailed && notCurrentlyProcessing;
+        const notPartOfBatch = !asset.openai_batch_id; // Don't retry assets that are part of a batch
+        return hasNoTags && isPendingOrFailed && notCurrentlyProcessing && notPartOfBatch;
       });
 
       // Count failed vs pending separately
@@ -1399,10 +1650,12 @@ export default function LibraryScreen() {
           }
         });
       }
-    }, 30000); // Check every 30 seconds
+    }, 10000); // Check every 10 seconds (more frequent for batch completion detection)
 
-    return () => clearInterval(interval);
-  }, [supabase, autoTaggingAssets, loadAssets, newlyImportedAssetIds, showRetryNotificationBanner]);
+    return () => {
+      clearInterval(interval);
+    };
+  }, [supabase, activeWorkspaceId, autoTaggingAssets, loadAssets, newlyImportedAssetIds, showRetryNotificationBanner]);
 
   // Check for failed/pending assets when screen comes into focus
   useFocusEffect(
@@ -2314,173 +2567,125 @@ export default function LibraryScreen() {
     
     await Promise.all(updatePromises);
     
-    // For bulk operations (20+), use bulk queue method to send all in one Batch API call
-    if (assetsToRetag.length >= 20) {
-      console.log(`[Library] 🚀 Using BULK queue for ${assetsToRetag.length} assets (OpenAI Batch API - 50% cost savings)`);
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1775',message:'Using bulk queue method',data:{assetsCount:assetsToRetag.length,assetIds:assetsToRetag.map(a=>a.id)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
+    // Directly call edge function with all assets (matches web app pattern)
+    // Edge function will automatically use Batch API for 20+ images (50% cost savings)
+    const assetsWithUrls = assetsToRetag.filter(asset => asset.publicUrl);
+    
+    if (assetsWithUrls.length === 0) {
+      console.warn('[Library] No assets with valid URLs to retag');
+      return;
+    }
+    
+    const isBulkOperation = assetsWithUrls.length >= 20;
+    console.log(`[Library] 🚀 ${isBulkOperation ? 'BULK OPERATION' : 'Normal batch'}: ${assetsWithUrls.length} ${isBulkOperation ? '>= 20' : '< 20'} images`);
+    console.log(`[Library] Edge function will ${isBulkOperation ? 'use OpenAI Batch API (50% cost savings)' : 'use synchronous API (immediate results)'}`);
+    
+    // Prepare batch request (matches web app pattern)
+    const batchRequest = {
+      assets: assetsWithUrls.map(asset => ({
+        assetId: asset.id,
+        imageUrl: asset.publicUrl!,
+      })),
+    };
+    
+    console.log(`[Library] 📤 Calling edge function 'auto_tag_asset' with batch request:`, {
+      assetCount: batchRequest.assets.length,
+      firstAssetId: batchRequest.assets[0]?.assetId,
+      firstImageUrl: batchRequest.assets[0]?.imageUrl?.substring(0, 100) + '...',
+    });
+    
+    try {
+      // Call edge function directly (matches web app pattern)
+      const { data, error } = await supabase.functions.invoke('auto_tag_asset', {
+        body: batchRequest,
+      });
       
-      queueBulkAutoTag(assetsToRetag
-        .filter(asset => asset.publicUrl)
-        .map(asset => ({
-          assetId: asset.id,
-          imageUrl: asset.publicUrl!,
-          onSuccess: async (result) => {
-            console.log(`[Library] ✅✅✅ Autotagging success for asset ${asset.id} ✅✅✅`);
-            console.log(`[Library] Tags returned:`, result.tags);
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1779',message:'onSuccess callback fired',data:{assetId:asset.id,tagsCount:result.tags?.length||0,tags:result.tags},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-            // #endregion
+      console.log(`[Library] 📥 Edge function response received:`, { data, error });
+      
+      if (error) {
+        console.error('[Library] ❌ Batch retagging error:', error);
+        console.error('[Library] Error details:', JSON.stringify(error, null, 2));
+        
+        // Mark assets as failed
+        assetsWithUrls.forEach((asset) => {
+          setAutoTaggingAssets((prev) => {
+            const next = new Set(prev);
+            next.delete(asset.id);
+            return next;
+          });
+        });
+        await loadAssets();
+        return;
+      }
+      
+      // Handle response based on type (batch API vs immediate processing)
+      if (data?.batchId) {
+        // Batch API: Async processing (20+ images)
+        console.log(`[Library] ✅ Batch API job created: ${data.batchId}`);
+        console.log(`[Library] Using OpenAI Batch API (async processing, 50% cost savings)`);
+        console.log(`[Library] ✅ Batch will be processed asynchronously - assets will update when complete`);
+        
+        // Add batch to polling queue (matches web app pattern)
+        const { addBatchToPoll, startBatchPolling } = await import('@/utils/pollBatchStatus');
+        addBatchToPoll(data.batchId);
+        startBatchPolling();
+        console.log(`[Library] ✅ Added batch ${data.batchId} to polling queue`);
+        
+        // Refresh UI to show pending status
+        await loadAssets();
+        
+      } else if (data?.results) {
+        // Immediate processing: Results already available (< 20 images)
+        console.log(`[Library] ✅ Immediate processing complete for ${assetsWithUrls.length} assets`);
+        console.log(`[Library] Results:`, data.results);
+        
+        // Process results and update UI
+        data.results.forEach((result: any) => {
+          if (result.assetId) {
             setAutoTaggingAssets((prev) => {
               const next = new Set(prev);
-              next.delete(asset.id);
+              next.delete(result.assetId);
               return next;
             });
             setRecentlyTaggedAssets((prev) => {
-              if (prev.has(asset.id)) {
+              if (prev.has(result.assetId)) {
                 return prev;
               }
               const next = new Set(prev);
-              next.add(asset.id);
+              next.add(result.assetId);
               return next;
             });
             setTimeout(() => {
               setRecentlyTaggedAssets((prev) => {
                 const next = new Set(prev);
-                next.delete(asset.id);
+                next.delete(result.assetId);
                 return next;
               });
             }, 5500);
-            await new Promise(resolve => setTimeout(resolve, 500));
-            await loadAssets();
-            if (result.tags && result.tags.length > 0) {
-              const { data: updatedAsset } = await supabase
-                .from('assets')
-                .select('tags, auto_tag_status')
-                .eq('id', asset.id)
-                .single();
-              console.log(`[Library] Verified asset ${asset.id} tags after reload:`, updatedAsset?.tags);
-              if (!updatedAsset?.tags || updatedAsset.tags.length === 0) {
-                console.error(`[Library] ⚠️  Tags not saved for asset ${asset.id}! Expected:`, result.tags);
-              }
-            }
-          },
-          onError: async (error) => {
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1820',message:'onError callback fired',data:{assetId:asset.id,errorMessage:error.message,errorType:error.constructor.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-            // #endregion
-            const { data: currentAsset } = await supabase
-              .from('assets')
-              .select('auto_tag_status')
-              .eq('id', asset.id)
-              .single();
-            
-            if (currentAsset?.auto_tag_status !== 'pending') {
-              setAutoTaggingAssets((prev) => {
-                const next = new Set(prev);
-                next.delete(asset.id);
-                return next;
-              });
-            }
-            await loadAssets();
-          },
-          onRetryStart: (assetId) => {
-            setAutoTaggingAssets((prev) => {
-              const next = new Set(prev);
-              next.add(assetId);
-              return next;
-            });
-          },
-        }))
-      );
-    } else {
-      // For smaller operations, queue individually (normal batching)
-      assetsToRetag.forEach((asset, idx) => {
-        console.log(`[Library] Processing asset ${idx + 1}/${assetsToRetag.length}: ${asset.id}`);
+          }
+        });
         
-        // Queue for autotagging
-        if (asset.publicUrl) {
-          console.log(`[Library] 📤 Enqueuing asset ${asset.id} for autotagging...`);
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1775',message:'Enqueuing asset for autotagging',data:{assetId:asset.id,hasPublicUrl:!!asset.publicUrl,urlPreview:asset.publicUrl?.substring(0,100)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-          // #endregion
-          queueAutoTag(asset.id, asset.publicUrl, {
-            onSuccess: async (result) => {
-              console.log(`[Library] ✅✅✅ Autotagging success for asset ${asset.id} ✅✅✅`);
-              console.log(`[Library] Tags returned:`, result.tags);
-              console.log(`[Library] Tags length:`, result.tags?.length || 0);
-              // #region agent log
-              fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1779',message:'onSuccess callback fired',data:{assetId:asset.id,tagsCount:result.tags?.length||0,tags:result.tags},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-              // #endregion
-              setAutoTaggingAssets((prev) => {
-                const next = new Set(prev);
-                next.delete(asset.id);
-                return next;
-              });
-              // Show temporary success indicator
-              setRecentlyTaggedAssets((prev) => {
-                if (prev.has(asset.id)) {
-                  return prev;
-                }
-                const next = new Set(prev);
-                next.add(asset.id);
-                return next;
-              });
-              // Remove success indicator after 5.5 seconds
-              setTimeout(() => {
-                setRecentlyTaggedAssets((prev) => {
-                  const next = new Set(prev);
-                  next.delete(asset.id);
-                  return next;
-                });
-              }, 5500);
-              // Wait a bit for database update to complete before reloading
-              await new Promise(resolve => setTimeout(resolve, 500));
-              await loadAssets();
-              // Verify tags were saved
-              if (result.tags && result.tags.length > 0) {
-                const { data: updatedAsset } = await supabase
-                  .from('assets')
-                  .select('tags, auto_tag_status')
-                  .eq('id', asset.id)
-                  .single();
-                console.log(`[Library] Verified asset ${asset.id} tags after reload:`, updatedAsset?.tags);
-                if (!updatedAsset?.tags || updatedAsset.tags.length === 0) {
-                  console.error(`[Library] ⚠️  Tags not saved for asset ${asset.id}! Expected:`, result.tags);
-                }
-              }
-            },
-            onError: async (error) => {
-              // #region agent log
-              fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/index.tsx:1820',message:'onError callback fired',data:{assetId:asset.id,errorMessage:error.message,errorType:error.constructor.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-              // #endregion
-              // Reload to check current status
-              const { data: currentAsset } = await supabase
-                .from('assets')
-                .select('auto_tag_status')
-                .eq('id', asset.id)
-                .single();
-              
-              if (currentAsset?.auto_tag_status !== 'pending') {
-                setAutoTaggingAssets((prev) => {
-                  const next = new Set(prev);
-                  next.delete(asset.id);
-                  return next;
-                });
-              }
-              await loadAssets();
-            },
-            onRetryStart: (assetId) => {
-              setAutoTaggingAssets((prev) => {
-                const next = new Set(prev);
-                next.add(assetId);
-                return next;
-              });
-            },
-          });
-        }
+        // Refresh UI to show updated tags
+        await loadAssets();
+        
+      } else {
+        console.warn(`[Library] ⚠️ Unexpected response format:`, data);
+        // Still refresh UI to be safe
+        await loadAssets();
+      }
+    } catch (error) {
+      console.error('[Library] ❌ Exception in batch retagging:', error);
+      console.error('[Library] Exception details:', error instanceof Error ? error.message : String(error));
+      
+      // Mark assets as failed
+      assetsWithUrls.forEach((asset) => {
+        setAutoTaggingAssets((prev) => {
+          const next = new Set(prev);
+          next.delete(asset.id);
+          return next;
+        });
       });
+      await loadAssets();
     }
     
     // Reload assets to reflect updated statuses
@@ -2856,6 +3061,7 @@ export default function LibraryScreen() {
       <ImportLoadingOverlay
         visible={isImporting}
         totalPhotos={importProgress.total}
+        processedCount={importProgress.processed}
         importedCount={importProgress.imported}
         autoTaggingCount={autoTaggingAssets.size}
         successfullyAutoTaggedCount={successfullyAutoTaggedCount}
@@ -2872,6 +3078,16 @@ export default function LibraryScreen() {
       <MenuDrawer
         visible={isMenuOpen}
         onClose={() => setIsMenuOpen(false)}
+        workspaceSheetOpen={isWorkspaceSheetOpen}
+        onWorkspaceSheetChange={setIsWorkspaceSheetOpen}
+      />
+
+      {/* Workspace Sheet Modal - Rendered separately so it persists when drawer closes */}
+      <WorkspaceSwitcher 
+        position="left"
+        externalModalOpen={isWorkspaceSheetOpen}
+        onExternalModalChange={setIsWorkspaceSheetOpen}
+        showButton={false}
       />
 
       {/* Bottom Tab Bar */}
@@ -3046,7 +3262,8 @@ export default function LibraryScreen() {
               pendingImportData.compressedImages,
               pendingImportData.hashes,
               false, // Import all including duplicates
-              pendingImportData.locations
+              pendingImportData.locations,
+              pendingImportData.datesTaken
             );
             setPendingImportData(null);
           }}
@@ -3057,7 +3274,8 @@ export default function LibraryScreen() {
               pendingImportData.compressedImages,
               pendingImportData.hashes,
               true, // Skip duplicates
-              pendingImportData.locations
+              pendingImportData.locations,
+              pendingImportData.datesTaken
             );
             setPendingImportData(null);
           }}
@@ -3065,10 +3283,11 @@ export default function LibraryScreen() {
             setShowDuplicateDialog(false);
             setPendingImportData(null);
             setIsImporting(false);
-            setImportProgress({ total: 0, imported: 0, currentPhoto: 0 });
+            setImportProgress({ total: 0, processed: 0, imported: 0, currentPhoto: 0 });
           }}
         />
       )}
+
     </View>
   );
 }

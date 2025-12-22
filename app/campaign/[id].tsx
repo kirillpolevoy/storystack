@@ -29,6 +29,7 @@ import { computeImageHash, checkForDuplicates } from '@/utils/duplicateDetection
 import { DuplicateDetectionDialog } from '@/components/DuplicateDetectionDialog';
 import * as ImageManipulator from 'expo-image-manipulator';
 import type { ImagePickerAsset } from 'expo-image-picker';
+import { startBatchPolling } from '@/utils/pollBatchStatus';
 
 const fallbackCampaign: Campaign = {
   id: 'fallback',
@@ -56,7 +57,7 @@ export default function CampaignDetailScreen() {
   const [assets, setAssets] = useState<Asset[]>(fallbackAssets);
   const [isLoading, setIsLoading] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
-  const [importProgress, setImportProgress] = useState({ total: 0, imported: 0, currentPhoto: 0 });
+  const [importProgress, setImportProgress] = useState({ total: 0, processed: 0, imported: 0, currentPhoto: 0 });
   const [autoTaggingAssets, setAutoTaggingAssets] = useState<Set<string>>(new Set());
   const [successfullyAutoTaggedCount, setSuccessfullyAutoTaggedCount] = useState(0);
   const [selectedTags, setSelectedTags] = useState<TagVocabulary[]>([]);
@@ -139,7 +140,16 @@ export default function CampaignDetailScreen() {
         mapped.forEach(asset => {
           if (asset.auto_tag_status === 'pending') {
             next.add(asset.id);
-            // Re-queue pending assets for background retry
+            
+            // If asset has openai_batch_id, it's part of a Batch API job - ensure polling is running
+            if (asset.openai_batch_id) {
+              console.log(`[CampaignDetail] Asset ${asset.id} is part of batch ${asset.openai_batch_id} - batch polling will handle completion`);
+              // Batch polling is already running (started in useEffect), so we just need to track this asset
+              // Don't re-queue individual assets that are part of a batch
+              return;
+            }
+            
+            // Re-queue pending assets for background retry (only for non-batch assets)
             // Add small delay to ensure asset is fully committed before queuing
             if (asset.publicUrl) {
               console.log(`[CampaignDetail] Re-queuing pending asset: ${asset.id}`);
@@ -196,12 +206,47 @@ export default function CampaignDetailScreen() {
     loadCampaign();
   }, [loadCampaign]);
 
-  // Periodic check for pending/failed assets (every 30 seconds) to retry background processing
+  // Periodic check for pending/failed assets and batch completion (every 30 seconds)
   // Only retry assets from the most recent import session
+  // Also checks for completed batches to reload campaign
   useEffect(() => {
     if (!campaignId || !supabase) return;
 
+    // Ensure batch polling is running (for Batch API async processing)
+    startBatchPolling();
+
     const interval = setInterval(async () => {
+      // Check for completed batches first (assets with openai_batch_id that are now completed)
+      // This handles Batch API completion
+      const { data: batchAssets } = await supabase
+        .from('assets')
+        .select('id, auto_tag_status, openai_batch_id, tags')
+        .eq('campaign_id', campaignId)
+        .not('openai_batch_id', 'is', null)
+        .eq('auto_tag_status', 'completed')
+        .limit(10);
+      
+      if (batchAssets && batchAssets.length > 0) {
+        // Check if any of these assets have tags now (batch completed)
+        const completedWithTags = batchAssets.filter((asset: any) => 
+          asset.tags && Array.isArray(asset.tags) && asset.tags.length > 0
+        );
+        
+        if (completedWithTags.length > 0) {
+          console.log(`[CampaignDetail] ✅ Detected ${completedWithTags.length} batch-completed assets with tags - reloading campaign`);
+          // Remove from autoTaggingAssets set since they're completed
+          completedWithTags.forEach((asset: any) => {
+            setAutoTaggingAssets((prev) => {
+              const next = new Set(prev);
+              next.delete(asset.id);
+              return next;
+            });
+          });
+          // Reload campaign to show updated tags
+          await loadCampaign();
+        }
+      }
+
       // Only check newly imported assets, not all assets in the campaign
       if (newlyImportedAssetIds.size === 0) {
         return; // No recent imports to retry
@@ -220,11 +265,13 @@ export default function CampaignDetailScreen() {
       }
       
       // Filter assets that need retry (pending or failed with no tags)
+      // Exclude assets that are part of a batch (they'll be handled by batch polling)
       const assetsNeedingRetry = importedAssets.filter((asset: any) => {
         const hasNoTags = !asset.tags || asset.tags.length === 0;
         const isPendingOrFailed = asset.auto_tag_status === 'pending' || asset.auto_tag_status === 'failed';
         const notCurrentlyProcessing = !autoTaggingAssets.has(asset.id);
-        return hasNoTags && isPendingOrFailed && notCurrentlyProcessing;
+        const notPartOfBatch = !asset.openai_batch_id; // Don't retry assets that are part of a batch
+        return hasNoTags && isPendingOrFailed && notCurrentlyProcessing && notPartOfBatch;
       });
 
       if (assetsNeedingRetry.length > 0) {
@@ -342,7 +389,7 @@ export default function CampaignDetailScreen() {
     const userId = user.id;
 
     setIsImporting(true);
-    setImportProgress({ total: assetsToImport.length, imported: 0, currentPhoto: 0 });
+    setImportProgress({ total: assetsToImport.length, processed: assetsToImport.length, imported: 0, currentPhoto: 0 });
     setSuccessfullyAutoTaggedCount(0); // Reset count for new import session
 
     for (let i = 0; i < assetsToImport.length; i++) {
@@ -673,7 +720,7 @@ export default function CampaignDetailScreen() {
 
       // Show import overlay IMMEDIATELY when photos are selected
       setIsImporting(true);
-      setImportProgress({ total: result.assets.length, imported: 0, currentPhoto: 0 });
+      setImportProgress({ total: result.assets.length, processed: 0, imported: 0, currentPhoto: 0 });
 
       // Process and compress all images
       console.log('[CampaignDetail] Processing images for duplicate detection...');
@@ -730,6 +777,8 @@ export default function CampaignDetailScreen() {
         try {
           const compressed = await compressImageForAI(imageUri);
           compressedImages.push(compressed);
+          // Update processing progress
+          setImportProgress(prev => ({ ...prev, processed: prev.processed + 1 }));
         } catch (compressError) {
           console.error(`[CampaignDetail] Failed to compress photo ${i + 1}:`, compressError);
           // If compression fails but we have a hash, we can still proceed
@@ -737,11 +786,15 @@ export default function CampaignDetailScreen() {
           if (!hash) {
             continue; // Skip if both hash and compression failed
           }
+          // Still count as processed if we have a hash
+          setImportProgress(prev => ({ ...prev, processed: prev.processed + 1 }));
         }
       }
 
       if (compressedImages.length === 0) {
         Alert.alert('Error', 'No photos could be processed for import.');
+        setIsImporting(false);
+        setImportProgress({ total: 0, processed: 0, imported: 0, currentPhoto: 0 });
         return;
       }
 
@@ -1231,6 +1284,7 @@ export default function CampaignDetailScreen() {
       <ImportLoadingOverlay
         visible={isImporting}
         totalPhotos={importProgress.total}
+        processedCount={importProgress.processed}
         importedCount={importProgress.imported}
         autoTaggingCount={autoTaggingAssets.size}
         successfullyAutoTaggedCount={successfullyAutoTaggedCount}
@@ -1275,7 +1329,7 @@ export default function CampaignDetailScreen() {
             setShowDuplicateDialog(false);
             setPendingImportData(null);
             setIsImporting(false);
-            setImportProgress({ total: 0, imported: 0, currentPhoto: 0 });
+            setImportProgress({ total: 0, processed: 0, imported: 0, currentPhoto: 0 });
           }}
         />
       )}

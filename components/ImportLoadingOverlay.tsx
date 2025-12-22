@@ -37,6 +37,7 @@ const COLORS = {
 type ImportLoadingOverlayProps = {
   visible: boolean;
   totalPhotos: number;
+  processedCount?: number; // Number of images processed (before import)
   importedCount: number;
   autoTaggingCount: number;
   successfullyAutoTaggedCount?: number;
@@ -47,6 +48,7 @@ type ImportLoadingOverlayProps = {
 export function ImportLoadingOverlay({
   visible,
   totalPhotos,
+  processedCount = 0,
   importedCount,
   autoTaggingCount,
   successfullyAutoTaggedCount = 0,
@@ -78,27 +80,38 @@ export function ImportLoadingOverlay({
   const spinnerFadeAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
   const checkmarkAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
 
-  // Determine phase: importing -> complete (dismiss immediately after import)
+  // Determine phase: processing -> importing -> complete
   const phase = useMemo(() => {
     const isImportComplete = importedCount === totalPhotos && totalPhotos > 0;
+    const isProcessing = processedCount < totalPhotos && totalPhotos > 0;
+    const isImporting = processedCount === totalPhotos && importedCount < totalPhotos && totalPhotos > 0;
     
     if (isImportComplete) {
       return 'complete';
-    } else {
+    } else if (isProcessing) {
+      return 'processing';
+    } else if (isImporting) {
       return 'importing';
+    } else {
+      // Default to importing if we have photos but processing is complete
+      return totalPhotos > 0 ? 'importing' : 'processing';
     }
-  }, [importedCount, totalPhotos]);
+  }, [importedCount, processedCount, totalPhotos]);
 
   // Calculate progress: 0 to 1
   const progress = useMemo(() => {
     if (totalPhotos === 0) return 0;
     
-    if (phase === 'importing') {
-      return importedCount / totalPhotos;
+    if (phase === 'processing') {
+      // Processing phase: 0 to 0.5 (first half of progress bar)
+      return (processedCount / totalPhotos) * 0.5;
+    } else if (phase === 'importing') {
+      // Importing phase: 0.5 to 1 (second half of progress bar)
+      return 0.5 + (importedCount / totalPhotos) * 0.5;
     } else {
       return 1; // Complete
     }
-  }, [phase, importedCount, totalPhotos]);
+  }, [phase, processedCount, importedCount, totalPhotos]);
 
   // Spinner color - consistent across all phases (gold to match app)
   const spinnerColor = COLORS.accent;
@@ -263,7 +276,7 @@ export function ImportLoadingOverlay({
       return;
     }
     
-    if (visible && phase === 'importing') {
+    if (visible && (phase === 'importing' || phase === 'processing')) {
       spinnerScale.setValue(0);
       spinnerOpacity.setValue(0);
       
@@ -288,9 +301,9 @@ export function ImportLoadingOverlay({
     }
   }, [visible, phase, spinnerScale, spinnerOpacity, showCheckmark]);
 
-  // Shimmer animation on progress bar - only when importing and visible
+  // Shimmer animation on progress bar - only when processing or importing and visible
   useEffect(() => {
-    if (!visible || phase !== 'importing') {
+    if (!visible || (phase !== 'importing' && phase !== 'processing')) {
       if (shimmerAnimationRef.current) {
         shimmerAnimationRef.current.stop();
         shimmerAnimationRef.current = null;
@@ -457,6 +470,9 @@ export function ImportLoadingOverlay({
     if (shouldHide || phase === 'complete') {
       return 'Import Complete';
     }
+    if (phase === 'processing') {
+      return displayTotalPhotos > 0 ? 'Processing Photos' : 'Preparing...';
+    }
     return displayTotalPhotos > 0 ? 'Importing Photos' : 'Preparing...';
   }, [shouldHide, phase, displayTotalPhotos]);
 
@@ -469,12 +485,18 @@ export function ImportLoadingOverlay({
       }
       return '';
     }
+    if (phase === 'processing') {
+      if (displayTotalPhotos > 0) {
+        return `${processedCount} of ${displayTotalPhotos} processed`;
+      }
+      return '';
+    }
     if (displayTotalPhotos > 0) {
       const taggingText = autoTaggingCount > 0 ? ` • ${autoTaggingCount} queued for tagging` : '';
       return `${importedCount} of ${displayTotalPhotos} imported${taggingText}`;
     }
     return '';
-  }, [shouldHide, phase, displayTotalPhotos, importedCount, autoTaggingCount]);
+  }, [shouldHide, phase, displayTotalPhotos, processedCount, importedCount, autoTaggingCount]);
 
   if (!visible && !shouldHide) {
     return null;
@@ -569,7 +591,7 @@ export function ImportLoadingOverlay({
           )}
 
           {/* Progress Bar */}
-          {phase === 'importing' && (
+          {(phase === 'processing' || phase === 'importing') && (
             <Animated.View style={[styles.progressContainer, { opacity: titleOpacity }]}>
               <View style={styles.progressTrack}>
                 <Animated.View
