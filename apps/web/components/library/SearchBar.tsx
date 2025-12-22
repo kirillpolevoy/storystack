@@ -204,7 +204,7 @@ export function SearchBar({
   const selectedFiltersSet = useMemo(() => new Set(selectedFilters || []), [selectedFilters])
 
   return (
-    <div className="space-y-3 relative">
+    <div className="space-y-3 relative z-0">
       <div className="relative max-w-md">
         <Search className={`absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 transition-colors ${
           isFocused ? 'text-accent' : 'text-gray-400'
@@ -237,12 +237,14 @@ export function SearchBar({
       {showDropdown && (
         <>
           <div
-            className="fixed inset-0 z-10"
+            className="fixed inset-0 z-[100]"
             onClick={() => setIsFocused(false)}
+            style={{ pointerEvents: 'auto' }}
           />
           <div
             ref={dropdownRef}
-            className="absolute z-20 mt-2 w-full max-w-md rounded-lg border border-gray-200 bg-white shadow-lg max-h-80 overflow-hidden"
+            className="absolute z-[101] mt-2 w-full max-w-md rounded-lg border border-gray-200 bg-white shadow-lg max-h-80 overflow-hidden"
+            style={{ position: 'absolute' }}
           >
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">

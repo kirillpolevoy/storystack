@@ -10,7 +10,7 @@ import { AssetTile } from '@/components/library/AssetTile'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Search, X, Check, MapPin, Tag } from 'lucide-react'
-import { SearchBar } from '@/components/library/SearchBar'
+import { FilterBar } from '@/components/library/FilterBar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useAddStoryAssets } from '@/hooks/useStoryAssets'
 
@@ -69,7 +69,8 @@ export function AddAssetsModal({
   currentStoryAssetIds,
 }: AddAssetsModalProps) {
   const [searchQuery, setSearchQuery] = useState('')
-  const [selectedFilters, setSelectedFilters] = useState<string[]>([])
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [selectedLocation, setSelectedLocation] = useState<string | null>(null)
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set())
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null)
   const gridRef = useRef<HTMLDivElement>(null)
@@ -79,6 +80,16 @@ export function AddAssetsModal({
   
   const { data: locationsData } = useAvailableLocations()
   const availableLocations = locationsData || []
+  
+  // Convert filters to the format useAssets expects
+  const selectedFilters = useMemo(() => {
+    const filters: string[] = []
+    selectedTags.forEach((tag) => filters.push(tag))
+    if (selectedLocation) {
+      filters.push(`__LOCATION__${selectedLocation}`)
+    }
+    return filters
+  }, [selectedTags, selectedLocation])
   
   const {
     data,
@@ -98,7 +109,7 @@ export function AddAssetsModal({
     return allAssets.filter((asset: Asset) => !currentStoryAssetIds.includes(asset.id))
   }, [allAssets, currentStoryAssetIds])
   
-  // Calculate tag and location counts for search bar
+  // Calculate tag and location counts for filter bar
   const tagCounts = useMemo(() => {
     const counts = new Map<string, number>()
     availableAssets.forEach((asset: Asset) => {
@@ -121,14 +132,6 @@ export function AddAssetsModal({
     })
     return counts
   }, [availableAssets])
-  
-  const toggleFilter = useCallback((filter: string) => {
-    setSelectedFilters((prev) => 
-      prev.includes(filter) 
-        ? prev.filter((f) => f !== filter) 
-        : [...prev, filter]
-    )
-  }, [])
   
   const handleAssetSelect = useCallback((assetId: string, index: number, event: React.MouseEvent) => {
     // Ensure assetId is a string for consistent comparison
@@ -257,11 +260,15 @@ export function AddAssetsModal({
         <div className="flex-1 flex flex-col min-h-0 space-y-3">
           {/* Search and Filters */}
           <div className="flex-shrink-0">
-            <SearchBar
+            <FilterBar
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
-              selectedFilters={selectedFilters}
-              onToggleFilter={toggleFilter}
+              selectedTags={selectedTags}
+              onTagsChange={setSelectedTags}
+              selectedLocation={selectedLocation}
+              onLocationChange={setSelectedLocation}
+              dateRange={{ from: null, to: null }}
+              onDateRangeChange={() => {}}
               availableTags={availableTags}
               availableLocations={availableLocations}
               tagCounts={tagCounts}

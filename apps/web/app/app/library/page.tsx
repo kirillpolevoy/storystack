@@ -783,19 +783,19 @@ export default function LibraryPage() {
         <div className="px-4 sm:px-6 lg:px-8 py-4">
           <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
             <FilterBar
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            selectedTags={selectedTags}
-            onTagsChange={setSelectedTags}
-            selectedLocation={selectedLocation}
-            onLocationChange={setSelectedLocation}
-            dateRange={dateRange}
-            onDateRangeChange={setDateRange}
-            availableTags={availableTags}
-            availableLocations={availableLocations}
-            tagCounts={tagCounts}
-            locationCounts={locationCounts}
-          />
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              selectedTags={selectedTags}
+              onTagsChange={setSelectedTags}
+              selectedLocation={selectedLocation}
+              onLocationChange={setSelectedLocation}
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+              availableTags={availableTags}
+              availableLocations={availableLocations}
+              tagCounts={tagCounts}
+              locationCounts={locationCounts}
+            />
           </div>
         </div>
       </div>
@@ -851,7 +851,7 @@ export default function LibraryPage() {
               </h3>
               <p className="text-sm text-gray-500 mb-6 leading-relaxed">
                 {viewFilter === 'all'
-                  ? searchQuery || selectedTags.length > 0 || selectedLocation || dateRange.from || dateRange.to
+                  ? searchQuery || selectedFilters.length > 0 || dateRange.from || dateRange.to
                     ? 'Try adjusting your search or filters to find what you\'re looking for'
                     : 'Upload your first asset to start building your content library'
                   : 'Try a different view or upload new assets'}
