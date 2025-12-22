@@ -12,11 +12,11 @@ const DialogOverlay = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
 >(({ className, style, ...props }, ref) => {
-  const overlayRef = React.useCallback((node: HTMLElement | null) => {
+  const overlayRef = React.useCallback((node: HTMLDivElement | null) => {
     if (typeof ref === 'function') {
       ref(node)
     } else if (ref) {
-      (ref as React.MutableRefObject<HTMLElement | null>).current = node
+      (ref as React.MutableRefObject<HTMLDivElement | null>).current = node
     }
     
     if (node) {

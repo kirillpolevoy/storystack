@@ -25,22 +25,22 @@ const SheetOverlay = React.forwardRef<
   } : style
 
   // Use a callback ref to debug when overlay mounts
-  const overlayRef = React.useCallback((node: HTMLElement | null) => {
+  const overlayRef = React.useCallback((node: HTMLDivElement | null) => {
     console.log('[SheetOverlay] Ref callback called, node:', node, 'variant:', variant)
     if (node && variant === 'subtle') {
       console.log('[SheetOverlay] Overlay mounted:', node)
       const computed = window.getComputedStyle(node)
       console.log('[SheetOverlay] Computed backdropFilter:', computed.backdropFilter)
-      console.log('[SheetOverlay] Computed WebkitBackdropFilter:', computed.webkitBackdropFilter)
+      console.log('[SheetOverlay] Computed WebkitBackdropFilter:', (computed as any).webkitBackdropFilter)
       console.log('[SheetOverlay] Computed backgroundColor:', computed.backgroundColor)
       console.log('[SheetOverlay] Computed zIndex:', computed.zIndex)
       console.log('[SheetOverlay] Computed position:', computed.position)
       console.log('[SheetOverlay] Inline style backdropFilter:', node.style.backdropFilter)
-      console.log('[SheetOverlay] Inline style WebkitBackdropFilter:', node.style.webkitBackdropFilter)
+      console.log('[SheetOverlay] Inline style WebkitBackdropFilter:', (node.style as any).webkitBackdropFilter)
       console.log('[SheetOverlay] Inline style backgroundColor:', node.style.backgroundColor)
       
       // Check if backdrop-filter is actually applied
-      if (!computed.backdropFilter && !computed.webkitBackdropFilter && !node.style.backdropFilter && !node.style.webkitBackdropFilter) {
+      if (!computed.backdropFilter && !(computed as any).webkitBackdropFilter && !node.style.backdropFilter && !(node.style as any).webkitBackdropFilter) {
         console.error('[SheetOverlay] ⚠️ BACKDROP-FILTER NOT APPLIED! Styles:', overlayStyle)
       }
     }
@@ -48,7 +48,7 @@ const SheetOverlay = React.forwardRef<
     if (typeof ref === 'function') {
       ref(node)
     } else if (ref) {
-      (ref as React.MutableRefObject<HTMLElement | null>).current = node
+      (ref as React.MutableRefObject<HTMLDivElement | null>).current = node
     }
   }, [variant, ref, overlayStyle])
 
@@ -64,7 +64,6 @@ const SheetOverlay = React.forwardRef<
         className
       )}
       style={overlayStyle}
-      data-state={props['data-state']} // Ensure data-state is passed through for animations
       {...props}
       ref={overlayRef}
     />
