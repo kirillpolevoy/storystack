@@ -274,7 +274,7 @@ export default function LibraryPage() {
         // Add batch to polling queue immediately
         addBatchToPoll(data.batchId)
         
-        // Ensure polling is running
+        // Ensure polling is running (workspace ID will be read from localStorage in utility)
         startBatchPolling()
         
         console.log('[LibraryPage] ✅ Added batch to polling queue')

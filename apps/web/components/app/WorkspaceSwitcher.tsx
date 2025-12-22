@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/popover'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
+import { useWorkspace } from '@/contexts/WorkspaceContext'
 
 interface Workspace {
   id: string
@@ -168,15 +169,18 @@ export function WorkspaceSwitcher({ isMinimized = false }: WorkspaceSwitcherProp
     }
   }, [workspaces, activeWorkspaceId, user?.id, queryClient])
 
+  const { switchWorkspace: switchWorkspaceContext } = useWorkspace()
+
   const handleSwitchWorkspace = async (workspaceId: string) => {
-    setActiveWorkspaceId(workspaceId)
-    localStorage.setItem('@storystack:active_workspace_id', workspaceId)
+    console.log('[WorkspaceSwitcher] Switching to workspace:', workspaceId)
+    
     setIsOpen(false)
-    // Invalidate workspace-related queries only
-    queryClient.invalidateQueries({ queryKey: ['workspace'] })
-    queryClient.invalidateQueries({ queryKey: ['workspaces'] })
-    // Refresh the page to reload workspace-scoped data
-    window.location.reload()
+    
+    // Use centralized workspace switch handler
+    await switchWorkspaceContext(workspaceId)
+    
+    // Update local state for UI
+    setActiveWorkspaceId(workspaceId)
   }
 
   const handleWorkspaceCreated = (workspaceId: string) => {

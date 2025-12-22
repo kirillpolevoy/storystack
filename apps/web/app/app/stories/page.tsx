@@ -40,6 +40,11 @@ export default function StoriesPage() {
   const router = useRouter()
   const queryClient = useQueryClient()
   const { data: stories, isLoading, refetch } = useStories()
+  
+  // Log when stories data changes
+  useEffect(() => {
+    console.log('[StoriesPage] Stories data changed:', stories?.length || 0, 'stories')
+  }, [stories])
   const createStory = useCreateStory()
   const deleteStory = useDeleteStory()
   const [newStoryName, setNewStoryName] = useState('')

@@ -61,7 +61,8 @@ async function convertHeicToJpeg(file: File): Promise<File> {
 
 export async function uploadAsset(
   file: File,
-  onProgress?: (progress: number) => void
+  onProgress?: (progress: number) => void,
+  workspaceIdParam?: string | null
 ): Promise<Asset> {
   const supabase = createClient()
 
@@ -180,14 +181,14 @@ export async function uploadAsset(
   const { preview, thumb } = await generateThumbnails(processedFile)
   onProgress?.(30)
 
-  // Get active workspace ID from localStorage (matches mobile app behavior)
-  let workspaceId: string | null = null;
-  if (typeof window !== 'undefined') {
-    workspaceId = localStorage.getItem('@storystack:active_workspace_id');
+  // Get active workspace ID (prefer parameter, fallback to localStorage for backward compatibility)
+  let finalWorkspaceId: string | null = workspaceIdParam ?? null;
+  if (!finalWorkspaceId && typeof window !== 'undefined') {
+    finalWorkspaceId = localStorage.getItem('@storystack:active_workspace_id');
   }
   
-  // If no active workspace in localStorage, get user's first workspace
-  if (!workspaceId) {
+  // If no active workspace, get user's first workspace
+  if (!finalWorkspaceId) {
     try {
       const { data: members } = await supabase
         .from('workspace_members')
@@ -196,18 +197,18 @@ export async function uploadAsset(
         .limit(1)
         .single();
       
-      workspaceId = members?.workspace_id || null;
+      finalWorkspaceId = members?.workspace_id || null;
       
       // Store in localStorage for future use
-      if (workspaceId && typeof window !== 'undefined') {
-        localStorage.setItem('@storystack:active_workspace_id', workspaceId);
+      if (finalWorkspaceId && typeof window !== 'undefined') {
+        localStorage.setItem('@storystack:active_workspace_id', finalWorkspaceId);
       }
     } catch (error) {
       console.error('[upload] Error getting workspace:', error);
     }
   }
   
-  if (!workspaceId) {
+  if (!finalWorkspaceId) {
     throw new Error('No workspace found. Please select or create a workspace.');
   }
 
@@ -221,9 +222,9 @@ export async function uploadAsset(
   
   // We'll use a temporary asset_id for the path, then update after insert
   const tempAssetId = `${timestamp}-${random}`
-  const a2Path = `workspaces/${workspaceId}/assets/${tempAssetId}/${baseFileName}`
-  const previewPath = `workspaces/${workspaceId}/assets/${tempAssetId}/preview/${baseFileName}`
-  const thumbPath = `workspaces/${workspaceId}/assets/${tempAssetId}/thumb/${baseFileName}`
+  const a2Path = `workspaces/${finalWorkspaceId}/assets/${tempAssetId}/${baseFileName}`
+  const previewPath = `workspaces/${finalWorkspaceId}/assets/${tempAssetId}/preview/${baseFileName}`
+  const thumbPath = `workspaces/${finalWorkspaceId}/assets/${tempAssetId}/thumb/${baseFileName}`
 
   // Upload A2 compressed image (this is what will be used for AI tagging)
   const { error: a2Error } = await supabase.storage
@@ -264,11 +265,11 @@ export async function uploadAsset(
   // Insert into database
   // Use 'local' as source to match mobile app behavior
   // The database constraint allows: 'local', 'imported', 'generated'
-  console.log(`[upload] Preparing database insert with workspace_id: ${workspaceId}, location: ${location || 'null'}`)
+  console.log(`[upload] Preparing database insert with workspace_id: ${finalWorkspaceId}, location: ${location || 'null'}`)
   
   const insertData: any = {
     user_id: user.id,
-    workspace_id: workspaceId, // Required - workspace owns the asset
+    workspace_id: finalWorkspaceId, // Required - workspace owns the asset
     storage_path: a2Path, // Use A2 compressed image path
     storage_path_preview: previewPath,
     storage_path_thumb: thumbPath,
@@ -301,9 +302,9 @@ export async function uploadAsset(
   if (actualAssetId !== tempAssetId) {
     // Asset ID doesn't match temp ID - update paths
     // This is rare but can happen if UUIDs are used
-    const newA2Path = `workspaces/${workspaceId}/assets/${actualAssetId}/${baseFileName}`
-    const newPreviewPath = `workspaces/${workspaceId}/assets/${actualAssetId}/preview/${baseFileName}`
-    const newThumbPath = `workspaces/${workspaceId}/assets/${actualAssetId}/thumb/${baseFileName}`
+    const newA2Path = `workspaces/${finalWorkspaceId}/assets/${actualAssetId}/${baseFileName}`
+    const newPreviewPath = `workspaces/${finalWorkspaceId}/assets/${actualAssetId}/preview/${baseFileName}`
+    const newThumbPath = `workspaces/${finalWorkspaceId}/assets/${actualAssetId}/thumb/${baseFileName}`
     
     // Move files (this would require a server-side function in production)
     // For now, we'll update the database paths

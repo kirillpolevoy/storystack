@@ -33,6 +33,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { MobileMenuButton } from '@/components/app/MobileMenuButton'
+import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
 
 interface Workspace {
   id: string
@@ -81,35 +82,31 @@ export default function WorkspaceSettingsPage() {
     },
   })
 
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
+  // Use reactive workspace hook instead of reading localStorage directly
+  const activeWorkspaceId = useActiveWorkspace()
   const prevWorkspaceIdRef = useRef<string | null>(null)
   const prevWorkspaceNameRef = useRef<string>('')
 
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem('@storystack:active_workspace_id')
-      setActiveWorkspaceId(stored)
-    } catch (error) {
-      console.error('[WorkspaceSettings] Error reading localStorage:', error)
-      // Continue without active workspace ID
-    }
-  }, [])
-
   const { data: workspace, isLoading, error: workspaceError } = useQuery({
     queryKey: ['workspace', activeWorkspaceId],
-    queryFn: async () => {
-      if (!activeWorkspaceId) return null
+    queryFn: async ({ queryKey }) => {
+      // Extract workspace ID from query key to ensure we use the correct one
+      const workspaceId = queryKey[1] as string | null
+      
+      if (!workspaceId) return null
       try {
+        console.log('[WorkspaceSettings] Fetching workspace:', workspaceId, '(from queryKey)')
         const { data, error } = await supabase
           .from('workspaces')
           .select('*')
-          .eq('id', activeWorkspaceId)
+          .eq('id', workspaceId)
           .single()
 
         if (error) {
           console.error('[WorkspaceSettings] Error fetching workspace:', error)
           throw error
         }
+        console.log('[WorkspaceSettings] Fetched workspace:', data?.name)
         return data as Workspace
       } catch (error) {
         console.error('[WorkspaceSettings] Workspace query failed:', error)
@@ -118,17 +115,22 @@ export default function WorkspaceSettingsPage() {
     },
     enabled: !!activeWorkspaceId,
     retry: false,
+    staleTime: 0, // Always refetch when workspace ID changes
+    gcTime: 0, // Don't cache stale workspace data
   })
 
   const { data: member } = useQuery({
     queryKey: ['workspace-member', activeWorkspaceId, user?.id],
-    queryFn: async () => {
-      if (!activeWorkspaceId || !user?.id) return null
+    queryFn: async ({ queryKey }) => {
+      // Extract workspace ID from query key to ensure we use the correct one
+      const workspaceId = queryKey[1] as string | null
+      
+      if (!workspaceId || !user?.id) return null
       try {
         const { data, error } = await supabase
           .from('workspace_members')
           .select('*')
-          .eq('workspace_id', activeWorkspaceId)
+          .eq('workspace_id', workspaceId)
           .eq('user_id', user.id)
           .single()
 
@@ -154,23 +156,28 @@ export default function WorkspaceSettingsPage() {
     retry: false,
   })
 
-  // Update workspace name when workspace changes, but only if it's a different workspace or name actually changed
+  // Reset workspace name when activeWorkspaceId changes (before new workspace loads)
+  useEffect(() => {
+    if (activeWorkspaceId && activeWorkspaceId !== prevWorkspaceIdRef.current) {
+      console.log('[WorkspaceSettings] Workspace ID changed to:', activeWorkspaceId, 'resetting name')
+      setWorkspaceName('')
+      setHasChanges(false)
+      prevWorkspaceIdRef.current = activeWorkspaceId
+    }
+  }, [activeWorkspaceId])
+
+  // Update workspace name when workspace data loads
   useEffect(() => {
     const workspaceId = workspace?.id
     const workspaceNameValue = workspace?.name
     
     if (!workspaceId || !workspaceNameValue) return
     
-    // Only update if workspace ID changed or workspace name actually changed
-    const isNewWorkspace = prevWorkspaceIdRef.current !== workspaceId
-    const isNameChanged = prevWorkspaceNameRef.current !== workspaceNameValue
-    
-    if (isNewWorkspace || isNameChanged) {
-      setWorkspaceName(workspaceNameValue)
-      setHasChanges(false)
-      prevWorkspaceIdRef.current = workspaceId
-      prevWorkspaceNameRef.current = workspaceNameValue
-    }
+    // Always update when workspace data is available
+    console.log('[WorkspaceSettings] Setting workspace name:', workspaceNameValue, 'for workspace:', workspaceId)
+    setWorkspaceName(workspaceNameValue)
+    setHasChanges(false)
+    prevWorkspaceNameRef.current = workspaceNameValue
   }, [workspace?.id, workspace?.name])
 
   // Update hasChanges flag when workspaceName changes (only if workspace is loaded)
@@ -368,6 +375,7 @@ export default function WorkspaceSettingsPage() {
             {workspace?.id && (
               <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                 <WorkspaceMembersSection 
+                  key={workspace.id} // Force remount when workspace changes
                   workspaceId={workspace.id} 
                   currentUserId={user?.id}
                   hasAdminRole={member ? hasRole('admin') : false}
@@ -493,12 +501,17 @@ function WorkspaceMembersSection({
 
   const { data: members = [], isLoading, error: membersError } = useQuery({
     queryKey: ['workspace-members', workspaceId],
-    queryFn: async () => {
-      if (!workspaceId) return []
+    queryFn: async ({ queryKey }) => {
+      // Extract workspace ID from query key to ensure we use the correct one
+      const workspaceIdFromKey = queryKey[1] as string | null
+      
+      if (!workspaceIdFromKey) return []
+      
+      console.log('[WorkspaceMembers] Fetching members for workspace:', workspaceIdFromKey, '(from queryKey)')
       
       try {
         const { data, error } = await supabase.rpc('get_workspace_members_with_emails', {
-          workspace_id_param: workspaceId,
+          workspace_id_param: workspaceIdFromKey,
         })
 
         if (error) {
@@ -507,7 +520,7 @@ function WorkspaceMembersSection({
           const { data: fallbackData, error: fallbackError } = await supabase
             .from('workspace_members')
             .select('workspace_id, user_id, role, created_at')
-            .eq('workspace_id', workspaceId)
+            .eq('workspace_id', workspaceIdFromKey)
             .order('created_at', { ascending: true })
           
           if (fallbackError) {
@@ -539,15 +552,25 @@ function WorkspaceMembersSection({
       }
     },
     enabled: !!workspaceId && hasAdminRole,
+    staleTime: 0, // Always refetch when workspace ID changes
+    gcTime: 0, // Don't cache stale workspace data
+    refetchOnMount: 'always', // Always refetch on mount
   })
 
   const { data: invitations = [] } = useQuery({
     queryKey: ['workspace-invitations', workspaceId],
-    queryFn: async () => {
+    queryFn: async ({ queryKey }) => {
+      // Extract workspace ID from query key to ensure we use the correct one
+      const workspaceIdFromKey = queryKey[1] as string | null
+      
+      if (!workspaceIdFromKey) return []
+      
+      console.log('[WorkspaceInvitations] Fetching invitations for workspace:', workspaceIdFromKey, '(from queryKey)')
+      
       const { data, error } = await supabase
         .from('workspace_invitations')
         .select('*')
-        .eq('workspace_id', workspaceId)
+        .eq('workspace_id', workspaceIdFromKey)
         .eq('status', 'pending')
         .order('created_at', { ascending: true })
 
@@ -555,6 +578,9 @@ function WorkspaceMembersSection({
       return (data || []) as WorkspaceInvitation[]
     },
     enabled: hasAdminRole && !!workspaceId,
+    staleTime: 0, // Always refetch when workspace ID changes
+    gcTime: 0, // Don't cache stale workspace data
+    refetchOnMount: 'always', // Always refetch on mount
   })
 
   const handleAddMember = async () => {

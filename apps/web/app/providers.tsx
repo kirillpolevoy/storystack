@@ -2,23 +2,38 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
+import { WorkspaceProvider } from '@/contexts/WorkspaceContext'
+import { WorkspaceErrorBoundary } from '@/components/errors/WorkspaceErrorBoundary'
+import { WorkspaceSwitchLoader } from '@/components/app/WorkspaceSwitchLoader'
+import { initializeWorkspaceQueryPlugin } from '@/plugins/workspaceQueryPlugin'
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            staleTime: 60 * 1000, // 1 minute
-            refetchOnWindowFocus: false,
-          },
+  const [queryClient] = useState(() => {
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: {
+          staleTime: 60 * 1000, // 1 minute
+          refetchOnWindowFocus: false,
         },
-      })
-  )
+      },
+    })
+    
+    // Initialize workspace query plugin
+    initializeWorkspaceQueryPlugin(client)
+    
+    return client
+  })
 
   return (
     <div style={{ backgroundColor: '#f9fafb', minHeight: '100%' }}>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        <WorkspaceErrorBoundary>
+          <WorkspaceProvider>
+            <WorkspaceSwitchLoader />
+            {children}
+          </WorkspaceProvider>
+        </WorkspaceErrorBoundary>
+      </QueryClientProvider>
     </div>
   )
 }

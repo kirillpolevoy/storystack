@@ -3,6 +3,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { Asset } from '@/types'
+import { useActiveWorkspace } from './useActiveWorkspace'
 
 const PAGE_SIZE = 50
 
@@ -28,18 +29,21 @@ export function useAssets(
 ) {
   const supabase = createClient()
 
-  // Get active workspace ID for query key (so it refetches when workspace changes)
-  const activeWorkspaceId = typeof window !== 'undefined' 
-    ? localStorage.getItem('@storystack:active_workspace_id')
-    : null
+  // Use reactive workspace hook instead of reading localStorage directly
+  const activeWorkspaceId = useActiveWorkspace()
 
   const query = useInfiniteQuery({
     queryKey: ['assets', activeWorkspaceId, searchQuery, selectedFilters, viewFilter],
-    refetchOnMount: true, // Always refetch on mount to ensure fresh data after login
+    enabled: !!activeWorkspaceId, // Only run query when workspace ID is available
+    refetchOnMount: 'always', // Always refetch on mount to ensure fresh data
     refetchOnWindowFocus: false, // Don't refetch on window focus (already disabled in QueryClient)
-    staleTime: 0, // Consider data stale immediately to force refetch after login
-    queryFn: async ({ pageParam = 0 }) => {
+    staleTime: 0, // Consider data stale immediately to force refetch
+    gcTime: 0, // Don't cache data when workspace changes (garbage collect immediately)
+    queryFn: async ({ pageParam = 0, queryKey }) => {
       try {
+        // Extract workspace ID from query key to ensure we use the correct one
+        const workspaceId = queryKey[1] as string | null
+        
         const {
           data: { user },
           error: authError,
@@ -59,20 +63,18 @@ export function useAssets(
       const locationFilters = selectedFilters?.filter((f) => isLocationFilter(f)).map(getLocationName) || []
       const regularTags = selectedFilters?.filter((f) => f !== NO_TAGS_FILTER && !isLocationFilter(f)) || []
 
-      // Get active workspace ID from localStorage
-      const activeWorkspaceId = typeof window !== 'undefined' 
-        ? localStorage.getItem('@storystack:active_workspace_id')
-        : null
-
-      if (!activeWorkspaceId) {
+      // workspaceId is extracted from queryKey to ensure correct workspace
+      if (!workspaceId) {
         // Return empty if no workspace selected
         return { assets: [], nextPage: null, totalCount: 0 }
       }
 
+      console.log('[useAssets] Fetching assets for workspace:', workspaceId, '(from queryKey)')
+
       let query = supabase
         .from('assets')
         .select('*, auto_tag_status, original_filename') // Explicitly include auto_tag_status and original_filename
-        .eq('workspace_id', activeWorkspaceId)
+        .eq('workspace_id', workspaceId)
         .is('deleted_at', null) // Exclude soft-deleted assets
         .order('created_at', { ascending: false })
         .range(pageParam * PAGE_SIZE, (pageParam + 1) * PAGE_SIZE - 1)
@@ -99,6 +101,8 @@ export function useAssets(
       }
 
       const { data, error } = await query
+      
+      console.log('[useAssets] Fetched', data?.length || 0, 'assets for workspace:', workspaceId)
 
       if (error) {
         console.error('[useAssets] Query error:', error)
@@ -230,7 +234,7 @@ export function useAssets(
         let countQuery = supabase
           .from('assets')
           .select('id', { count: 'exact', head: true })
-          .eq('workspace_id', activeWorkspaceId)
+          .eq('workspace_id', workspaceId)
           .is('deleted_at', null) // Exclude soft-deleted assets
 
         // Apply server-side filters for count
@@ -271,7 +275,7 @@ export function useAssets(
           let viewCountQuery = supabase
             .from('assets')
             .select('id')
-            .eq('workspace_id', activeWorkspaceId)
+            .eq('workspace_id', workspaceId)
             .is('deleted_at', null) // Exclude soft-deleted assets
 
           // Apply same server-side filters as count query

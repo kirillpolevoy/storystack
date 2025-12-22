@@ -13,6 +13,7 @@ import { DuplicateDetectionDialog } from './DuplicateDetectionDialog'
 import { createClient } from '@/lib/supabase/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { addBatchToPoll, startBatchPolling } from '@/utils/pollBatchStatus'
+import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
 
 interface UploadZoneProps {
   open: boolean
@@ -33,6 +34,7 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
   const uploadMutation = useAssetUpload()
   const supabase = createClient()
   const queryClient = useQueryClient()
+  const activeWorkspaceId = useActiveWorkspace()
 
   // Batch trigger auto-tagging for all uploaded assets
   // This is more efficient than individual calls, especially for 20+ assets
@@ -128,7 +130,7 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
         
         // Add batch to polling queue immediately
         addBatchToPoll(data.batchId)
-        startBatchPolling()
+        startBatchPolling(activeWorkspaceId)
         
         console.log(`[UploadZone] ✅ Added batch ${data.batchId} to polling queue`)
         
@@ -427,10 +429,7 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
         const validHashes = hashes.filter((hash) => hash !== '')
 
         if (validHashes.length > 0) {
-          // Get active workspace ID from localStorage (if available)
-          const activeWorkspaceId = typeof window !== 'undefined' 
-            ? localStorage.getItem('@storystack:active_workspace_id')
-            : null
+          // Use reactive workspace ID from hook
 
           // Check for duplicates (scope to workspace if available)
           const duplicateIndicesResult = await checkForDuplicates(

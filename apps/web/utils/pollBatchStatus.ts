@@ -48,7 +48,11 @@ function getEdgeFunctionUrl(): string {
  * Start polling for pending batches
  * Call this when the app loads or when a batch is created
  */
-export function startBatchPolling(): void {
+/**
+ * Start batch polling
+ * @param workspaceId - Optional workspace ID. If not provided, will read from localStorage (for backward compatibility)
+ */
+export function startBatchPolling(workspaceId?: string | null): void {
   if (pollingState.pollInterval) {
     console.log('[BatchPolling] Already polling, skipping start')
     return
@@ -57,7 +61,7 @@ export function startBatchPolling(): void {
   console.log('[BatchPolling] 🚀 Starting batch polling (every 10 seconds)...')
   
   // Initial poll
-  pollPendingBatches()
+  pollPendingBatches(workspaceId)
   
   // Set up interval - poll every 10 seconds
   pollingState.pollInterval = setInterval(() => {
@@ -69,7 +73,7 @@ export function startBatchPolling(): void {
       return
     }
     
-    pollPendingBatches()
+    pollPendingBatches(workspaceId)
   }, POLL_INTERVAL_MS)
   
   console.log('[BatchPolling] ✅ Polling started successfully')
@@ -113,8 +117,9 @@ export function removeBatchFromPoll(batchId: string): void {
 
 /**
  * Poll for pending batches
+ * @param workspaceId - Optional workspace ID. If not provided, will read from localStorage (for backward compatibility)
  */
-async function pollPendingBatches(): Promise<void> {
+async function pollPendingBatches(workspaceId?: string | null): Promise<void> {
   const supabase = createClient()
   if (!supabase) {
     console.warn('[BatchPolling] ⚠️  Supabase not initialized')
@@ -122,10 +127,10 @@ async function pollPendingBatches(): Promise<void> {
   }
 
   try {
-    // Get active workspace ID
-    const activeWorkspaceId = typeof window !== 'undefined' 
+    // Get active workspace ID (prefer parameter, fallback to localStorage for backward compatibility)
+    const activeWorkspaceId = workspaceId ?? (typeof window !== 'undefined' 
       ? localStorage.getItem('@storystack:active_workspace_id')
-      : null
+      : null)
 
     if (!activeWorkspaceId) {
       console.log('[BatchPolling] ⏸️  No active workspace, skipping batch polling')

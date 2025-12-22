@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { MobileMenuButton } from '@/components/app/MobileMenuButton'
+import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
 
 type TagConfig = {
   name: string
@@ -52,33 +53,37 @@ export default function TagsPage() {
   const supabase = createClient()
   const queryClient = useQueryClient()
 
-  // Get active workspace ID
-  const activeWorkspaceId = typeof window !== 'undefined' 
-    ? localStorage.getItem('@storystack:active_workspace_id')
-    : null
+  // Use reactive workspace hook instead of reading localStorage directly
+  const activeWorkspaceId = useActiveWorkspace()
 
   // Fetch all tags with usage counts
   const { data: tags, isLoading, refetch } = useQuery({
     queryKey: ['tags', activeWorkspaceId],
-    queryFn: async () => {
+    enabled: !!activeWorkspaceId, // Only run query when workspace ID is available
+    staleTime: 0, // Consider data stale immediately
+    gcTime: 0, // Don't cache data when workspace changes
+    queryFn: async ({ queryKey }) => {
+      // Extract workspace ID from query key to ensure we use the correct one
+      const workspaceId = queryKey[1] as string | null
+      
       const {
         data: { user },
       } = await supabase.auth.getUser()
 
       if (!user) throw new Error('Not authenticated')
 
-      if (!activeWorkspaceId) {
+      if (!workspaceId) {
         console.log('[TagManagement] No active workspace, returning empty tags')
         return []
       }
 
-      console.log('[TagManagement] Fetching tags for workspace:', activeWorkspaceId)
+      console.log('[TagManagement] Fetching tags for workspace:', workspaceId, '(from queryKey)')
 
       // Get all assets with tags from the active workspace
       const { data: assets, error } = await supabase
         .from('assets')
         .select('tags')
-        .eq('workspace_id', activeWorkspaceId)
+        .eq('workspace_id', workspaceId)
         .is('deleted_at', null) // Exclude soft-deleted assets
 
       if (error) {
@@ -104,11 +109,11 @@ export default function TagsPage() {
       // Note: custom_tags column doesn't exist in tag_config table, only auto_tags
       let autoTags: string[] = []
       
-      console.log('[TagManagement] Fetching tag_config for workspace:', activeWorkspaceId)
+      console.log('[TagManagement] Fetching tag_config for workspace:', workspaceId)
       const { data: config, error: configError } = await supabase
         .from('tag_config')
         .select('auto_tags')
-        .eq('workspace_id', activeWorkspaceId)
+        .eq('workspace_id', workspaceId)
         .single()
 
       console.log('[TagManagement] Query result - data:', config, 'error:', configError)
@@ -181,10 +186,6 @@ export default function TagsPage() {
 
       if (!user) throw new Error('Not authenticated')
 
-      const activeWorkspaceId = typeof window !== 'undefined' 
-        ? localStorage.getItem('@storystack:active_workspace_id')
-        : null
-
       if (!activeWorkspaceId) throw new Error('No active workspace')
 
       // Get current tag_config to preserve existing auto_tags
@@ -253,10 +254,6 @@ export default function TagsPage() {
 
       if (!user) throw new Error('Not authenticated')
 
-      const activeWorkspaceId = typeof window !== 'undefined' 
-        ? localStorage.getItem('@storystack:active_workspace_id')
-        : null
-
       if (!activeWorkspaceId) throw new Error('No active workspace')
 
       // Update all assets that use this tag
@@ -300,10 +297,6 @@ export default function TagsPage() {
       } = await supabase.auth.getUser()
 
       if (!user) throw new Error('Not authenticated')
-
-      const activeWorkspaceId = typeof window !== 'undefined' 
-        ? localStorage.getItem('@storystack:active_workspace_id')
-        : null
 
       if (!activeWorkspaceId) throw new Error('No active workspace')
 
@@ -462,9 +455,7 @@ export default function TagsPage() {
 
       if (!user) throw new Error('Not authenticated')
 
-      const activeWorkspaceId = typeof window !== 'undefined' 
-        ? localStorage.getItem('@storystack:active_workspace_id')
-        : null
+      if (!activeWorkspaceId) throw new Error('No active workspace')
 
       // Read optimistic tags from cache (onMutate has already updated it)
       const optimisticTags = queryClient.getQueryData<TagConfig[]>(['tags']) || []
@@ -585,10 +576,6 @@ export default function TagsPage() {
       } = await supabase.auth.getUser()
 
       if (!user) throw new Error('Not authenticated')
-
-      const activeWorkspaceId = typeof window !== 'undefined' 
-        ? localStorage.getItem('@storystack:active_workspace_id')
-        : null
 
       if (!activeWorkspaceId) throw new Error('No active workspace')
 

@@ -1,161 +1,87 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { createClient } from '@/lib/supabase/client'
+import { useState, useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { cancelWorkspaceQueries, invalidateWorkspaceQueries, removeWorkspaceQueries } from '@/utils/workspaceQueries'
 
 /**
  * Hook to get the active workspace ID
- * Checks localStorage first, then database (user_preferences)
- * Prioritizes user's own workspace if multiple workspaces exist
+ * Reads directly from localStorage for immediate reactivity
+ * Syncs to database in background but doesn't block UI
+ * Reactively updates when localStorage changes (workspace switch)
  */
 export function useActiveWorkspace() {
-  const supabase = createClient()
-  const [localStorageWorkspaceId, setLocalStorageWorkspaceId] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null)
+  const prevWorkspaceIdRef = useRef<string | null>(null)
 
-  // Get from localStorage on mount
+  // Read from localStorage synchronously on mount and when it changes
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window === 'undefined') return
+
+    const updateWorkspaceId = () => {
       const stored = localStorage.getItem('@storystack:active_workspace_id')
-      setLocalStorageWorkspaceId(stored)
-    }
-  }, [])
-
-  // Get current user
-  const { data: user } = useQuery({
-    queryKey: ['user'],
-    queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      return user
-    },
-  })
-
-  // Get user's workspaces
-  const { data: workspaces = [] } = useQuery({
-    queryKey: ['workspaces', user?.id],
-    queryFn: async () => {
-      if (!user?.id) return []
-
-      const { data, error } = await supabase
-        .from('workspace_members')
-        .select(`
-          workspace_id,
-          workspaces (
-            id,
-            name,
-            created_by
-          )
-        `)
-        .eq('user_id', user.id)
-
-      if (error) {
-        console.error('[useActiveWorkspace] Error fetching workspaces:', error)
-        return []
-      }
-
-      return (data || []).map((wm: any) => wm.workspaces).filter(Boolean) as Array<{
-        id: string
-        name: string
-        created_by: string
-      }>
-    },
-    enabled: !!user?.id,
-  })
-
-  // Get active workspace from database
-  const { data: dbActiveWorkspaceId } = useQuery({
-    queryKey: ['user_preferences', user?.id],
-    queryFn: async () => {
-      if (!user?.id) return null
-
-      const { data, error } = await supabase
-        .from('user_preferences')
-        .select('active_workspace_id')
-        .eq('user_id', user.id)
-        .single()
-
-      if (error) {
-        // If no preferences exist, that's okay
-        if (error.code === 'PGRST116') return null
-        console.error('[useActiveWorkspace] Error fetching user preferences:', error)
-        return null
-      }
-
-      return data?.active_workspace_id || null
-    },
-    enabled: !!user?.id,
-  })
-
-  // Determine the active workspace ID
-  // Priority: localStorage > database > user's own workspace > first workspace
-  const activeWorkspaceId = (() => {
-    // If localStorage has a value, validate it's still a valid workspace
-    if (localStorageWorkspaceId) {
-      const isValid = workspaces.some((w) => w.id === localStorageWorkspaceId)
-      if (isValid) {
-        return localStorageWorkspaceId
-      }
-      // Invalid workspace in localStorage, clear it
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem('@storystack:active_workspace_id')
+      const newWorkspaceId = stored || null
+      
+      // Only update if actually changed
+      if (newWorkspaceId !== workspaceId) {
+        setWorkspaceId(newWorkspaceId)
       }
     }
 
-    // Check database
-    if (dbActiveWorkspaceId) {
-      const isValid = workspaces.some((w) => w.id === dbActiveWorkspaceId)
-      if (isValid) {
-        // Sync to localStorage
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('@storystack:active_workspace_id', dbActiveWorkspaceId)
-        }
-        return dbActiveWorkspaceId
+    // Initial read
+    updateWorkspaceId()
+
+    // Listen for storage events (workspace changes in other tabs)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === '@storystack:active_workspace_id') {
+        updateWorkspaceId()
       }
     }
 
-    // Fallback: prioritize user's own workspace
-    if (workspaces.length > 0 && user?.id) {
-      const ownWorkspace = workspaces.find((w) => w.created_by === user.id)
-      if (ownWorkspace) {
-        // Sync to localStorage and database
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('@storystack:active_workspace_id', ownWorkspace.id)
-        }
-        // Update database in background (don't await)
-        supabase
-          .from('user_preferences')
-          .upsert({
-            user_id: user.id,
-            active_workspace_id: ownWorkspace.id,
-            updated_at: new Date().toISOString(),
-          })
-          .then(() => {
-            // Invalidate to refresh
-          })
-        return ownWorkspace.id
-      }
-
-      // Last resort: first workspace
-      const firstWorkspace = workspaces[0]
-      if (firstWorkspace) {
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('@storystack:active_workspace_id', firstWorkspace.id)
-        }
-        // Update database in background
-        supabase
-          .from('user_preferences')
-          .upsert({
-            user_id: user.id,
-            active_workspace_id: firstWorkspace.id,
-            updated_at: new Date().toISOString(),
-          })
-        return firstWorkspace.id
-      }
+    // Listen for custom event (workspace changes in same tab)
+    const handleWorkspaceChange = () => {
+      updateWorkspaceId()
     }
 
-    return null
-  })()
+    window.addEventListener('storage', handleStorageChange)
+    window.addEventListener('workspace-changed', handleWorkspaceChange)
 
-  return activeWorkspaceId
+    // Poll localStorage periodically as a fallback (in case events don't fire)
+    const interval = setInterval(updateWorkspaceId, 100)
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange)
+      window.removeEventListener('workspace-changed', handleWorkspaceChange)
+      clearInterval(interval)
+    }
+  }, [workspaceId])
+
+  // Handle query invalidation when workspace ID changes
+  useEffect(() => {
+    const currentWorkspaceId = workspaceId
+    const previousWorkspaceId = prevWorkspaceIdRef.current
+
+    // Only trigger if workspace ID actually changed (not initial mount)
+    if (currentWorkspaceId !== previousWorkspaceId && previousWorkspaceId !== null) {
+      console.log('[useActiveWorkspace] Workspace ID changed from', previousWorkspaceId, 'to', currentWorkspaceId)
+      
+      // Cancel in-flight queries for old workspace
+      cancelWorkspaceQueries(queryClient, previousWorkspaceId)
+      
+      // Remove old workspace queries from cache to prevent stale data
+      removeWorkspaceQueries(queryClient, previousWorkspaceId)
+      
+      // Invalidate all workspace queries to ensure fresh data
+      invalidateWorkspaceQueries(queryClient)
+      
+      console.log('[useActiveWorkspace] Removed and invalidated queries for old workspace:', previousWorkspaceId)
+      console.log('[useActiveWorkspace] React Query will create new queries with workspace ID:', currentWorkspaceId)
+    }
+
+    // Update ref for next comparison
+    prevWorkspaceIdRef.current = currentWorkspaceId
+  }, [workspaceId, queryClient])
+
+  return workspaceId
 }
-

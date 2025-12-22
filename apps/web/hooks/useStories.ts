@@ -11,7 +11,14 @@ export function useStories() {
 
   return useQuery({
     queryKey: ['stories', activeWorkspaceId],
-    queryFn: async () => {
+    enabled: !!activeWorkspaceId, // Only run query when workspace ID is available
+    staleTime: 0, // Consider data stale immediately
+    gcTime: 0, // Don't cache data when workspace changes
+    refetchOnMount: 'always', // Always refetch on mount
+    queryFn: async ({ queryKey }) => {
+      // Extract workspace ID from query key to ensure we use the correct one
+      const workspaceId = queryKey[1] as string | null
+      console.log('[useStories] Fetching stories for workspace:', workspaceId, '(from queryKey)')
       const {
         data: { user },
       } = await supabase.auth.getUser()
@@ -20,7 +27,7 @@ export function useStories() {
         throw new Error('Not authenticated')
       }
 
-      if (!activeWorkspaceId) {
+      if (!workspaceId) {
         // No active workspace, return empty array
         return []
       }
@@ -41,11 +48,16 @@ export function useStories() {
             )
           )
         `)
-        .eq('workspace_id', activeWorkspaceId) // Filter by active workspace
+        .eq('workspace_id', workspaceId) // Filter by active workspace
         .is('deleted_at', null) // Exclude soft-deleted stories
         .order('updated_at', { ascending: false })
 
-      if (error) throw error
+      if (error) {
+        console.error('[useStories] Error fetching stories:', error)
+        throw error
+      }
+
+      console.log('[useStories] Fetched', data?.length || 0, 'stories for workspace:', workspaceId)
 
       // Process stories to get thumbnail URL for first asset
       const storiesWithThumbnails = (data || []).map((story: any) => {

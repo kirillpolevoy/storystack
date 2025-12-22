@@ -2,18 +2,23 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
+import { useActiveWorkspace } from './useActiveWorkspace'
 
 export function useAvailableTags() {
   const supabase = createClient()
 
-  // Get active workspace ID for query key (so it refetches when workspace changes)
-  const activeWorkspaceId = typeof window !== 'undefined' 
-    ? localStorage.getItem('@storystack:active_workspace_id')
-    : null
+  // Use reactive workspace hook instead of reading localStorage directly
+  const activeWorkspaceId = useActiveWorkspace()
 
   return useQuery({
     queryKey: ['availableTags', activeWorkspaceId],
-    queryFn: async () => {
+    enabled: !!activeWorkspaceId, // Only run query when workspace ID is available
+    staleTime: 0, // Consider data stale immediately
+    gcTime: 0, // Don't cache data when workspace changes
+    queryFn: async ({ queryKey }) => {
+      // Extract workspace ID from query key to ensure we use the correct one
+      const workspaceId = queryKey[1] as string | null
+      
       const {
         data: { user },
       } = await supabase.auth.getUser()
@@ -22,7 +27,7 @@ export function useAvailableTags() {
         return []
       }
 
-      if (!activeWorkspaceId) {
+      if (!workspaceId) {
         return []
       }
 
@@ -30,7 +35,7 @@ export function useAvailableTags() {
       const { data: assets, error } = await supabase
         .from('assets')
         .select('tags')
-        .eq('workspace_id', activeWorkspaceId)
+        .eq('workspace_id', workspaceId)
         .is('deleted_at', null) // Exclude soft-deleted assets
         .not('tags', 'is', null)
 
@@ -51,7 +56,7 @@ export function useAvailableTags() {
       const { data: config } = await supabase
         .from('tag_config')
         .select('auto_tags')
-        .eq('workspace_id', activeWorkspaceId)
+        .eq('workspace_id', workspaceId)
         .single()
 
       if (config?.auto_tags && Array.isArray(config.auto_tags)) {
