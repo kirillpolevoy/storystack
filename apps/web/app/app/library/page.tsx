@@ -294,8 +294,9 @@ export default function LibraryPage() {
     initializeBatchPolling()
 
     // Listen for batch completion events
-    const handleBatchCompleted = async (event: CustomEvent) => {
-      console.log('[LibraryPage] 📢 Batch completed event received:', event.detail)
+    const handleBatchCompleted = async (event: Event) => {
+      const customEvent = event as CustomEvent<{ batchId: string }>
+      console.log('[LibraryPage] 📢 Batch completed event received:', customEvent.detail)
       
       // Find assets that were part of this batch and are now completed
       // This shows the green checkmark success indicator
@@ -303,7 +304,7 @@ export default function LibraryPage() {
         const { data: batchAssets } = await supabase
           .from('assets')
           .select('id, auto_tag_status')
-          .eq('openai_batch_id', event.detail.batchId)
+          .eq('openai_batch_id', customEvent.detail.batchId)
           .eq('auto_tag_status', 'completed')
           .limit(100) // Get up to 100 completed assets from this batch
         
@@ -356,12 +357,12 @@ export default function LibraryPage() {
       }, 3000)
     }
 
-    window.addEventListener('batchCompleted', handleBatchCompleted as EventListener)
+    window.addEventListener('batchCompleted', handleBatchCompleted)
 
     return () => {
       console.log('[LibraryPage] Cleaning up batch polling...')
       stopBatchPolling()
-      window.removeEventListener('batchCompleted', handleBatchCompleted as EventListener)
+      window.removeEventListener('batchCompleted', handleBatchCompleted)
     }
   }, [queryClient, refetch, supabase])
 
