@@ -135,7 +135,6 @@ export async function getStories(workspaceId: string): Promise<StoryWithAssets[]
             ...asset,
             publicUrl: data.publicUrl,
             tags: [],
-            campaign_id: '',
             source: 'local',
             created_at: '',
           } as Asset;
@@ -211,7 +210,7 @@ export async function getStoryById(storyId: string, userId: string): Promise<Sto
     const assetIds = storyAssets.map((sa) => sa.asset_id);
     const { data: assets, error: assetsDataError } = await supabase
       .from('assets')
-      .select('id, campaign_id, storage_path, source, tags, created_at')
+      .select('id, storage_path, source, tags, created_at')
       .in('id', assetIds)
       .eq('user_id', userId);
 
@@ -347,6 +346,31 @@ export async function addAssetsToStory(
       return false;
     }
 
+    // Check which assets already exist in the story to avoid duplicates
+    const { data: existingAssets } = await supabase
+      .from('story_assets')
+      .select('asset_id')
+      .eq('story_id', storyId)
+      .in('asset_id', assetIds);
+
+    const existingAssetIds = new Set(
+      existingAssets?.map((sa) => sa.asset_id) || []
+    );
+
+    // Filter out assets that already exist in the story
+    const newAssetIds = assetIds.filter((assetId) => !existingAssetIds.has(assetId));
+
+    // If all assets already exist, return true (no error, just nothing to add)
+    if (newAssetIds.length === 0) {
+      console.log('[stories] All assets already exist in story, skipping insert');
+      // Still update story's updated_at to reflect the operation
+      await supabase
+        .from('stories')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', storyId);
+      return true;
+    }
+
     // Get current max order_index if inserting at end
     let startOrderIndex = 0;
     if (insertAtIndex === undefined) {
@@ -365,14 +389,14 @@ export async function addAssetsToStory(
       await supabase.rpc('increment_story_asset_order', {
         p_story_id: storyId,
         p_start_index: insertAtIndex,
-        p_increment: assetIds.length,
+        p_increment: newAssetIds.length,
       }).catch(() => {
         // If RPC doesn't exist, we'll handle it manually
       });
     }
 
-    // Insert new assets
-    const storyAssets = assetIds.map((assetId, index) => ({
+    // Insert only new assets
+    const storyAssets = newAssetIds.map((assetId, index) => ({
       story_id: storyId,
       asset_id: assetId,
       order_index: startOrderIndex + index,

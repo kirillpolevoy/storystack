@@ -185,6 +185,7 @@ export default function StoryDetailScreen() {
     router.push({
       pathname: '/',
       params: {
+        storyId: story.id,
         existingAssetIds: story.assets.map((a) => a.id).join(','),
         storyName: story.name,
       },
@@ -359,7 +360,7 @@ export default function StoryDetailScreen() {
           <TouchableOpacity
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.back();
+              router.push('/stories' as any);
             }}
             activeOpacity={0.6}
             style={{

@@ -45,6 +45,7 @@ import { startBatchPolling, onBatchComplete } from '@/utils/pollBatchStatus';
 export default function LibraryScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ 
+    storyId?: string;
     existingAssetIds?: string;
     storyName?: string;
   }>();
@@ -558,7 +559,7 @@ export default function LibraryScreen() {
     return existingParam.split(',').filter((id) => id.trim().length > 0);
   }, [params.existingAssetIds]);
 
-  const isAddingToStory = existingAssetIds.length > 0;
+  const isAddingToStory = existingAssetIds.length > 0 || params.storyId !== undefined;
   const isStoryMode = isAddingToStory || (params.storyName !== undefined && params.storyName !== null);
 
   // Auto-enable selection mode when navigating from story builder (creating new or adding to existing)
@@ -2610,13 +2611,43 @@ export default function LibraryScreen() {
     });
   };
 
-  const handleDoneSelection = () => {
+  const handleDoneSelection = async () => {
     if (selectedAssets.length === 0) {
       Alert.alert('No photos selected', 'Please select at least one photo.');
       return;
     }
+    
+    // If we have a storyId, directly add assets to the story
+    if (params.storyId && session?.user?.id) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      const assetIds = selectedAssets.map((a) => a.id);
+      
+      try {
+        const { addAssetsToStory } = await import('@/utils/stories');
+        const success = await addAssetsToStory(params.storyId, session.user.id, assetIds);
+        
+        if (success) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          Alert.alert('Success', 'Photos added to story!', [
+            {
+              text: 'OK',
+              onPress: () => {
+                router.push(`/stories/${params.storyId}` as any);
+              },
+            },
+          ]);
+        } else {
+          Alert.alert('Error', 'Failed to add photos to story.');
+        }
+      } catch (error) {
+        console.error('[Library] Failed to add assets to story:', error);
+        Alert.alert('Error', 'Failed to add photos to story.');
+      }
+      return;
+    }
+    
+    // Otherwise, navigate to story builder (for new stories or when storyId is not provided)
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    // Navigate back to story builder with selected assets
     const newAssetIds = selectedAssets.map((a) => a.id).join(',');
     router.push({
       pathname: '/story-builder',
