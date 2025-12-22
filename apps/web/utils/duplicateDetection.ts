@@ -24,13 +24,18 @@ export async function computeImageHash(file: File): Promise<string> {
 }
 
 /**
- * Checks if photos with the same hash already exist for a user
+ * Checks if photos with the same hash already exist for a user/workspace
  * Returns array of indices (from imageHashes array) that are duplicates
  * Works with or without file_hash column in database
+ * 
+ * @param userId - User ID (required for backward compatibility)
+ * @param imageHashes - Array of image hashes to check
+ * @param workspaceId - Optional workspace ID to scope duplicate check to workspace
  */
 export async function checkForDuplicates(
   userId: string,
-  imageHashes: string[]
+  imageHashes: string[],
+  workspaceId?: string
 ): Promise<number[]> {
   if (!imageHashes.length) {
     return []
@@ -39,12 +44,21 @@ export async function checkForDuplicates(
   const supabase = createClient()
 
   try {
-    // Try to fetch existing assets with file_hash column
-    // If column doesn't exist, the query will still work but file_hash will be null
-    const { data: existingAssets, error } = await supabase
+    // Build query to fetch existing assets with file_hash column
+    // Filter out soft-deleted assets and scope to workspace if provided
+    let query = supabase
       .from('assets')
       .select('id, file_hash')
-      .eq('user_id', userId)
+      .is('deleted_at', null) // Exclude soft-deleted assets
+
+    // Scope to workspace if provided, otherwise fall back to user_id
+    if (workspaceId) {
+      query = query.eq('workspace_id', workspaceId)
+    } else {
+      query = query.eq('user_id', userId)
+    }
+
+    const { data: existingAssets, error } = await query
 
     if (error) {
       console.error('[duplicateDetection] Failed to fetch existing assets:', error)

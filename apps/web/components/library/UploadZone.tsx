@@ -422,8 +422,17 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
         const validHashes = hashes.filter((hash) => hash !== '')
 
         if (validHashes.length > 0) {
-          // Check for duplicates
-          const duplicateIndicesResult = await checkForDuplicates(user.id, validHashes)
+          // Get active workspace ID from localStorage (if available)
+          const activeWorkspaceId = typeof window !== 'undefined' 
+            ? localStorage.getItem('@storystack:active_workspace_id')
+            : null
+
+          // Check for duplicates (scope to workspace if available)
+          const duplicateIndicesResult = await checkForDuplicates(
+            user.id, 
+            validHashes,
+            activeWorkspaceId || undefined
+          )
 
           if (duplicateIndicesResult.length > 0) {
             // Map back to original file indices (accounting for failed hash computations)
