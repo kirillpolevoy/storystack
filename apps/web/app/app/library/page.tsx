@@ -28,43 +28,6 @@ export default function LibraryPage() {
   const supabase = createClient()
   const queryClient = useQueryClient()
   
-  useEffect(() => {
-    setMounted(true)
-    
-    // On mobile, ensure session is established before querying
-    // This fixes the issue where library doesn't load after login
-    const ensureSessionAndRefetch = async () => {
-      try {
-        // Wait a bit for session cookies to be set (especially on mobile)
-        await new Promise(resolve => setTimeout(resolve, 300))
-        
-        // Verify session exists
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession()
-        
-        if (sessionError) {
-          console.error('[LibraryPage] Session error:', sessionError)
-          return
-        }
-        
-        if (!session) {
-          console.warn('[LibraryPage] No session found, redirecting to login')
-          window.location.href = '/login'
-          return
-        }
-        
-        // Force refetch to ensure data loads after login
-        // Invalidate all asset-related queries to force fresh fetch
-        console.log('[LibraryPage] Session verified, invalidating and refetching assets')
-        queryClient.invalidateQueries({ queryKey: ['assets'] })
-        refetch()
-      } catch (error) {
-        console.error('[LibraryPage] Error ensuring session:', error)
-      }
-    }
-    
-    ensureSessionAndRefetch()
-  }, [queryClient, refetch, supabase])
-  
   const [viewFilter, setViewFilter] = useState<AssetViewFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
@@ -121,6 +84,43 @@ export default function LibraryPage() {
     error,
     refetch,
   } = useAssets(searchQuery, selectedFilters, viewFilter)
+  
+  useEffect(() => {
+    setMounted(true)
+    
+    // On mobile, ensure session is established before querying
+    // This fixes the issue where library doesn't load after login
+    const ensureSessionAndRefetch = async () => {
+      try {
+        // Wait a bit for session cookies to be set (especially on mobile)
+        await new Promise(resolve => setTimeout(resolve, 300))
+        
+        // Verify session exists
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+        
+        if (sessionError) {
+          console.error('[LibraryPage] Session error:', sessionError)
+          return
+        }
+        
+        if (!session) {
+          console.warn('[LibraryPage] No session found, redirecting to login')
+          window.location.href = '/login'
+          return
+        }
+        
+        // Force refetch to ensure data loads after login
+        // Invalidate all asset-related queries to force fresh fetch
+        console.log('[LibraryPage] Session verified, invalidating and refetching assets')
+        queryClient.invalidateQueries({ queryKey: ['assets'] })
+        refetch()
+      } catch (error) {
+        console.error('[LibraryPage] Error ensuring session:', error)
+      }
+    }
+    
+    ensureSessionAndRefetch()
+  }, [queryClient, refetch, supabase])
 
   // Log errors for debugging but don't crash the page
   if (isError && error) {
