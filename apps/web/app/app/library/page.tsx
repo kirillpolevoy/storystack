@@ -180,8 +180,6 @@ export default function LibraryPage() {
 
   const deleteAsset = useDeleteAsset()
   const updateTags = useUpdateAssetTags()
-  const queryClient = useQueryClient()
-  const supabase = createClient()
 
   const handleAssetSelect = useCallback((assetId: string, selected: boolean) => {
     setSelectedAssetIds((prev) => {
