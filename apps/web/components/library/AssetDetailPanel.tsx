@@ -935,8 +935,12 @@ export function AssetDetailPanel({
 
   return (
     <>
-      <Sheet open={open} onOpenChange={onClose}>
-        <SheetContent className="w-full overflow-y-auto sm:max-w-[420px] p-6">
+      <Sheet open={open} onOpenChange={onClose} modal={false}>
+        <SheetContent 
+          className="w-full overflow-y-auto sm:max-w-[420px] p-6" 
+          showOverlay={true}
+          overlayVariant="subtle"
+        >
           <SheetHeader className="mb-4">
             <SheetTitle className="text-lg font-semibold mb-3">Asset Details</SheetTitle>
             {/* Navigation controls - Simple, clean design */}

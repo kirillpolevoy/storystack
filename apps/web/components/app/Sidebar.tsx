@@ -121,7 +121,12 @@ export function Sidebar() {
 
       {/* Mobile Menu Sheet */}
       <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-        <SheetContent side="left" className="w-64 p-0 bg-[#f7f7f7] flex flex-col overflow-hidden">
+        <SheetContent 
+          side="left" 
+          className="w-64 p-0 bg-[#f7f7f7] flex flex-col overflow-hidden"
+          showOverlay={true}
+          overlayVariant="subtle"
+        >
           <div className="flex flex-col h-full overflow-y-auto pb-4">
             <SidebarContent isMobile={true} />
           </div>

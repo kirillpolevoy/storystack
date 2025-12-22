@@ -185,6 +185,37 @@
     border: 1px solid rgba(229, 231, 235, 0.8);
   }
   
+  /* Subtle overlay for side panels - Airbnb style */
+  /* Option 1: Subtle darkening with desaturation (most Airbnb-like) */
+  .subtle-overlay {
+    background-color: rgba(0, 0, 0, 0.12) !important; /* Very subtle dark overlay */
+    backdrop-filter: blur(2px) saturate(0.95) brightness(0.98) !important; /* Blur + slight desaturation + dimming */
+    -webkit-backdrop-filter: blur(2px) saturate(0.95) brightness(0.98) !important;
+    pointer-events: none !important;
+  }
+  
+  /* Option 2: Pure desaturation (cleaner, more modern) */
+  .subtle-overlay-desaturate {
+    background-color: transparent !important;
+    backdrop-filter: saturate(0.9) brightness(0.97) !important;
+    -webkit-backdrop-filter: saturate(0.9) brightness(0.97) !important;
+    pointer-events: none !important;
+  }
+  
+  /* Option 3: Scale-down effect (adds depth) */
+  .subtle-overlay-scale {
+    background-color: rgba(0, 0, 0, 0.08) !important;
+    backdrop-filter: saturate(0.95) !important;
+    -webkit-backdrop-filter: saturate(0.95) !important;
+    pointer-events: none !important;
+  }
+  
+  /* Apply scale-down to library content when panel is open */
+  .library-content-dimmed {
+    transform: scale(0.99);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  
   /* Gradient utilities - subtle professional */
   .gradient-accent {
     background: linear-gradient(135deg, rgb(59, 130, 246) 0%, rgb(37, 99, 235) 100%);

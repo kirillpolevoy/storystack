@@ -57,7 +57,8 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
   
   // Panel state - starts hidden, slides up when swiping down
   const [isPanelVisible, setIsPanelVisible] = useState(false);
-  const panelTranslateY = useRef(new Animated.Value(PANEL_HEIGHT)).current; // Start off-screen below
+  const panelInitialValue = PANEL_HEIGHT;
+  const panelTranslateY = useRef(new Animated.Value(panelInitialValue)).current;
   const panelOpacity = useRef(new Animated.Value(0)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
   
@@ -253,16 +254,15 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
       setShouldHideCurrentPhoto(false);
       Keyboard.dismiss(); // Dismiss keyboard when modal closes
       setIsPanelVisible(false);
-      panelTranslateY.setValue(PANEL_HEIGHT);
+      panelTranslateY.setValue(panelInitialValue);
       panelOpacity.setValue(0);
       backdropOpacity.setValue(0);
     } else if (visible && isMultiEdit) {
-      // In multi-edit mode, open panel automatically - full screen white UI
-      // No backdrop needed, panel is the main content
+      // In multi-edit mode, open panel automatically
       setIsPanelVisible(true);
       panelTranslateY.setValue(0);
       panelOpacity.setValue(1);
-      backdropOpacity.setValue(0); // No backdrop in multi-edit - clean white UI
+      backdropOpacity.setValue(0);
     }
   }, [visible, isMultiEdit]);
   
@@ -830,7 +830,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
             }
           }
           
-          // Handle vertical swipe end
+          // Handle vertical swipe end (only on mobile, not on large screens)
           console.log('[TagModal] Checking vertical swipe end - gestureDirection:', gestureDirectionRef.current, 'isMounted:', isMountedRef.current, 'translationY:', translationY);
           
           if (gestureDirectionRef.current === 'vertical' && isMountedRef.current) {
@@ -873,7 +873,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                   useNativeDriver: true,
                 }),
                 Animated.timing(backdropOpacity, {
-                  toValue: 1, // Fully opaque to completely cover image
+                  toValue: 1,
                   duration: 320,
                   easing: Easing.out(Easing.cubic),
                   useNativeDriver: true,
@@ -954,7 +954,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                 }),
               ]).start((finished) => {
                 if (finished && isMountedRef.current) {
-                  panelTranslateY.setValue(PANEL_HEIGHT);
+                  panelTranslateY.setValue(panelInitialValue);
                   backdropOpacity.setValue(0); // Ensure it's fully gone
                 }
               });
@@ -1437,7 +1437,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
       transparent={true}
     >
       <View style={{ flex: 1, backgroundColor: '#000000' }}>
-        {/* Full Screen Photo Viewer - COMPLETELY SEPARATE LAYERS */}
+        {/* Full Screen Photo Viewer */}
         {panGesture ? (
           <GestureDetector gesture={panGesture}>
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -1595,6 +1595,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
             </TouchableOpacity>
           ) : null}
         </View>
+        )}
         
         {/* Success Banner */}
         {showSuccessMessage && (
@@ -1833,7 +1834,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
               )}
             </View>
             
-            {/* Swipe Up Indicator - Refined Apple-style hint */}
+            {/* Swipe Up Indicator */}
             <TouchableOpacity
               onPress={() => {
                 // Open panel with smooth animation
@@ -1853,7 +1854,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                     useNativeDriver: true,
                   }),
                   Animated.timing(backdropOpacity, {
-                    toValue: 1, // Fully opaque to completely cover image
+                    toValue: 1,
                     duration: 320,
                     easing: Easing.out(Easing.cubic),
                     useNativeDriver: true,
@@ -1868,7 +1869,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                   // Ensure panel is fully open after animation completes
                   if (finished && isMountedRef.current) {
                     panelTranslateY.setValue(0);
-                    backdropOpacity.setValue(1); // Ensure backdrop is fully opaque
+                    backdropOpacity.setValue(1);
                   }
                 });
               }}
@@ -1876,6 +1877,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
               style={{
                 flexDirection: 'row',
                 alignItems: 'center',
+                marginBottom: 20,
                 backgroundColor: 'rgba(255, 255, 255, 0.12)',
                 borderRadius: 24,
                 paddingVertical: 10,
@@ -1906,6 +1908,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                 Swipe up for details
               </Text>
             </TouchableOpacity>
+            )}
             
             {/* Auto-tag Status Indicator - Show when actively tagging or pending */}
             {(autoTaggingAssets.has(asset.id) || asset.auto_tag_status === 'pending') && (
@@ -1971,17 +1974,54 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
             bottom: 0,
             left: 0,
             right: 0,
-            height: isMultiEdit ? SCREEN_HEIGHT : PANEL_HEIGHT, // Full screen in multi-edit
-            backgroundColor: '#ffffff', // Fully opaque white
-            borderTopLeftRadius: isMultiEdit ? 0 : 20, // No rounded corners in multi-edit (full screen)
+            height: isMultiEdit ? SCREEN_HEIGHT : PANEL_HEIGHT,
+            borderTopLeftRadius: isMultiEdit ? 0 : 20,
             borderTopRightRadius: isMultiEdit ? 0 : 20,
             transform: [{ translateY: panelTranslateY }],
+            backgroundColor: '#ffffff', // Fully opaque white
             opacity: panelOpacity, // Controlled by animation and useEffect
             zIndex: 20, // Above backdrop
             // Ensure no transparency - fully opaque
             overflow: 'hidden',
           }}
         >
+          {/* Panel content */}
+          <View
+            style={{
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              borderBottomWidth: 1,
+              borderBottomColor: '#e5e7eb',
+            }}
+          >
+              <TouchableOpacity
+                onPress={handleClose}
+                activeOpacity={0.6}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <MaterialCommunityIcons name="close" size={24} color="#111827" />
+              </TouchableOpacity>
+              
+              {isPanelVisible && (
+                <TouchableOpacity
+                  onPress={() => handleSave(false)}
+                  activeOpacity={0.6}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 17,
+                      fontWeight: '600',
+                      color: hasChanges ? '#b38f5b' : '#9ca3af',
+                    }}
+                  >
+                    Done
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          
           {/* Panel handle indicator - only show in single-edit mode */}
           {!isMultiEdit && (
             <View
