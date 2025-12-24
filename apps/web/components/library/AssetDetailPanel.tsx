@@ -8,6 +8,7 @@ import { useDeleteAsset } from '@/hooks/useDeleteAsset'
 import { useAvailableTags } from '@/hooks/useAvailableTags'
 import { useAvailableLocations } from '@/hooks/useAvailableLocations'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
+import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
 import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -82,6 +83,7 @@ export function AssetDetailPanel({
 
   const { data: availableTags } = useAvailableTags()
   const { data: availableLocations } = useAvailableLocations()
+  const activeWorkspaceId = useActiveWorkspace()
   
   // Fetch fresh asset data when panel is open - enables auto-refresh
   const { data: freshAssetData, refetch: refetchAsset } = useAssetDetail(asset.id)
@@ -91,10 +93,15 @@ export function AssetDetailPanel({
     return freshAssetData || asset
   }, [freshAssetData, asset])
   
+  // Get workspace_id from asset or fallback to active workspace
+  const workspaceId = useMemo(() => {
+    return (currentAsset as any).workspace_id || activeWorkspaceId || ''
+  }, [currentAsset, activeWorkspaceId])
+  
   // Fetch audit log entries for this asset
   const { data: auditLogEntries, isLoading: isLoadingAuditLog, refetch: refetchAuditLog } = useAssetAuditLog(
     currentAsset.id,
-    currentAsset.workspace_id
+    workspaceId
   )
   
   // Merge server tags with locally added tags
@@ -257,7 +264,7 @@ export function AssetDetailPanel({
           refetchAsset()
           // Refresh audit log to show new entry
           setTimeout(() => {
-            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, currentAsset.workspace_id] })
+            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
             refetchAuditLog()
           }, 500) // Small delay to ensure audit log entry is created
         }
@@ -323,7 +330,7 @@ export function AssetDetailPanel({
           queryClient.invalidateQueries({ queryKey: ['asset', currentAsset.id] })
           // Refresh audit log to show new entry
           setTimeout(() => {
-            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, currentAsset.workspace_id] })
+            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
             refetchAuditLog()
           }, 500) // Small delay to ensure audit log entry is created
         },
@@ -349,7 +356,7 @@ export function AssetDetailPanel({
           refetchAsset()
           // Refresh audit log to show new entry
           setTimeout(() => {
-            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, currentAsset.workspace_id] })
+            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
             refetchAuditLog()
           }, 500) // Small delay to ensure audit log entry is created
         },
@@ -790,7 +797,7 @@ export function AssetDetailPanel({
                                         refetchAsset()
                                         // Refresh audit log to show new entry
                                         setTimeout(() => {
-                                          queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, currentAsset.workspace_id] })
+                                          queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
                                           refetchAuditLog()
                                         }, 500) // Small delay to ensure audit log entry is created
                                       },
