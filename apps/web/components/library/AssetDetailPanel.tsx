@@ -388,10 +388,29 @@ export function AssetDetailPanel({
   }
 
   const handleDelete = () => {
+    if (!currentAsset?.id) {
+      console.error('[AssetDetailPanel] Cannot delete: no asset ID')
+      alert('Error: Cannot delete asset - missing asset ID')
+      return
+    }
+    
+    console.log('[AssetDetailPanel] Delete confirmed, deleting asset ID:', currentAsset.id)
     deleteAssetMutation.mutate(currentAsset.id, {
       onSuccess: () => {
+        console.log('[AssetDetailPanel] Asset deleted successfully')
         setShowDeleteConfirm(false)
         onClose()
+        // Invalidate queries to refresh the asset list
+        queryClient.invalidateQueries({ queryKey: ['assets'] })
+        queryClient.invalidateQueries({ queryKey: ['availableTags'] })
+        queryClient.invalidateQueries({ queryKey: ['availableLocations'] })
+        queryClient.invalidateQueries({ queryKey: ['asset', currentAsset.id] })
+      },
+      onError: (error) => {
+        console.error('[AssetDetailPanel] Failed to delete asset:', error)
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        alert(`Failed to delete asset: ${errorMessage}`)
+        // Keep dialog open on error so user can retry
       },
     })
   }
@@ -826,7 +845,10 @@ export function AssetDetailPanel({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setShowDeleteConfirm(true)}
+            onClick={() => {
+              console.log('[AssetDetailPanel] Delete button clicked')
+              setShowDeleteConfirm(true)
+            }}
             disabled={deleteAssetMutation.isPending}
             className="w-full h-9 text-xs font-medium text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-200 border-red-200/50 transition-all duration-150"
           >

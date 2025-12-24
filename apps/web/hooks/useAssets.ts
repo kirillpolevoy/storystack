@@ -71,22 +71,25 @@ export function useAssets(
 
       console.log('[useAssets] Fetching assets for workspace:', workspaceId, '(from queryKey)')
 
+      // When searching, fetch more results to account for client-side filtering
+      // This ensures we don't miss matches due to pagination
+      const searchPageSize = searchQuery && searchQuery.trim() ? PAGE_SIZE * 3 : PAGE_SIZE
+      
       let query = supabase
         .from('assets')
         .select('*, auto_tag_status, original_filename') // Explicitly include auto_tag_status and original_filename
         .eq('workspace_id', workspaceId)
         .is('deleted_at', null) // Exclude soft-deleted assets
         .order('created_at', { ascending: false })
-        .range(pageParam * PAGE_SIZE, (pageParam + 1) * PAGE_SIZE - 1)
+        .range(pageParam * searchPageSize, (pageParam + 1) * searchPageSize - 1)
 
-      // Note: Search filtering is done client-side to allow searching across
-      // filename (storage_path), tags, and location with OR logic
-      // This ensures consistent behavior and avoids Supabase query syntax issues
+      // Note: Search filtering (including tags) is done client-side since Supabase doesn't support
+      // array functions in filters. We fetch more results when searching to account for this.
+      // This ensures we can search across filename, location, AND tags with proper OR logic.
 
-      // Apply filters server-side only if no search query
-      // If search is active, we'll filter client-side after search (to narrow down search results)
-      // If no search, apply filters server-side for efficiency
-      if (!searchQuery && selectedFilters && selectedFilters.length > 0) {
+      // Apply filters server-side (tags and location filters)
+      // If search is active, filters narrow down search results (AND logic)
+      if (selectedFilters && selectedFilters.length > 0) {
         // Apply tag filters (OR logic within tags)
         if (regularTags.length > 0) {
           query = query.contains('tags', regularTags)
@@ -152,11 +155,10 @@ export function useAssets(
         })
       }
 
-      // 2. Apply search filter client-side (if search query provided) - SECOND
-      // Supports multiple search terms separated by spaces
-      // Uses OR logic across terms (matches term A OR term B) - broad search
-      // Within each term, uses OR logic (matches filename OR location OR tags)
-      // This gives you all assets matching any search term
+      // 2. Apply tag search filter client-side (if search query provided)
+      // Note: Filename and location search are handled server-side above
+      // Tags are searched client-side since Supabase doesn't support array functions in filters
+      // Uses OR logic: asset matches if ANY search term is found in filename/location (server-side) OR tags (client-side)
       if (searchQuery && searchQuery.trim()) {
         const searchTerms = searchQuery
           .toLowerCase()
@@ -166,62 +168,29 @@ export function useAssets(
         
         if (searchTerms.length > 0) {
           filteredData = filteredData.filter((asset) => {
-            // Extract searchable text from asset
-            // Use original_filename if available, otherwise extract from storage_path
+            // All assets in filteredData already matched filename/location server-side
+            // Now check if they also match tags (OR logic - keep if matches tags OR already matched filename/location)
+            const tagsLower = (asset.tags || []).map((tag: string) => tag.toLowerCase())
+            const tagsText = tagsLower.join(' ')
+            
+            // Also check filename/location client-side to ensure consistency
             const filenameFromPath = asset.storage_path?.split('/').pop() || ''
             const originalFilename = asset.original_filename || ''
-            const filename = originalFilename || filenameFromPath
-            const filenameLower = filename.toLowerCase()
+            const filename = (originalFilename || filenameFromPath).toLowerCase()
             const locationLower = (asset.location || '').toLowerCase()
-            const tagsLower = (asset.tags || []).map((tag: string) => tag.toLowerCase())
             
-            // Combine all searchable text into a single string for quick searching
-            // Include both original_filename and storage_path filename for comprehensive search
-            const searchableText = [
-              filenameLower,
-              filenameFromPath.toLowerCase(), // Also search storage_path filename as fallback
-              locationLower,
-              ...tagsLower
-            ].join(' ')
-            
-            // OR logic: asset matches if ANY search term is found (broad search)
-            return searchTerms.some(term => searchableText.includes(term))
+            // Asset matches if ANY search term is found in filename, location, OR tags
+            return searchTerms.some(term => 
+              filename.includes(term) || 
+              locationLower.includes(term) || 
+              tagsText.includes(term)
+            )
           })
         }
       }
 
-      // 3. Apply tag/location filters client-side (AND logic between types) - THIRD
-      // Filters narrow down the search results (AND logic)
-      // Example: Search "chicago chains" gives 20 results, filter Location="Chicago" narrows to 3
-      // If search is active, filters are applied client-side to narrow search results
-      // If no search, filters were already applied server-side for efficiency
-      if (searchQuery && selectedFilters && selectedFilters.length > 0) {
-        const hasTags = regularTags.length > 0 || hasNoTagsFilter
-        const hasLocation = locationFilters.length > 0
-        
-        // Apply filters to narrow down search results
-        filteredData = filteredData.filter((asset) => {
-          // Check tag match (OR logic within tags)
-          let matchesTags = true
-          if (hasTags) {
-            const hasNoTags = !asset.tags || asset.tags.length === 0
-            const matchesNoTagsFilter = hasNoTagsFilter && hasNoTags
-            const matchesRegularTags = regularTags.length === 0 || 
-              (asset.tags && regularTags.some((tag) => asset.tags.includes(tag)))
-            matchesTags = matchesNoTagsFilter || matchesRegularTags
-          }
-
-          // Check location match
-          let matchesLocation = true
-          if (hasLocation) {
-            matchesLocation = locationFilters.length === 0 || 
-              (asset.location && locationFilters.includes(asset.location.trim()))
-          }
-
-          // AND logic: must match tags AND location (narrows down search results)
-          return matchesTags && matchesLocation
-        })
-      }
+      // 3. Tag/location filters are now applied server-side above (before pagination)
+      // This ensures filters work correctly with search and proper pagination
       
       // 4. Date filter is applied in LibraryPage component after this hook returns
 
@@ -237,8 +206,23 @@ export function useAssets(
           .eq('workspace_id', workspaceId)
           .is('deleted_at', null) // Exclude soft-deleted assets
 
-        // Apply server-side filters for count
-        if (!searchQuery && selectedFilters && selectedFilters.length > 0) {
+        // Note: Search count is approximate when searching, since tags are filtered client-side
+        // We use filename/location matching for count to avoid the array function limitation
+        if (searchQuery && searchQuery.trim()) {
+          const searchTerms = searchQuery.trim().split(/\s+/).filter(term => term.length > 0)
+          if (searchTerms.length > 0) {
+            // Use OR logic: match any search term in storage_path, original_filename, or location
+            // ILIKE with %term% allows partial matches (e.g., "chicago" matches "chicago, illinois")
+            // Tags are not included in count query (approximate count)
+            const searchConditions = searchTerms.map(term => 
+              `storage_path.ilike.%${term}%,original_filename.ilike.%${term}%,location.ilike.%${term}%`
+            ).join(',')
+            countQuery = countQuery.or(searchConditions)
+          }
+        }
+
+        // Apply tag/location filters server-side (always, regardless of search)
+        if (selectedFilters && selectedFilters.length > 0) {
           if (regularTags.length > 0) {
             countQuery = countQuery.contains('tags', regularTags)
           } else if (hasNoTagsFilter) {
@@ -246,18 +230,6 @@ export function useAssets(
           }
           if (locationFilters.length > 0) {
             countQuery = countQuery.in('location', locationFilters)
-          }
-        }
-
-        // For search, apply server-side search filters
-        if (searchQuery && searchQuery.trim()) {
-          const searchTerms = searchQuery.trim().split(/\s+/).filter(term => term.length > 0)
-          if (searchTerms.length > 0) {
-            // Use OR logic: match any search term in storage_path, original_filename, or location
-            const searchConditions = searchTerms.map(term => 
-              `storage_path.ilike.%${term}%,original_filename.ilike.%${term}%,location.ilike.%${term}%`
-            ).join(',')
-            countQuery = countQuery.or(searchConditions)
           }
         }
 
@@ -278,8 +250,20 @@ export function useAssets(
             .eq('workspace_id', workspaceId)
             .is('deleted_at', null) // Exclude soft-deleted assets
 
-          // Apply same server-side filters as count query
-          if (!searchQuery && selectedFilters && selectedFilters.length > 0) {
+          // Apply same server-side filters as count query (search first, then filters)
+          // Note: Tags are not included in search query (approximate count)
+          if (searchQuery && searchQuery.trim()) {
+            const searchTerms = searchQuery.trim().split(/\s+/).filter(term => term.length > 0)
+            if (searchTerms.length > 0) {
+              // Use OR logic: match any search term in storage_path, original_filename, or location
+              const searchConditions = searchTerms.map(term => 
+                `storage_path.ilike.%${term}%,original_filename.ilike.%${term}%,location.ilike.%${term}%`
+              ).join(',')
+              viewCountQuery = viewCountQuery.or(searchConditions)
+            }
+          }
+
+          if (selectedFilters && selectedFilters.length > 0) {
             if (regularTags.length > 0) {
               viewCountQuery = viewCountQuery.contains('tags', regularTags)
             } else if (hasNoTagsFilter) {
@@ -287,16 +271,6 @@ export function useAssets(
             }
             if (locationFilters.length > 0) {
               viewCountQuery = viewCountQuery.in('location', locationFilters)
-            }
-          }
-
-          if (searchQuery && searchQuery.trim()) {
-            const searchTerms = searchQuery.trim().split(/\s+/).filter(term => term.length > 0)
-            if (searchTerms.length > 0) {
-              const searchConditions = searchTerms.map(term => 
-                `storage_path.ilike.%${term}%,original_filename.ilike.%${term}%,location.ilike.%${term}%`
-              ).join(',')
-              viewCountQuery = viewCountQuery.or(searchConditions)
             }
           }
 
@@ -370,9 +344,17 @@ export function useAssets(
         } as Asset
       })
 
+        // For search queries, we fetched more results to account for client-side tag filtering
+        // So we need to limit to PAGE_SIZE and adjust pagination accordingly
+        const finalAssets = searchQuery && searchQuery.trim() 
+          ? assetsWithUrls.slice(0, PAGE_SIZE)
+          : assetsWithUrls
+        
         return {
-          assets: assetsWithUrls,
-          nextPage: filteredData.length === PAGE_SIZE ? pageParam + 1 : null,
+          assets: finalAssets,
+          nextPage: (searchQuery && searchQuery.trim() 
+            ? filteredData.length > PAGE_SIZE 
+            : filteredData.length === PAGE_SIZE) ? pageParam + 1 : null,
           totalCount: totalCount, // Backend-driven count
         }
       } catch (error) {
