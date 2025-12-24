@@ -162,7 +162,7 @@ export function AssetDetailPanel({
         if (tagsChanged && !updateTagsMutation.isPending) {
           setTags(currentTags)
         }
-        if (locationChanged && !updateLocationMutation.isPending) {
+        if (locationChanged && !updateLocationMutation.isPending && !isEditingLocation) {
           setLocation(assetToUse.location || '')
         }
       }
@@ -193,7 +193,7 @@ export function AssetDetailPanel({
       // Reset ref when panel closes
       lastAssetIdRef.current = null
     }
-  }, [currentAsset.id, currentAsset.tags, currentAsset.location, open, availableTags, queryClient, updateTagsMutation.isPending, updateLocationMutation.isPending, tags, location])
+  }, [currentAsset.id, currentAsset.tags, currentAsset.location, open, availableTags, queryClient, updateTagsMutation.isPending, updateLocationMutation.isPending, tags, location, isEditingLocation])
 
   // Update tags when asset completes retagging (parent polling handles status updates)
   useEffect(() => {
