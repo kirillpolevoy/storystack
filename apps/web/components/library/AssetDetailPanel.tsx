@@ -15,8 +15,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { X, Trash2, Plus, MapPin, Sparkles, Edit2, Calendar, FileText, Loader2, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react'
+import { X, Trash2, Plus, MapPin, Sparkles, Edit2, Calendar, FileText, Loader2, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ChevronDown, History, User, ChevronUp } from 'lucide-react'
 import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
+import timezone from 'dayjs/plugin/timezone'
+import { useAssetAuditLog } from '@/hooks/useAssetAuditLog'
+
+// Configure dayjs plugins
+dayjs.extend(utc)
+dayjs.extend(timezone)
 import {
   AlertDialog,
   AlertDialogAction,
@@ -70,6 +77,7 @@ export function AssetDetailPanel({
   const [localAvailableTags, setLocalAvailableTags] = useState<string[]>([])
   const [imageError, setImageError] = useState(false)
   const [imageSrc, setImageSrc] = useState<string>('')
+  const [isAuditTrailExpanded, setIsAuditTrailExpanded] = useState(false)
   const lastAssetIdRef = useRef<string | null>(null)
 
   const { data: availableTags } = useAvailableTags()
@@ -82,6 +90,12 @@ export function AssetDetailPanel({
   const currentAsset = useMemo(() => {
     return freshAssetData || asset
   }, [freshAssetData, asset])
+  
+  // Fetch audit log entries for this asset
+  const { data: auditLogEntries, isLoading: isLoadingAuditLog, refetch: refetchAuditLog } = useAssetAuditLog(
+    currentAsset.id,
+    currentAsset.workspace_id
+  )
   
   // Merge server tags with locally added tags
   const allAvailableTags = useMemo(() => {
@@ -101,14 +115,18 @@ export function AssetDetailPanel({
 
     // Initial fetch
     refetchAsset()
+    refetchAuditLog()
 
-    // Poll every 2 seconds for updates (tags, location, auto_tag_status, etc.)
+    // Poll every 3 seconds for updates (tags, location, auto_tag_status, etc.)
+    // Increased interval to reduce re-renders and flashing
     const pollInterval = setInterval(() => {
-      refetchAsset()
-    }, 2000)
+      // Use silent refetch to avoid unnecessary re-renders if data hasn't changed
+      refetchAsset({ cancelRefetch: false })
+      refetchAuditLog({ cancelRefetch: false })
+    }, 3000)
 
     return () => clearInterval(pollInterval)
-  }, [open, asset.id, refetchAsset])
+  }, [open, asset.id, refetchAsset, refetchAuditLog])
 
   useEffect(() => {
     if (open) {
@@ -118,16 +136,29 @@ export function AssetDetailPanel({
       // Only reset tags if this is a different asset OR if mutation is not in progress
       // This prevents race conditions where useEffect resets tags after a successful mutation
       const isDifferentAsset = lastAssetIdRef.current !== assetToUse.id
-      if (isDifferentAsset || (!updateTagsMutation.isPending && isDifferentAsset)) {
+      if (isDifferentAsset) {
+        // Only update state when asset actually changes
         setTags(assetToUse.tags || [])
+        setLocation(assetToUse.location || '')
+        setIsEditingLocation(false)
+        setRetagStatus('idle')
+        setNewTag('')
+        setShowTagSuggestions(false)
+        setShowLocationSuggestions(false)
         lastAssetIdRef.current = assetToUse.id
+      } else {
+        // For same asset, only update if values actually changed (to prevent unnecessary re-renders)
+        const currentTags = assetToUse.tags || []
+        const tagsChanged = JSON.stringify(currentTags) !== JSON.stringify(tags)
+        const locationChanged = assetToUse.location !== location
+        
+        if (tagsChanged && !updateTagsMutation.isPending) {
+          setTags(currentTags)
+        }
+        if (locationChanged && !updateLocationMutation.isPending) {
+          setLocation(assetToUse.location || '')
+        }
       }
-      setLocation(assetToUse.location || '')
-      setIsEditingLocation(false)
-      setRetagStatus('idle')
-      setNewTag('')
-      setShowTagSuggestions(false)
-      setShowLocationSuggestions(false)
       
       // Add any tags from this asset that aren't in available tags to both local list and query cache
       if (assetToUse.tags && availableTags) {
@@ -135,7 +166,12 @@ export function AssetDetailPanel({
         if (newTags.length > 0) {
           setLocalAvailableTags((prev) => {
             const updated = [...prev, ...newTags]
-            return [...new Set(updated)].sort()
+            const uniqueUpdated = [...new Set(updated)].sort()
+            // Only update if actually changed
+            if (JSON.stringify(uniqueUpdated) === JSON.stringify(prev)) {
+              return prev
+            }
+            return uniqueUpdated
           })
           
           // Update query cache to persist these tags
@@ -150,7 +186,7 @@ export function AssetDetailPanel({
       // Reset ref when panel closes
       lastAssetIdRef.current = null
     }
-  }, [currentAsset.id, currentAsset.tags, currentAsset.location, open, availableTags, queryClient, updateTagsMutation.isPending])
+  }, [currentAsset.id, currentAsset.tags, currentAsset.location, open, availableTags, queryClient, updateTagsMutation.isPending, updateLocationMutation.isPending, tags, location])
 
   // Update tags when asset completes retagging (parent polling handles status updates)
   useEffect(() => {
@@ -219,6 +255,11 @@ export function AssetDetailPanel({
         onSuccess: () => {
           // Refresh asset data after successful tag update
           refetchAsset()
+          // Refresh audit log to show new entry
+          setTimeout(() => {
+            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, currentAsset.workspace_id] })
+            refetchAuditLog()
+          }, 500) // Small delay to ensure audit log entry is created
         }
       })
       
@@ -280,6 +321,11 @@ export function AssetDetailPanel({
           queryClient.invalidateQueries({ queryKey: ['availableTags'] })
           queryClient.invalidateQueries({ queryKey: ['assets'] })
           queryClient.invalidateQueries({ queryKey: ['asset', currentAsset.id] })
+          // Refresh audit log to show new entry
+          setTimeout(() => {
+            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, currentAsset.workspace_id] })
+            refetchAuditLog()
+          }, 500) // Small delay to ensure audit log entry is created
         },
         onError: (error) => {
           console.error('[AssetDetailPanel] Tag removal failed:', error)
@@ -301,6 +347,11 @@ export function AssetDetailPanel({
           setIsEditingLocation(false)
           // Refresh asset data after successful location update
           refetchAsset()
+          // Refresh audit log to show new entry
+          setTimeout(() => {
+            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, currentAsset.workspace_id] })
+            refetchAuditLog()
+          }, 500) // Small delay to ensure audit log entry is created
         },
       }
     )
@@ -417,13 +468,13 @@ export function AssetDetailPanel({
 
   const imageUrl = currentAsset.previewUrl || currentAsset.publicUrl || ''
   
-  // Initialize image source with error handling
+  // Initialize image source with error handling - only update if URL actually changed
   useEffect(() => {
-    if (imageUrl) {
+    if (imageUrl && imageUrl !== imageSrc) {
       setImageSrc(imageUrl)
       setImageError(false)
     }
-  }, [imageUrl])
+  }, [imageUrl, imageSrc])
   // Use original_filename if available, otherwise fall back to storage_path filename
   const filename = currentAsset.original_filename || currentAsset.storage_path?.split('/').pop() || 'Unknown'
   const dateToDisplay = currentAsset.date_taken || currentAsset.created_at
@@ -737,6 +788,11 @@ export function AssetDetailPanel({
                                         setIsEditingLocation(false)
                                         // Refresh asset data after successful location update
                                         refetchAsset()
+                                        // Refresh audit log to show new entry
+                                        setTimeout(() => {
+                                          queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, currentAsset.workspace_id] })
+                                          refetchAuditLog()
+                                        }, 500) // Small delay to ensure audit log entry is created
                                       },
                                     }
                                   )
@@ -838,6 +894,241 @@ export function AssetDetailPanel({
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Audit Trail Section - Airbnb Style */}
+        <div className="pt-2">
+          <button
+            onClick={() => setIsAuditTrailExpanded(!isAuditTrailExpanded)}
+            className="w-full flex items-center justify-between py-3 px-0 hover:bg-gray-50/50 rounded-lg transition-colors duration-200 group"
+          >
+            <div className="flex items-center gap-2">
+              <History className="h-4 w-4 text-gray-500 group-hover:text-gray-700 transition-colors" />
+              <h3 className="text-sm font-semibold text-gray-900">Change History</h3>
+              {auditLogEntries && auditLogEntries.length > 0 && (
+                <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+                  {auditLogEntries.length}
+                </span>
+              )}
+            </div>
+            {isAuditTrailExpanded ? (
+              <ChevronUp className="h-4 w-4 text-gray-400 group-hover:text-gray-600 transition-colors" />
+            ) : (
+              <ChevronDown className="h-4 w-4 text-gray-400 group-hover:text-gray-600 transition-colors" />
+            )}
+          </button>
+
+          {isAuditTrailExpanded && (
+            <div className="mt-2 space-y-2 animate-in fade-in slide-in-from-top-2 duration-200">
+              {isLoadingAuditLog ? (
+                <div className="py-8 text-center rounded-xl bg-gray-50/50 border border-gray-100">
+                  <Loader2 className="h-5 w-5 animate-spin mx-auto text-gray-400" />
+                  <p className="text-sm text-gray-500 mt-3">Loading history...</p>
+                </div>
+              ) : auditLogEntries && auditLogEntries.length > 0 ? (
+                <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                  {auditLogEntries.map((entry) => {
+                const formatAction = (action: string, entityType: string, diff: any) => {
+                  if (entityType === 'asset_tags') {
+                    // For asset_tags, INSERT = 'create' action means tag was added
+                    // DELETE = 'delete' action means tag was removed
+                    // The diff contains the full asset_tags record with tag_id and tag_name (if enriched)
+                    const tagName = diff?.tag_name
+                    const tagId = diff?.tag_id || diff?.tagId
+                    if (action === 'create' || action === 'add') {
+                      if (tagName) {
+                        return `Added tag "${tagName}"`
+                      } else if (tagId) {
+                        return `Added tag (ID: ${tagId.substring(0, 8)}...)`
+                      }
+                      return 'Added tag'
+                    } else if (action === 'delete' || action === 'remove') {
+                      if (tagName) {
+                        return `Removed tag "${tagName}"`
+                      } else if (tagId) {
+                        return `Removed tag (ID: ${tagId.substring(0, 8)}...)`
+                      }
+                      return 'Removed tag'
+                    }
+                  } else if (entityType === 'assets') {
+                    if (action === 'create') {
+                      return 'Asset created'
+                    } else if (action === 'update') {
+                      // Check what was updated and show details
+                      if (diff?.old && diff?.new) {
+                        const details: string[] = []
+                        
+                        // Location change details
+                        if (diff.old.location !== diff.new.location) {
+                          const oldLoc = diff.old.location || '(none)'
+                          const newLoc = diff.new.location || '(none)'
+                          details.push(`location: "${oldLoc}" → "${newLoc}"`)
+                        }
+                        
+                        // Tags change details (if tags array exists in diff)
+                        if (diff.old.tags || diff.new.tags) {
+                          const oldTags = diff.old.tags || []
+                          const newTags = diff.new.tags || []
+                          if (JSON.stringify(oldTags) !== JSON.stringify(newTags)) {
+                            const added = newTags.filter((t: string) => !oldTags.includes(t))
+                            const removed = oldTags.filter((t: string) => !newTags.includes(t))
+                            
+                            if (added.length > 0 && removed.length > 0) {
+                              details.push(`tags: added [${added.join(', ')}], removed [${removed.join(', ')}]`)
+                            } else if (added.length > 0) {
+                              details.push(`tags: added [${added.join(', ')}]`)
+                            } else if (removed.length > 0) {
+                              details.push(`tags: removed [${removed.join(', ')}]`)
+                            } else {
+                              details.push('tags: modified')
+                            }
+                          }
+                        }
+                        
+                        if (details.length > 0) {
+                          return `Updated ${details.join('; ')}`
+                        }
+                      }
+                      return 'Asset updated'
+                    } else if (action === 'soft_delete') {
+                      return 'Asset deleted'
+                    } else if (action === 'restore') {
+                      return 'Asset restored'
+                    }
+                  }
+                  return action.charAt(0).toUpperCase() + action.slice(1).replace(/_/g, ' ')
+                }
+
+                const formatActionWithDetails = (action: string, entityType: string, diff: any) => {
+                  const baseAction = formatAction(action, entityType, diff)
+                  
+                  // Extract detailed change information for display
+                  if (entityType === 'assets' && action === 'update' && diff?.old && diff?.new) {
+                    const details: string[] = []
+                    
+                    // Location change
+                    if (diff.old.location !== diff.new.location) {
+                      const oldLoc = diff.old.location || '(none)'
+                      const newLoc = diff.new.location || '(none)'
+                      details.push(`Location: "${oldLoc}" → "${newLoc}"`)
+                    }
+                    
+                    // Tags change
+                    if (diff.old.tags || diff.new.tags) {
+                      const oldTags = diff.old.tags || []
+                      const newTags = diff.new.tags || []
+                      if (JSON.stringify(oldTags) !== JSON.stringify(newTags)) {
+                        const added = newTags.filter((t: string) => !oldTags.includes(t))
+                        const removed = oldTags.filter((t: string) => !newTags.includes(t))
+                        
+                        if (added.length > 0 && removed.length > 0) {
+                          details.push(`Tags: Added [${added.join(', ')}], Removed [${removed.join(', ')}]`)
+                        } else if (added.length > 0) {
+                          details.push(`Tags: Added [${added.join(', ')}]`)
+                        } else if (removed.length > 0) {
+                          details.push(`Tags: Removed [${removed.join(', ')}]`)
+                        }
+                      }
+                    }
+                    
+                    return { action: baseAction, details }
+                  }
+                  
+                  return { action: baseAction, details: null }
+                }
+
+                    const { action: actionText, details: actionDetails } = formatActionWithDetails(entry.action, entry.entity_type, entry.diff)
+                    const timestampCST = dayjs(entry.created_at).tz('America/Chicago')
+                    const formattedDate = timestampCST.format('MMM D, YYYY')
+                    const formattedTime = timestampCST.format('h:mm A')
+                    const isToday = timestampCST.isSame(dayjs().tz('America/Chicago'), 'day')
+                    const isYesterday = timestampCST.isSame(dayjs().tz('America/Chicago').subtract(1, 'day'), 'day')
+
+                    return (
+                      <div
+                        key={entry.id}
+                        className="group relative bg-white rounded-xl border border-gray-200 p-4 hover:border-gray-300 hover:shadow-sm transition-all duration-200"
+                      >
+                        {/* Timeline indicator */}
+                        <div className="absolute left-4 top-6 bottom-4 w-0.5 bg-gradient-to-b from-accent/20 via-gray-200 to-transparent" />
+                        
+                        <div className="relative flex items-start gap-4">
+                          {/* Icon circle */}
+                          <div className="relative z-10 flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-accent/10 to-accent/5 border-2 border-white shadow-sm flex items-center justify-center">
+                            <History className="h-3.5 w-3.5 text-accent" />
+                          </div>
+                          
+                          <div className="flex-1 min-w-0 pt-0.5">
+                            {/* Action text */}
+                            <p className="text-sm font-semibold text-gray-900 mb-2 leading-snug">
+                              {actionText}
+                            </p>
+                            
+                            {/* Change details */}
+                            {actionDetails && actionDetails.length > 0 && (
+                              <div className="mb-3 space-y-1.5">
+                                {actionDetails.map((detail: string, idx: number) => {
+                                  // Parse detail to extract change type and values
+                                  const isLocationChange = detail.startsWith('Location:')
+                                  const isTagChange = detail.startsWith('Tags:')
+                                  
+                                  return (
+                                    <div
+                                      key={idx}
+                                      className="inline-flex items-start gap-2 px-3 py-2 bg-gray-50 rounded-lg border border-gray-100 text-xs"
+                                    >
+                                      {isLocationChange && (
+                                        <MapPin className="h-3 w-3 text-gray-400 mt-0.5 shrink-0" />
+                                      )}
+                                      {isTagChange && (
+                                        <Sparkles className="h-3 w-3 text-gray-400 mt-0.5 shrink-0" />
+                                      )}
+                                      <span className="text-gray-700 leading-relaxed font-medium">
+                                        {detail}
+                                      </span>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                            
+                            {/* Metadata row */}
+                            <div className="flex items-center gap-3 flex-wrap">
+                              {/* User */}
+                              <div className="flex items-center gap-1.5">
+                                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-gray-100 to-gray-200 border border-gray-200 flex items-center justify-center">
+                                  <User className="h-2.5 w-2.5 text-gray-500" />
+                                </div>
+                                <span className="text-xs font-medium text-gray-600">
+                                  {entry.actor_email || (entry.actor_user_id ? `${entry.actor_user_id.substring(0, 8)}...` : 'System')}
+                                </span>
+                              </div>
+                              
+                              {/* Separator */}
+                              <span className="text-gray-300">•</span>
+                              
+                              {/* Timestamp */}
+                              <span className="text-xs text-gray-500">
+                                {isToday ? 'Today' : isYesterday ? 'Yesterday' : formattedDate} at {formattedTime} CST
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="py-10 text-center rounded-xl bg-gray-50/50 border border-gray-100">
+                  <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-gray-100 flex items-center justify-center">
+                    <History className="h-6 w-6 text-gray-400" />
+                  </div>
+                  <p className="text-sm font-medium text-gray-600 mb-1">No change history</p>
+                  <p className="text-xs text-gray-500">Changes to this asset will appear here</p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Destructive Action - Compact, separated */}
