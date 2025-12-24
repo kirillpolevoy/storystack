@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,7 +14,7 @@ interface AddToStoryModalProps {
   open: boolean
   onClose: () => void
   selectedAssetIds: string[]
-  onSuccess?: () => void
+  onSuccess?: (storyId: string, assetCount: number) => void
 }
 
 export function AddToStoryModal({
@@ -22,6 +23,7 @@ export function AddToStoryModal({
   selectedAssetIds,
   onSuccess,
 }: AddToStoryModalProps) {
+  const router = useRouter()
   const [selectedStoryId, setSelectedStoryId] = useState<string | null>(null)
   const [newStoryName, setNewStoryName] = useState('')
   const [showCreateStory, setShowCreateStory] = useState(false)
@@ -38,9 +40,14 @@ export function AddToStoryModal({
       assetIds: selectedAssetIds,
     })
 
-    onSuccess?.()
+    onSuccess?.(selectedStoryId, selectedAssetIds.length)
     onClose()
     setSelectedStoryId(null)
+    
+    // Redirect to story page after a brief delay to show toast
+    setTimeout(() => {
+      router.push(`/app/stories/${selectedStoryId}`)
+    }, 500)
   }
 
   const handleCreateAndAdd = async () => {
@@ -53,11 +60,16 @@ export function AddToStoryModal({
       assetIds: selectedAssetIds,
     })
 
-    onSuccess?.()
+    onSuccess?.(newStory.id, selectedAssetIds.length)
     onClose()
     setNewStoryName('')
     setShowCreateStory(false)
     setSelectedStoryId(null)
+    
+    // Redirect to story page after a brief delay to show toast
+    setTimeout(() => {
+      router.push(`/app/stories/${newStory.id}`)
+    }, 500)
   }
 
   const canSubmit = selectedStoryId || (showCreateStory && newStoryName.trim())

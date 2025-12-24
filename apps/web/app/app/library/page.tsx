@@ -54,6 +54,10 @@ export default function LibraryPage() {
   const [showDeleteSuccess, setShowDeleteSuccess] = useState(false)
   const [deletedAssetsCount, setDeletedAssetsCount] = useState(0)
   
+  // Story success toast state
+  const [showStorySuccessToast, setShowStorySuccessToast] = useState(false)
+  const [storySuccessAssetCount, setStorySuccessAssetCount] = useState(0)
+  
   // Bulk delete last X photos state
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false)
   const [bulkDeleteCount, setBulkDeleteCount] = useState<string>('10')
@@ -722,7 +726,16 @@ export default function LibraryPage() {
     return assets.findIndex((a: Asset) => a.id === selectedAsset.id)
   }, [selectedAsset, assets])
 
-  const handleAddToStorySuccess = useCallback(() => {
+  const handleAddToStorySuccess = useCallback((storyId: string, assetCount: number) => {
+    // Show toast notification
+    setStorySuccessAssetCount(assetCount)
+    setShowStorySuccessToast(true)
+    
+    // Auto-dismiss toast after 3 seconds
+    setTimeout(() => {
+      setShowStorySuccessToast(false)
+    }, 3000)
+    
     handleClearSelection()
   }, [handleClearSelection])
 
@@ -1148,6 +1161,27 @@ export default function LibraryPage() {
               <p className="text-sm font-semibold text-gray-900">
                 {deletedAssetsCount} {deletedAssetsCount === 1 ? 'asset' : 'assets'} deleted
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Story Success Toast Notification */}
+      {showStorySuccessToast && (
+        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-2 fade-in-0 duration-300">
+          <div className="rounded-lg border border-gray-200 bg-white shadow-lg p-4 min-w-[320px]">
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 rounded-full bg-blue-50 flex items-center justify-center flex-shrink-0">
+                <CheckCircle2 className="h-5 w-5 text-blue-600" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-gray-900">
+                  Assets added to story
+                </p>
+                <p className="text-xs text-gray-600 mt-0.5">
+                  Successfully added {storySuccessAssetCount} {storySuccessAssetCount === 1 ? 'photo' : 'photos'}
+                </p>
+              </div>
             </div>
           </div>
         </div>
