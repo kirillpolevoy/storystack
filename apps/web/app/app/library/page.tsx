@@ -938,15 +938,17 @@ export default function LibraryPage() {
         )}
       </div>
 
-      {/* Bulk Action Bar */}
-      <BulkActionBar
-        selectedCount={selectedAssetIds.size}
-        onAddToStory={handleBulkAddToStory}
-        onAddTags={handleBulkAddTags}
-        onRetagWithAI={handleBulkRetagWithAI}
-        onDelete={handleBulkDelete}
-        onClearSelection={handleClearSelection}
-      />
+      {/* Bulk Action Bar - Hide when modals are open */}
+      {!showAddToStoryModal && !showAddTagsModal && !showDeleteConfirmation && !showBulkDeleteModal && !showBulkRetagConfirm && (
+        <BulkActionBar
+          selectedCount={selectedAssetIds.size}
+          onAddToStory={handleBulkAddToStory}
+          onAddTags={handleBulkAddTags}
+          onRetagWithAI={handleBulkRetagWithAI}
+          onDelete={handleBulkDelete}
+          onClearSelection={handleClearSelection}
+        />
+      )}
 
       {/* Modals */}
       {showAddToStoryModal && (
@@ -954,7 +956,7 @@ export default function LibraryPage() {
           open={showAddToStoryModal}
           onClose={() => {
             setShowAddToStoryModal(false)
-            handleClearSelection()
+            // Don't clear selection when modal is dismissed - keep photos selected
           }}
           selectedAssetIds={Array.from(selectedAssetIds)}
           onSuccess={handleAddToStorySuccess}
