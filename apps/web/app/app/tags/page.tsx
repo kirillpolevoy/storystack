@@ -836,14 +836,14 @@ export default function TagsPage() {
       {/* Header */}
       <div className="border-b border-gray-200 bg-white">
         <div className="px-4 sm:px-6 lg:px-8 pt-4 pb-4">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+            <div className="flex items-center gap-3 flex-1 min-w-0">
               <MobileMenuButton />
-              <div>
+              <div className="min-w-0 flex-1">
                 <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 tracking-tight">
                   Tag Management
                 </h1>
-                <p className="text-xs sm:text-sm text-gray-500 mt-1">
+                <p className="text-xs sm:text-sm text-gray-500 mt-1 break-words">
                   {summaryStats.total > 0 ? (
                     <>
                       {summaryStats.total} {summaryStats.total === 1 ? 'tag' : 'tags'}
@@ -862,7 +862,7 @@ export default function TagsPage() {
             </div>
             <Button
               onClick={() => setShowNewTagDialog(true)}
-              className="h-9 px-4 text-sm font-semibold bg-accent hover:bg-accent/90 shadow-sm rounded-lg"
+              className="h-9 px-4 text-sm font-semibold bg-accent hover:bg-accent/90 shadow-sm rounded-lg w-full sm:w-auto shrink-0"
             >
               <Plus className="mr-2 h-4 w-4" />
               New Tag
@@ -870,78 +870,87 @@ export default function TagsPage() {
           </div>
           
           {/* Search and Filters Row */}
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
             {/* Search Bar */}
-            <div className="relative flex-1 min-w-[200px]">
+            <div className="relative flex-1 w-full sm:min-w-[200px]">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 pointer-events-none" />
               <Input
                 type="text"
                 placeholder="Search tags..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9 h-9 text-sm border-gray-300 focus:border-accent focus:ring-accent rounded-lg"
+                className="pl-9 h-9 sm:h-9 text-sm border-gray-300 focus:border-accent focus:ring-accent rounded-lg"
               />
               {searchQuery && (
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500">
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500 hidden sm:inline">
                   {filteredTags.length} {filteredTags.length === 1 ? 'result' : 'results'}
                 </span>
               )}
             </div>
             
-            {/* Sort Dropdown */}
-            <Select value={sortBy} onValueChange={(value) => setSortBy(value as SortOption)}>
-              <SelectTrigger className="w-[140px] h-9 text-sm border-gray-300 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <ArrowUpDown className="h-3.5 w-3.5 text-gray-400" />
-                  <SelectValue />
-                </div>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="alphabetical">Alphabetical</SelectItem>
-                <SelectItem value="most-used">Most Used</SelectItem>
-                <SelectItem value="least-used">Least Used</SelectItem>
-                <SelectItem value="ai-enabled">AI Enabled</SelectItem>
-              </SelectContent>
-            </Select>
-            
-            {/* Filter Dropdown */}
-            <Select value={filterBy} onValueChange={(value) => setFilterBy(value as FilterOption)}>
-              <SelectTrigger className="w-[130px] h-9 text-sm border-gray-300 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Filter className="h-3.5 w-3.5 text-gray-400" />
-                  <SelectValue />
-                </div>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Tags</SelectItem>
-                <SelectItem value="ai-enabled">AI Enabled</SelectItem>
-                <SelectItem value="unused">Unused</SelectItem>
-              </SelectContent>
-            </Select>
+            {/* Sort and Filter Dropdowns */}
+            <div className="flex gap-3 sm:flex-shrink-0">
+              {/* Sort Dropdown */}
+              <Select value={sortBy} onValueChange={(value) => setSortBy(value as SortOption)}>
+                <SelectTrigger className="w-full sm:w-[140px] h-9 text-sm border-gray-300 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <ArrowUpDown className="h-3.5 w-3.5 text-gray-400" />
+                    <SelectValue />
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="alphabetical">Alphabetical</SelectItem>
+                  <SelectItem value="most-used">Most Used</SelectItem>
+                  <SelectItem value="least-used">Least Used</SelectItem>
+                  <SelectItem value="ai-enabled">AI Enabled</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              {/* Filter Dropdown */}
+              <Select value={filterBy} onValueChange={(value) => setFilterBy(value as FilterOption)}>
+                <SelectTrigger className="w-full sm:w-[130px] h-9 text-sm border-gray-300 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <Filter className="h-3.5 w-3.5 text-gray-400" />
+                    <SelectValue />
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Tags</SelectItem>
+                  <SelectItem value="ai-enabled">AI Enabled</SelectItem>
+                  <SelectItem value="unused">Unused</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
+          {/* Mobile search results count */}
+          {searchQuery && (
+            <div className="mt-2 sm:hidden text-xs text-gray-500">
+              {filteredTags.length} {filteredTags.length === 1 ? 'result' : 'results'}
+            </div>
+          )}
         </div>
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">
           {isLoading ? (
-            <div className="flex h-64 items-center justify-center">
+            <div className="flex h-48 sm:h-64 items-center justify-center py-8">
               <div className="text-center">
                 <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-accent border-r-transparent"></div>
                 <p className="text-sm text-gray-500 mt-4">Loading tags...</p>
               </div>
             </div>
           ) : filteredTags.length === 0 ? (
-            <div className="flex flex-1 items-center justify-center min-h-[500px]">
+            <div className="flex flex-1 items-center justify-center min-h-[400px] sm:min-h-[500px] py-8">
               <div className="text-center max-w-lg px-4 animate-in fade-in zoom-in-95 duration-300">
-                <div className="inline-flex h-24 w-24 items-center justify-center rounded-2xl bg-gradient-to-br from-accent/10 to-accent/5 mb-8 animate-in zoom-in-95 duration-500">
-                  <Tag className="h-12 w-12 text-accent" />
+                <div className="inline-flex h-20 w-20 sm:h-24 sm:w-24 items-center justify-center rounded-2xl bg-gradient-to-br from-accent/10 to-accent/5 mb-6 sm:mb-8 animate-in zoom-in-95 duration-500">
+                  <Tag className="h-10 w-10 sm:h-12 sm:w-12 text-accent" />
                 </div>
-                <h3 className="text-2xl font-semibold text-gray-900 mb-3">
+                <h3 className="text-xl sm:text-2xl font-semibold text-gray-900 mb-2 sm:mb-3">
                   {searchQuery || filterBy !== 'all' ? 'No tags found' : 'Start organizing with tags'}
                 </h3>
-                <p className="text-base text-gray-600 mb-8 leading-relaxed">
+                <p className="text-sm sm:text-base text-gray-600 mb-6 sm:mb-8 leading-relaxed px-2">
                   {searchQuery 
                     ? `No tags match "${searchQuery}". Try a different search term or clear your filters.`
                     : filterBy === 'ai-enabled'
@@ -951,10 +960,10 @@ export default function TagsPage() {
                     : 'Tags are the foundation of StoryStack. Create tags to organize your photos, enable AI-powered auto-tagging, and find content instantly.'}
                 </p>
                 {!searchQuery && filterBy === 'all' && (
-                  <div className="flex flex-col sm:flex-row gap-3 justify-center items-center">
+                  <div className="flex flex-col sm:flex-row gap-3 justify-center items-stretch sm:items-center px-2">
                     <Button
                       onClick={() => setShowNewTagDialog(true)}
-                      className="h-11 px-6 text-sm font-semibold bg-accent hover:bg-accent/90 shadow-sm hover:shadow-md transition-all duration-200 rounded-lg"
+                      className="h-11 px-6 text-sm font-semibold bg-accent hover:bg-accent/90 shadow-sm hover:shadow-md transition-all duration-200 rounded-lg w-full sm:w-auto"
                     >
                       <Plus className="mr-2 h-4 w-4" />
                       Create your first tag
@@ -965,10 +974,11 @@ export default function TagsPage() {
                         const searchInput = document.querySelector('input[placeholder="Search tags..."]') as HTMLInputElement
                         searchInput?.focus()
                       }}
-                      className="h-11 px-6 text-sm font-medium rounded-lg"
+                      className="h-11 px-6 text-sm font-medium rounded-lg w-full sm:w-auto"
                     >
                       <Search className="mr-2 h-4 w-4" />
-                      Press / to search
+                      <span className="hidden sm:inline">Press / to search</span>
+                      <span className="sm:hidden">Search tags</span>
                     </Button>
                   </div>
                 )}
@@ -990,48 +1000,50 @@ export default function TagsPage() {
             <>
               {/* Bulk Action Bar */}
               {selectedTags.size > 0 && (
-                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200">
-                  <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg shadow-lg px-4 py-3">
-                    <span className="text-sm font-semibold text-gray-900 mr-2">
+                <div className="fixed bottom-4 sm:bottom-6 left-4 right-4 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200 max-w-md sm:max-w-none sm:w-auto mx-auto">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-2 bg-white border border-gray-200 rounded-lg shadow-lg px-4 py-3">
+                    <span className="text-sm font-semibold text-gray-900 text-center sm:text-left sm:mr-2">
                       {selectedTags.size} {selectedTags.size === 1 ? 'tag' : 'tags'} selected
                     </span>
-                    <div className="h-4 w-px bg-gray-200" />
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleBulkToggleAI(true)}
-                      disabled={toggleAIMutation.isPending}
-                      className="h-8 px-3 text-xs font-medium"
-                    >
-                      <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-                      Enable AI
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleBulkToggleAI(false)}
-                      disabled={toggleAIMutation.isPending}
-                      className="h-8 px-3 text-xs font-medium"
-                    >
-                      Disable AI
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleBulkDelete}
-                      className="h-8 px-3 text-xs font-medium text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-200"
-                    >
-                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                      Delete
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setSelectedTags(new Set())}
-                      className="h-8 w-8 p-0 text-gray-500 hover:text-gray-700"
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
+                    <div className="hidden sm:block h-4 w-px bg-gray-200" />
+                    <div className="flex items-center gap-2 sm:flex-row">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleBulkToggleAI(true)}
+                        disabled={toggleAIMutation.isPending}
+                        className="h-9 sm:h-8 px-3 text-xs font-medium flex-1 sm:flex-initial"
+                      >
+                        <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                        Enable AI
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleBulkToggleAI(false)}
+                        disabled={toggleAIMutation.isPending}
+                        className="h-9 sm:h-8 px-3 text-xs font-medium flex-1 sm:flex-initial"
+                      >
+                        Disable AI
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleBulkDelete}
+                        className="h-9 sm:h-8 px-3 text-xs font-medium text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-200 flex-1 sm:flex-initial"
+                      >
+                        <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                        Delete
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setSelectedTags(new Set())}
+                        className="h-9 sm:h-8 w-9 sm:w-8 p-0 text-gray-500 hover:text-gray-700 shrink-0"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1043,7 +1055,7 @@ export default function TagsPage() {
                     return (
                       <div
                         key={tag.name}
-                        className={`flex items-center justify-between p-5 transition-all duration-200 group animate-in fade-in slide-in-from-left-2 ${
+                        className={`flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 sm:p-5 transition-all duration-200 group animate-in fade-in slide-in-from-left-2 ${
                           isSelected 
                             ? 'bg-accent/5 border-l-2 border-l-accent' 
                             : 'hover:bg-gray-50/80'
@@ -1052,16 +1064,16 @@ export default function TagsPage() {
                           animationDelay: `${Math.min(index * 15, 300)}ms`,
                         }}
                       >
-                        <div className="flex items-center gap-5 flex-1 min-w-0">
+                        <div className="flex items-center gap-3 sm:gap-5 flex-1 min-w-0 mb-3 sm:mb-0">
                           {/* Selection Checkbox */}
                           <Checkbox
                             checked={isSelected}
                             onCheckedChange={() => handleToggleTagSelection(tag.name)}
-                            className="h-4 w-4"
+                            className="h-5 w-5 sm:h-4 sm:w-4 flex-shrink-0"
                           />
 
                           {/* Tag Icon */}
-                          <div className={`flex-shrink-0 h-10 w-10 rounded-lg flex items-center justify-center transition-colors ${
+                          <div className={`flex-shrink-0 h-10 w-10 sm:h-10 sm:w-10 rounded-lg flex items-center justify-center transition-colors ${
                             tag.useWithAI 
                               ? 'bg-accent/10 text-accent' 
                               : 'bg-gray-100 text-gray-400'
@@ -1071,10 +1083,10 @@ export default function TagsPage() {
                           
                           {/* Tag Info */}
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2.5 mb-1.5">
-                              <h3 className="text-base font-semibold text-gray-900 truncate">{tag.name}</h3>
+                            <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 mb-1 sm:mb-1.5">
+                              <h3 className="text-base font-semibold text-gray-900 break-words sm:truncate">{tag.name}</h3>
                               {tag.useWithAI && (
-                                <Badge variant="secondary" className="bg-accent/10 text-accent border-0 text-xs font-medium px-2 py-0.5">
+                                <Badge variant="secondary" className="bg-accent/10 text-accent border-0 text-xs font-medium px-2 py-0.5 shrink-0">
                                   <Sparkles className="h-3 w-3 mr-1" />
                                   AI
                                 </Badge>
@@ -1084,69 +1096,70 @@ export default function TagsPage() {
                               Used in <span className="font-medium text-gray-900">{tag.usageCount}</span> {tag.usageCount === 1 ? 'photo' : 'photos'}
                             </p>
                           </div>
+                        </div>
                           
-                          {/* Actions */}
-                          <div className="flex items-center gap-3">
-                            {/* AI Toggle */}
-                            <label className={`flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors ${
-                              togglingTag === tag.name ? 'cursor-wait' : 'cursor-pointer'
-                            }`}>
-                              {togglingTag === tag.name ? (
-                                <Loader2 className="h-4 w-4 animate-spin text-accent" />
-                              ) : (
-                                <Checkbox
-                                  checked={tag.useWithAI}
-                                  onCheckedChange={(checked) => handleToggleAI(tag.name, checked === true)}
-                                  disabled={togglingTag !== null}
-                                  className="h-4 w-4"
-                                />
-                              )}
-                              <span className="text-sm text-gray-700 flex items-center gap-1.5 font-medium">
-                                <Sparkles className={`h-3.5 w-3.5 ${tag.useWithAI ? 'text-accent' : 'text-gray-400'}`} />
-                                Use with AI
-                              </span>
-                            </label>
-                            
-                            {/* Actions Menu */}
-                            <Popover open={openMenuTag === tag.name} onOpenChange={(open) => setOpenMenuTag(open ? tag.name : null)}>
-                              <PopoverTrigger asChild>
+                        {/* Actions */}
+                        <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3 pl-8 sm:pl-0">
+                          {/* AI Toggle */}
+                          <label className={`flex items-center gap-2 sm:gap-2.5 px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors flex-1 sm:flex-initial ${
+                            togglingTag === tag.name ? 'cursor-wait' : 'cursor-pointer'
+                          }`}>
+                            {togglingTag === tag.name ? (
+                              <Loader2 className="h-4 w-4 animate-spin text-accent shrink-0" />
+                            ) : (
+                              <Checkbox
+                                checked={tag.useWithAI}
+                                onCheckedChange={(checked) => handleToggleAI(tag.name, checked === true)}
+                                disabled={togglingTag !== null}
+                                className="h-4 w-4 shrink-0"
+                              />
+                            )}
+                            <span className="text-xs sm:text-sm text-gray-700 flex items-center gap-1.5 font-medium whitespace-nowrap">
+                              <Sparkles className={`h-3.5 w-3.5 shrink-0 ${tag.useWithAI ? 'text-accent' : 'text-gray-400'}`} />
+                              <span className="hidden sm:inline">Use with AI</span>
+                              <span className="sm:hidden">AI</span>
+                            </span>
+                          </label>
+                          
+                          {/* Actions Menu */}
+                          <Popover open={openMenuTag === tag.name} onOpenChange={(open) => setOpenMenuTag(open ? tag.name : null)}>
+                            <PopoverTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-9 w-9 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0"
+                              >
+                                <MoreVertical className="h-4 w-4 text-gray-600" />
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-48 p-1" align="end">
+                              <div className="space-y-0.5">
                                 <Button
                                   variant="ghost"
-                                  size="icon"
-                                  className="h-9 w-9 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  className="w-full justify-start text-sm font-normal h-9 px-3"
+                                  onClick={() => {
+                                    setEditingTag(tag.name)
+                                    setEditTagName(tag.name)
+                                    setOpenMenuTag(null)
+                                  }}
                                 >
-                                  <MoreVertical className="h-4 w-4 text-gray-600" />
+                                  <Edit2 className="h-4 w-4 mr-2 text-gray-600" />
+                                  Edit Tag
                                 </Button>
-                              </PopoverTrigger>
-                              <PopoverContent className="w-48 p-1" align="end">
-                                <div className="space-y-0.5">
-                                  <Button
-                                    variant="ghost"
-                                    className="w-full justify-start text-sm font-normal h-9 px-3"
-                                    onClick={() => {
-                                      setEditingTag(tag.name)
-                                      setEditTagName(tag.name)
-                                      setOpenMenuTag(null)
-                                    }}
-                                  >
-                                    <Edit2 className="h-4 w-4 mr-2 text-gray-600" />
-                                    Edit Tag
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    className="w-full justify-start text-sm font-normal h-9 px-3 text-red-600 hover:text-red-700 hover:bg-red-50"
-                                    onClick={() => {
-                                      setDeleteTagName(tag.name)
-                                      setOpenMenuTag(null)
-                                    }}
-                                  >
-                                    <Trash2 className="h-4 w-4 mr-2" />
-                                    Delete Tag
-                                  </Button>
-                                </div>
-                              </PopoverContent>
-                            </Popover>
-                          </div>
+                                <Button
+                                  variant="ghost"
+                                  className="w-full justify-start text-sm font-normal h-9 px-3 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                  onClick={() => {
+                                    setDeleteTagName(tag.name)
+                                    setOpenMenuTag(null)
+                                  }}
+                                >
+                                  <Trash2 className="h-4 w-4 mr-2" />
+                                  Delete Tag
+                                </Button>
+                              </div>
+                            </PopoverContent>
+                          </Popover>
                         </div>
                       </div>
                     )
@@ -1160,10 +1173,10 @@ export default function TagsPage() {
 
       {/* New Tag Dialog */}
       <Dialog open={showNewTagDialog} onOpenChange={setShowNewTagDialog}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md mx-4 sm:mx-auto">
           <DialogHeader>
-            <DialogTitle className="text-xl font-semibold">Create New Tag</DialogTitle>
-            <DialogDescription className="text-sm text-gray-600">
+            <DialogTitle className="text-lg sm:text-xl font-semibold">Create New Tag</DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm text-gray-600">
               Add a new tag to organize your photos. Tags help you find and categorize content quickly.
             </DialogDescription>
           </DialogHeader>
@@ -1180,21 +1193,21 @@ export default function TagsPage() {
               autoFocus
               className="h-11 text-base border-gray-300 focus:border-accent focus:ring-accent rounded-lg"
             />
-            <div className="flex gap-3 justify-end pt-2">
+            <div className="flex flex-col-reverse sm:flex-row gap-3 justify-end pt-2">
               <Button
                 variant="outline"
                 onClick={() => {
                   setShowNewTagDialog(false)
                   setNewTagName('')
                 }}
-                className="h-10 px-5 rounded-lg"
+                className="h-10 px-5 rounded-lg w-full sm:w-auto"
               >
                 Cancel
               </Button>
               <Button
                 onClick={handleCreateTag}
                 disabled={!newTagName.trim() || createTagMutation.isPending}
-                className="h-10 px-5 font-semibold bg-accent hover:bg-accent/90 rounded-lg"
+                className="h-10 px-5 font-semibold bg-accent hover:bg-accent/90 rounded-lg w-full sm:w-auto"
               >
                 {createTagMutation.isPending ? 'Creating...' : 'Create Tag'}
               </Button>
@@ -1205,10 +1218,10 @@ export default function TagsPage() {
 
       {/* Edit Tag Dialog */}
       <Dialog open={!!editingTag} onOpenChange={(open) => !open && setEditingTag(null)}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md mx-4 sm:mx-auto">
           <DialogHeader>
-            <DialogTitle className="text-xl font-semibold">Edit Tag</DialogTitle>
-            <DialogDescription className="text-sm text-gray-600">
+            <DialogTitle className="text-lg sm:text-xl font-semibold">Edit Tag</DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm text-gray-600">
               Rename this tag. All photos using this tag will be updated automatically.
             </DialogDescription>
           </DialogHeader>
@@ -1225,21 +1238,21 @@ export default function TagsPage() {
               autoFocus
               className="h-11 text-base border-gray-300 focus:border-accent focus:ring-accent rounded-lg"
             />
-            <div className="flex gap-3 justify-end pt-2">
+            <div className="flex flex-col-reverse sm:flex-row gap-3 justify-end pt-2">
               <Button
                 variant="outline"
                 onClick={() => {
                   setEditingTag(null)
                   setEditTagName('')
                 }}
-                className="h-10 px-5 rounded-lg"
+                className="h-10 px-5 rounded-lg w-full sm:w-auto"
               >
                 Cancel
               </Button>
               <Button
                 onClick={handleUpdateTag}
                 disabled={!editTagName.trim() || updateTagMutation.isPending}
-                className="h-10 px-5 font-semibold bg-accent hover:bg-accent/90 rounded-lg"
+                className="h-10 px-5 font-semibold bg-accent hover:bg-accent/90 rounded-lg w-full sm:w-auto"
               >
                 {updateTagMutation.isPending ? 'Saving...' : 'Save Changes'}
               </Button>
@@ -1250,27 +1263,27 @@ export default function TagsPage() {
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!deleteTagName && !isDeleting} onOpenChange={() => !isDeleting && setDeleteTagName(null)}>
-        <AlertDialogContent className="sm:max-w-md">
+        <AlertDialogContent className="sm:max-w-md mx-4 sm:mx-auto">
           <AlertDialogHeader>
-            <div className="flex items-center gap-4 mb-2">
-              <div className="h-12 w-12 rounded-xl bg-red-50 flex items-center justify-center">
-                <Trash2 className="h-6 w-6 text-red-600" />
+            <div className="flex items-start sm:items-center gap-3 sm:gap-4 mb-2">
+              <div className="h-10 w-10 sm:h-12 sm:w-12 rounded-xl bg-red-50 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="h-5 w-5 sm:h-6 sm:w-6 text-red-600" />
               </div>
-              <div>
-                <AlertDialogTitle className="text-xl font-semibold text-gray-900">
+              <div className="flex-1 min-w-0">
+                <AlertDialogTitle className="text-lg sm:text-xl font-semibold text-gray-900">
                   Delete Tag?
                 </AlertDialogTitle>
+                <AlertDialogDescription className="text-xs sm:text-sm text-gray-600 mt-2 sm:pl-0">
+                  This will remove the tag &quot;{deleteTagName}&quot; from all photos. This action cannot be undone.
+                </AlertDialogDescription>
               </div>
             </div>
-            <AlertDialogDescription className="text-sm text-gray-600 mt-2 pl-16">
-              This will remove the tag &quot;{deleteTagName}&quot; from all photos. This action cannot be undone.
-            </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="sm:flex-row sm:justify-end gap-3 mt-6">
-            <AlertDialogCancel className="mt-0 h-10 px-5 rounded-lg">Cancel</AlertDialogCancel>
+          <AlertDialogFooter className="flex-col-reverse sm:flex-row sm:justify-end gap-3 mt-6">
+            <AlertDialogCancel className="mt-0 h-10 px-5 rounded-lg w-full sm:w-auto">Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteTag}
-              className="bg-red-600 hover:bg-red-700 text-white h-10 px-5 rounded-lg font-semibold"
+              className="bg-red-600 hover:bg-red-700 text-white h-10 px-5 rounded-lg font-semibold w-full sm:w-auto"
             >
               <Trash2 className="h-4 w-4 mr-2" />
               Delete Tag
@@ -1282,12 +1295,12 @@ export default function TagsPage() {
       {/* Delete Progress Dialog */}
       {isDeleting && (
         <AlertDialog open={isDeleting}>
-          <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogContent className="sm:max-w-md mx-4 sm:mx-auto">
             <AlertDialogHeader>
-              <AlertDialogTitle className="text-xl font-semibold text-gray-900">
+              <AlertDialogTitle className="text-lg sm:text-xl font-semibold text-gray-900">
                 Deleting Tag...
               </AlertDialogTitle>
-              <AlertDialogDescription className="text-sm text-gray-600 mt-2">
+              <AlertDialogDescription className="text-xs sm:text-sm text-gray-600 mt-2">
                 Please wait while we remove this tag from all photos.
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -1310,8 +1323,8 @@ export default function TagsPage() {
 
       {/* Delete Success Toast */}
       {showDeleteSuccess && (
-        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-2 fade-in-0 duration-300">
-          <div className="rounded-xl border border-gray-200 bg-white shadow-xl p-4 min-w-[360px]">
+        <div className="fixed bottom-4 sm:bottom-6 left-4 right-4 sm:left-auto sm:right-6 z-50 animate-in slide-in-from-bottom-2 fade-in-0 duration-300 max-w-sm sm:max-w-none sm:min-w-[360px]">
+          <div className="rounded-xl border border-gray-200 bg-white shadow-xl p-4">
             <div className="flex items-start gap-3">
               <div className="h-10 w-10 rounded-full bg-green-50 flex items-center justify-center flex-shrink-0">
                 <CheckCircle2 className="h-5 w-5 text-green-600" />
@@ -1320,7 +1333,7 @@ export default function TagsPage() {
                 <p className="text-sm font-semibold text-gray-900">
                   Tag deleted
                 </p>
-                <p className="text-xs text-gray-600 mt-0.5">
+                <p className="text-xs text-gray-600 mt-0.5 break-words">
                   &quot;{deletedTagName}&quot; has been removed from all photos
                 </p>
               </div>
@@ -1342,8 +1355,8 @@ export default function TagsPage() {
 
       {/* Toast Notification */}
       {toast && (
-        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200">
-          <div className={`rounded-lg border shadow-lg p-4 min-w-[320px] flex items-start gap-3 ${
+        <div className="fixed bottom-4 sm:bottom-6 left-4 right-4 sm:left-auto sm:right-6 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200 max-w-sm sm:max-w-none sm:min-w-[320px]">
+          <div className={`rounded-lg border shadow-lg p-4 flex items-start gap-3 ${
             toast.type === 'success' 
               ? 'bg-white border-green-200' 
               : toast.type === 'error'
@@ -1365,12 +1378,12 @@ export default function TagsPage() {
                 <Loader2 className="h-5 w-5 animate-spin" />
               )}
             </div>
-            <p className="text-sm font-medium text-gray-900 flex-1">{toast.message}</p>
+            <p className="text-sm font-medium text-gray-900 flex-1 break-words">{toast.message}</p>
             <Button
               variant="ghost"
               size="icon"
               onClick={() => setToast(null)}
-              className="h-6 w-6 text-gray-400 hover:text-gray-600"
+              className="h-6 w-6 text-gray-400 hover:text-gray-600 flex-shrink-0"
             >
               <X className="h-4 w-4" />
             </Button>
