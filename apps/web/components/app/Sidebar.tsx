@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Image from 'next/image'
+import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { ChevronLeft, ChevronRight, LogOut } from 'lucide-react'
 import { SidebarNav } from './SidebarNav'
@@ -26,7 +27,7 @@ export function Sidebar() {
       <div className="flex-shrink-0 pt-5 pb-4 border-b border-gray-200/50">
         <div className={`flex items-center ${isMinimized && !isMobile ? 'justify-center' : 'justify-between'}`}>
           {isMinimized && !isMobile ? (
-            <div className="flex items-center justify-center">
+            <Link href="/app/library" className="flex items-center justify-center hover:opacity-80 transition-opacity">
               <Image
                 src="/logo.png"
                 alt="StoryStack"
@@ -35,10 +36,18 @@ export function Sidebar() {
                 className="rounded-[6px] shadow-sm"
                 priority
               />
-            </div>
+            </Link>
           ) : (
             <>
-              <div className="flex items-center gap-3 flex-1 min-w-0">
+              <Link 
+                href="/app/library" 
+                className="flex items-center gap-3 flex-1 min-w-0 hover:opacity-80 transition-opacity"
+                onClick={() => {
+                  if (isMobile) {
+                    setMobileMenuOpen(false)
+                  }
+                }}
+              >
                 <div className="relative flex-shrink-0">
                   <Image
                     src="/logo.png"
@@ -57,7 +66,7 @@ export function Sidebar() {
                     Social Content Workspace
                   </p>
                 </div>
-              </div>
+              </Link>
               {!isMobile && (
                 <Button
                   variant="ghost"

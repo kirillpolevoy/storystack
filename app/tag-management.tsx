@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
@@ -196,6 +196,7 @@ export default function TagManagementScreen() {
         
         // Load saved auto-tag configuration from Supabase (workspace-specific)
         let autoTags: string[] = [];
+        let supabaseLoadFailed = false;
         if (supabase && workspaceId) {
           try {
             const { data: config, error } = await supabase
@@ -204,24 +205,39 @@ export default function TagManagementScreen() {
               .eq('workspace_id', workspaceId)
               .single();
             
-            if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'auto_tags' column") && !error.message?.includes("Could not find the 'workspace_id' column")) {
-              console.warn('[TagManagement] Error loading auto_tags from Supabase:', error);
-            }
-            
-            if (config?.auto_tags && Array.isArray(config.auto_tags)) {
+            if (error) {
+              // PGRST116 means no rows found - this is OK, return empty array
+              if (error.code === 'PGRST116') {
+                console.log('[TagManagement] No tag_config found for workspace (new workspace) - this is OK');
+                autoTags = [];
+              } else if (error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'auto_tags' column") && !error.message?.includes("Could not find the 'workspace_id' column")) {
+                console.warn('[TagManagement] Error loading auto_tags from Supabase:', error);
+                supabaseLoadFailed = true;
+              }
+            } else if (config?.auto_tags && Array.isArray(config.auto_tags)) {
+              // Successfully loaded from Supabase - use this data (even if empty array)
               autoTags = config.auto_tags;
+              console.log('[TagManagement] ✅ Loaded auto_tags from Supabase:', autoTags);
+            } else {
+              // Config exists but auto_tags is null/undefined - treat as empty (user disabled all tags)
+              autoTags = [];
+              console.log('[TagManagement] Config exists but auto_tags is empty/null - user has disabled all tags');
             }
           } catch (error) {
-            console.warn('[TagManagement] Failed to load auto_tags from Supabase, using AsyncStorage:', error);
+            console.warn('[TagManagement] Failed to load auto_tags from Supabase, will try AsyncStorage:', error);
+            supabaseLoadFailed = true;
           }
         }
-        // Fallback to AsyncStorage - ONLY if Supabase failed AND we have workspace ID
-        // Use workspace-specific key to prevent cross-workspace data leakage
-        if (autoTags.length === 0 && workspaceId) {
+        // Fallback to AsyncStorage - ONLY if Supabase query failed (not if it returned empty array)
+        // Empty array from Supabase is valid - it means user disabled all tags
+        if (supabaseLoadFailed && workspaceId) {
           try {
             const workspaceSpecificKey = `${AUTO_TAG_STORAGE_KEY}:${workspaceId}`;
             const autoTagsJson = await AsyncStorage.getItem(workspaceSpecificKey);
-            autoTags = autoTagsJson ? JSON.parse(autoTagsJson) : [];
+            if (autoTagsJson) {
+              autoTags = JSON.parse(autoTagsJson);
+              console.log('[TagManagement] Loaded auto_tags from AsyncStorage fallback:', autoTags);
+            }
           } catch (error) {
             console.warn('[TagManagement] Failed to load auto_tags from AsyncStorage:', error);
             autoTags = [];
@@ -254,6 +270,17 @@ export default function TagManagementScreen() {
   useEffect(() => {
     loadTags();
   }, [loadTags]);
+
+  // Refresh tags when screen comes into focus (e.g., returning from web app)
+  useFocusEffect(
+    useCallback(() => {
+      // Small delay to ensure workspace context is ready
+      const timer = setTimeout(() => {
+        loadTags();
+      }, 100);
+      return () => clearTimeout(timer);
+    }, [loadTags])
+  );
 
   // Filter tags based on search query
   const filteredTags = useMemo(() => {

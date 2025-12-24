@@ -28,11 +28,13 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { MobileMenuButton } from '@/components/app/MobileMenuButton'
+import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
 
 export default function ProfilePage() {
   const supabase = createClient()
   const queryClient = useQueryClient()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const activeWorkspaceId = useActiveWorkspace()
   
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null)
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false)
@@ -63,7 +65,7 @@ export default function ProfilePage() {
   })
 
   const { data: stats } = useQuery({
-    queryKey: ['profile-stats'],
+    queryKey: ['profile-stats', activeWorkspaceId],
     queryFn: async () => {
       const {
         data: { user },
@@ -71,9 +73,26 @@ export default function ProfilePage() {
 
       if (!user) return null
 
+      // Only count assets and stories from the active workspace (matching library page behavior)
+      if (!activeWorkspaceId) {
+        return {
+          assetCount: 0,
+          storyCount: 0,
+        }
+      }
+
+      // Count assets and stories in the active workspace only
       const [assetsResult, storiesResult] = await Promise.all([
-        supabase.from('assets').select('id', { count: 'exact', head: true }).eq('user_id', user.id),
-        supabase.from('stories').select('id', { count: 'exact', head: true }).eq('user_id', user.id),
+        supabase
+          .from('assets')
+          .select('id', { count: 'exact', head: true })
+          .eq('workspace_id', activeWorkspaceId)
+          .is('deleted_at', null),
+        supabase
+          .from('stories')
+          .select('id', { count: 'exact', head: true })
+          .eq('workspace_id', activeWorkspaceId)
+          .is('deleted_at', null),
       ])
 
       return {
@@ -81,6 +100,7 @@ export default function ProfilePage() {
         storyCount: storiesResult.count || 0,
       }
     },
+    enabled: !!activeWorkspaceId, // Only run query when workspace ID is available
   })
 
   // Load profile photo

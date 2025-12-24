@@ -9,22 +9,39 @@ const AlertDialogPortal = AlertDialogPrimitive.Portal
 const AlertDialogOverlay = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Overlay>
->(({ className, style, ...props }, ref) => (
-  <AlertDialogPrimitive.Overlay
-    className={cn(
-      "fixed inset-0 z-50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-      className
-    )}
-    style={{
-      backgroundColor: 'rgba(0, 0, 0, 0.5)', // Lighter overlay - Airbnb style
-      backdropFilter: 'blur(4px) saturate(0.95)',
-      WebkitBackdropFilter: 'blur(4px) saturate(0.95)',
-      ...style
-    }}
-    {...props}
-    ref={ref}
-  />
-))
+>(({ className, style, ...props }, ref) => {
+  const overlayRef = React.useCallback((node: HTMLDivElement | null) => {
+    if (typeof ref === 'function') {
+      ref(node)
+    } else if (ref) {
+      (ref as React.MutableRefObject<HTMLDivElement | null>).current = node
+    }
+    
+    if (node) {
+      // Force the background color and blur using !important via direct style manipulation
+      node.style.setProperty('background-color', 'rgba(0, 0, 0, 0.5)', 'important')
+      node.style.setProperty('backdrop-filter', 'blur(4px) saturate(0.95)', 'important')
+      node.style.setProperty('-webkit-backdrop-filter', 'blur(4px) saturate(0.95)', 'important')
+    }
+  }, [ref])
+
+  return (
+    <AlertDialogPrimitive.Overlay
+      ref={overlayRef}
+      className={cn(
+        "fixed inset-0 z-50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+        className
+      )}
+      style={{
+        backgroundColor: 'rgba(0, 0, 0, 0.5)', // Lighter overlay - Airbnb style
+        backdropFilter: 'blur(4px) saturate(0.95)',
+        WebkitBackdropFilter: 'blur(4px) saturate(0.95)',
+        ...style
+      } as React.CSSProperties}
+      {...props}
+    />
+  )
+})
 AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName
 
 const AlertDialogContent = React.forwardRef<
