@@ -2,7 +2,7 @@
   "expo": {
     "name": "StoryStack",
     "slug": "storystack",
-    "version": "1.2.2",
+    "version": "1.2.3",
     "scheme": "storystack",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -17,7 +17,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.storystackstudio.app",
-      "buildNumber": "14",
+      "buildNumber": "15",
       "icon": "./assets/icon.png",
       "splash": {
         "image": "./assets/splash.png",
@@ -31,7 +31,7 @@
       }
     },
     "android": {
-      "versionCode": 14,
+      "versionCode": 15,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
