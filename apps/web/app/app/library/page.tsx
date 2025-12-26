@@ -4,6 +4,7 @@ import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useAssets, AssetViewFilter } from '@/hooks/useAssets'
 import { useAvailableTags } from '@/hooks/useAvailableTags'
 import { useAvailableLocations } from '@/hooks/useAvailableLocations'
+import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
 import { AssetGrid } from '@/components/library/AssetGrid'
 import { UploadZone } from '@/components/library/UploadZone'
 import { FilterBar } from '@/components/library/FilterBar'
@@ -73,7 +74,12 @@ export default function LibraryPage() {
     const filters: string[] = []
     selectedTags.forEach((tag) => filters.push(tag))
     if (selectedLocation) {
-      filters.push(`__LOCATION__${selectedLocation}`)
+      // If it's the "No Location" filter, add it directly, otherwise add as location filter
+      if (selectedLocation === '__NO_LOCATION__') {
+        filters.push('__NO_LOCATION__')
+      } else {
+        filters.push(`__LOCATION__${selectedLocation}`)
+      }
     }
     return filters
   }, [selectedTags, selectedLocation])
@@ -87,7 +93,7 @@ export default function LibraryPage() {
     isError,
     error,
     refetch,
-  } = useAssets(searchQuery, selectedFilters, viewFilter)
+  } = useAssets(searchQuery, selectedFilters, viewFilter, dateRange)
   
   useEffect(() => {
     setMounted(true)
@@ -131,34 +137,137 @@ export default function LibraryPage() {
     console.error('[LibraryPage] Error loading assets:', error)
   }
 
-  const assets = (data?.pages.flatMap((page: { assets: Asset[] }) => page.assets).filter((asset): asset is Asset => asset != null) || [])
-
-  // Apply date range filter client-side (based on date_taken, fallback to created_at)
+  // Assets are already filtered by date in useAssets hook
+  // No need to filter again here
   const filteredAssets = useMemo(() => {
-    // First filter out any undefined/null assets
-    const validAssets = assets.filter((asset): asset is Asset => asset != null)
-    
-    if (!dateRange.from && !dateRange.to) return validAssets
+    const assets = (data?.pages.flatMap((page: { assets: Asset[] }) => page.assets).filter((asset): asset is Asset => asset != null) || [])
+    return assets
+  }, [data])
 
-    return validAssets.filter((asset: Asset) => {
-      // Use date_taken if available, otherwise fall back to created_at
-      const dateToUse = asset.date_taken || asset.created_at
-      const assetDate = new Date(dateToUse)
-      
-      if (dateRange.from && assetDate < dateRange.from) return false
-      if (dateRange.to) {
-        const toDate = new Date(dateRange.to)
-        toDate.setHours(23, 59, 59, 999)
-        if (assetDate > toDate) return false
+  // Fetch all assets for count calculation (without tag filters, but with other filters)
+  // This ensures tag counts show how many assets have each tag within the current filter context
+  // We fetch all assets (up to 10,000) to get accurate counts
+  const [assetsForCounts, setAssetsForCounts] = useState<Asset[]>([])
+  const activeWorkspaceId = useActiveWorkspace()
+  
+  useEffect(() => {
+    const fetchAssetsForCounts = async () => {
+      if (!supabase || !activeWorkspaceId) {
+        setAssetsForCounts([])
+        return
       }
-      return true
-    })
-  }, [assets, dateRange])
+      
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        setAssetsForCounts([])
+        return
+      }
 
-  // Calculate tag and location counts
+      try {
+        // Build query without tag filters, but with other filters
+        let query = supabase
+          .from('assets')
+          .select('id, tags, location, date_taken, created_at, storage_path, original_filename')
+          .eq('workspace_id', activeWorkspaceId)
+          .is('deleted_at', null)
+          .limit(10000) // Fetch all assets for accurate counts
+
+        // Apply location filter
+        if (selectedLocation) {
+          query = query.eq('location', selectedLocation)
+        }
+
+        // Apply search filter
+        if (searchQuery && searchQuery.trim()) {
+          const searchTerms = searchQuery.trim().split(/\s+/).filter(term => term.length > 0)
+          if (searchTerms.length > 0) {
+            const searchConditions = searchTerms.map(term => 
+              `storage_path.ilike.%${term}%,original_filename.ilike.%${term}%,location.ilike.%${term}%`
+            ).join(',')
+            query = query.or(searchConditions)
+          }
+        }
+
+        const { data: assetsData, error } = await query
+
+        if (error) {
+          console.error('[LibraryPage] Error fetching assets for counts:', error)
+          setAssetsForCounts([])
+          return
+        }
+
+        if (!assetsData || assetsData.length === 0) {
+          setAssetsForCounts([])
+          return
+        }
+
+        // Apply date filter client-side
+        let filtered = assetsData
+        if (dateRange && (dateRange.from || dateRange.to)) {
+          filtered = assetsData.filter((asset: any) => {
+            const dateToUse = asset.date_taken || asset.created_at
+            if (!dateToUse) return true // Include if no date
+            const assetDate = new Date(dateToUse)
+            
+            if (dateRange.from && assetDate < dateRange.from) return false
+            if (dateRange.to) {
+              const toDate = new Date(dateRange.to)
+              toDate.setHours(23, 59, 59, 999)
+              if (assetDate > toDate) return false
+            }
+            return true
+          })
+        }
+
+        // Apply view filter (story membership) if needed
+        if (viewFilter !== 'all' && filtered.length > 0) {
+          const assetIds = filtered.map((a: any) => a.id)
+          const { data: storySummaryData } = await supabase
+            .from('asset_story_summary')
+            .select('asset_id, story_count')
+            .in('asset_id', assetIds)
+
+          if (storySummaryData) {
+            const storySummaryMap = new Map(
+              storySummaryData.map((s: any) => [s.asset_id, s.story_count || 0])
+            )
+
+            if (viewFilter === 'in-stories') {
+              filtered = filtered.filter((asset: any) => {
+                const count = storySummaryMap.get(asset.id) || 0
+                return count > 0
+              })
+            } else if (viewFilter === 'not-in-stories') {
+              filtered = filtered.filter((asset: any) => {
+                const count = storySummaryMap.get(asset.id) || 0
+                return count === 0
+              })
+            }
+          }
+        }
+
+        // Map to Asset format
+        const mappedAssets = filtered.map((asset: any) => ({
+          ...asset,
+          tags: Array.isArray(asset.tags) ? asset.tags : [],
+        } as Asset))
+
+        console.log('[LibraryPage] Fetched', mappedAssets.length, 'assets for counts')
+        setAssetsForCounts(mappedAssets)
+      } catch (err) {
+        console.error('[LibraryPage] Exception fetching assets for counts:', err)
+        setAssetsForCounts([])
+      }
+    }
+
+    fetchAssetsForCounts()
+  }, [supabase, activeWorkspaceId, searchQuery, selectedLocation, dateRange, viewFilter])
+
+  // Calculate tag and location counts from assets that match current filters (excluding tag filters)
+  // This shows users what tags are available within their current filter context
   const tagCounts = useMemo(() => {
     const counts = new Map<string, number>()
-    filteredAssets.forEach((asset: Asset) => {
+    assetsForCounts.forEach((asset: Asset) => {
       if (!asset) return // Safety check
       const tags: string[] = Array.isArray(asset.tags) ? asset.tags : []
       tags.forEach((tag: string) => {
@@ -168,11 +277,19 @@ export default function LibraryPage() {
       })
     })
     return counts
-  }, [filteredAssets])
+  }, [assetsForCounts])
+
+  const noTagsCount = useMemo(() => {
+    return assetsForCounts.filter((asset: Asset) => {
+      if (!asset) return false
+      const tags: string[] = Array.isArray(asset.tags) ? asset.tags : []
+      return tags.length === 0
+    }).length
+  }, [assetsForCounts])
 
   const locationCounts = useMemo(() => {
     const counts = new Map<string, number>()
-    filteredAssets.forEach((asset: Asset) => {
+    assetsForCounts.forEach((asset: Asset) => {
       if (!asset) return // Safety check
       if (asset.location && asset.location.trim()) {
         const location = asset.location.trim()
@@ -180,7 +297,14 @@ export default function LibraryPage() {
       }
     })
     return counts
-  }, [filteredAssets])
+  }, [assetsForCounts])
+
+  const noLocationCount = useMemo(() => {
+    return assetsForCounts.filter((asset: Asset) => {
+      if (!asset) return false
+      return !asset.location || asset.location.trim() === ''
+    }).length
+  }, [assetsForCounts])
 
   const deleteAsset = useDeleteAsset()
   const updateTags = useUpdateAssetTags()
@@ -692,39 +816,39 @@ export default function LibraryPage() {
   }, [])
 
   // Navigation functions for asset detail panel
-  // Navigate through all assets matching current filters (search/tags/location/viewFilter), not date-filtered subset
+  // Navigate through all assets matching current filters (search/tags/location/viewFilter/date)
   const handleNavigatePrevious = useCallback(() => {
     if (!selectedAsset) return
-    const currentIndex = assets.findIndex((a: Asset) => a.id === selectedAsset.id)
+    const currentIndex = filteredAssets.findIndex((a: Asset) => a.id === selectedAsset.id)
     if (currentIndex > 0) {
-      setSelectedAsset(assets[currentIndex - 1])
+      setSelectedAsset(filteredAssets[currentIndex - 1])
     }
-  }, [selectedAsset, assets])
+  }, [selectedAsset, filteredAssets])
 
   const handleNavigateNext = useCallback(() => {
     if (!selectedAsset) return
-    const currentIndex = assets.findIndex((a: Asset) => a.id === selectedAsset.id)
-    if (currentIndex < assets.length - 1) {
-      setSelectedAsset(assets[currentIndex + 1])
+    const currentIndex = filteredAssets.findIndex((a: Asset) => a.id === selectedAsset.id)
+    if (currentIndex < filteredAssets.length - 1) {
+      setSelectedAsset(filteredAssets[currentIndex + 1])
     }
-  }, [selectedAsset, assets])
+  }, [selectedAsset, filteredAssets])
 
   const canNavigatePrevious = useMemo(() => {
     if (!selectedAsset) return false
-    const currentIndex = assets.findIndex((a: Asset) => a.id === selectedAsset.id)
+    const currentIndex = filteredAssets.findIndex((a: Asset) => a.id === selectedAsset.id)
     return currentIndex > 0
-  }, [selectedAsset, assets])
+  }, [selectedAsset, filteredAssets])
 
   const canNavigateNext = useMemo(() => {
     if (!selectedAsset) return false
-    const currentIndex = assets.findIndex((a: Asset) => a.id === selectedAsset.id)
-    return currentIndex < assets.length - 1
-  }, [selectedAsset, assets])
+    const currentIndex = filteredAssets.findIndex((a: Asset) => a.id === selectedAsset.id)
+    return currentIndex < filteredAssets.length - 1
+  }, [selectedAsset, filteredAssets])
 
   const currentAssetIndex = useMemo(() => {
     if (!selectedAsset) return undefined
-    return assets.findIndex((a: Asset) => a.id === selectedAsset.id)
-  }, [selectedAsset, assets])
+    return filteredAssets.findIndex((a: Asset) => a.id === selectedAsset.id)
+  }, [selectedAsset, filteredAssets])
 
   const handleAddToStorySuccess = useCallback((storyId: string, assetCount: number) => {
     // Show toast notification
@@ -842,6 +966,8 @@ export default function LibraryPage() {
               availableLocations={availableLocations}
               tagCounts={tagCounts}
               locationCounts={locationCounts}
+              noTagsCount={noTagsCount}
+              noLocationCount={noLocationCount}
             />
           </div>
         </div>
@@ -1022,7 +1148,7 @@ export default function LibraryPage() {
           canNavigatePrevious={canNavigatePrevious}
           canNavigateNext={canNavigateNext}
           currentIndex={currentAssetIndex}
-          totalCount={assets.length}
+          totalCount={filteredAssets.length}
         />
       )}
 

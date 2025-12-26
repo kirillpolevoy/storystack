@@ -12,6 +12,9 @@ import {
 } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
 
+const NO_TAGS_FILTER = '__NO_TAGS__'
+const NO_LOCATION_FILTER = '__NO_LOCATION__'
+
 interface FilterBarProps {
   searchQuery: string
   onSearchChange: (query: string) => void
@@ -25,6 +28,8 @@ interface FilterBarProps {
   availableLocations: string[]
   tagCounts?: Map<string, number>
   locationCounts?: Map<string, number>
+  noTagsCount?: number
+  noLocationCount?: number
 }
 
 export function FilterBar({
@@ -40,16 +45,32 @@ export function FilterBar({
   availableLocations,
   tagCounts = new Map(),
   locationCounts = new Map(),
+  noTagsCount = 0,
+  noLocationCount = 0,
 }: FilterBarProps) {
   const [tagsOpen, setTagsOpen] = useState(false)
   const [locationOpen, setLocationOpen] = useState(false)
   const [dateOpen, setDateOpen] = useState(false)
 
+  const isNoTagsSelected = selectedTags.includes(NO_TAGS_FILTER)
+  const isNoLocationSelected = selectedLocation === NO_LOCATION_FILTER
+
   const handleTagToggle = (tag: string) => {
     if (selectedTags.includes(tag)) {
       onTagsChange(selectedTags.filter((t) => t !== tag))
     } else {
-      onTagsChange([...selectedTags, tag])
+      // If "No Tags" is selected, remove it when selecting a regular tag
+      const tagsWithoutNoTags = selectedTags.filter((t) => t !== NO_TAGS_FILTER)
+      onTagsChange([...tagsWithoutNoTags, tag])
+    }
+  }
+
+  const handleNoTagsToggle = () => {
+    if (isNoTagsSelected) {
+      onTagsChange(selectedTags.filter((t) => t !== NO_TAGS_FILTER))
+    } else {
+      // Remove all regular tags when selecting "No Tags"
+      onTagsChange([NO_TAGS_FILTER])
     }
   }
 
@@ -57,7 +78,18 @@ export function FilterBar({
     if (selectedLocation === location) {
       onLocationChange(null)
     } else {
+      // If "No Location" is selected, remove it when selecting a regular location
       onLocationChange(location)
+    }
+    setLocationOpen(false)
+  }
+
+  const handleNoLocationToggle = () => {
+    if (isNoLocationSelected) {
+      onLocationChange(null)
+    } else {
+      // Remove regular location when selecting "No Location"
+      onLocationChange(NO_LOCATION_FILTER)
     }
     setLocationOpen(false)
   }
@@ -101,17 +133,34 @@ export function FilterBar({
             <div className="space-y-2">
               <p className="text-xs font-semibold text-gray-900 mb-2">Filter by tags</p>
               <div className="max-h-64 overflow-y-auto space-y-2">
+                {/* No Tags option - always show */}
+                <label
+                  className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-1.5 rounded"
+                >
+                  <Checkbox
+                    checked={isNoTagsSelected}
+                    onCheckedChange={handleNoTagsToggle}
+                  />
+                  <span className="text-sm text-gray-700 flex-1">No Tags</span>
+                  {noTagsCount > 0 && (
+                    <span className="text-xs text-gray-500">{noTagsCount}</span>
+                  )}
+                </label>
                 {availableTags.map((tag) => {
                   const isSelected = selectedTags.includes(tag)
                   const count = tagCounts.get(tag) || 0
+                  const isDisabled = isNoTagsSelected && !isSelected
                   return (
                     <label
                       key={tag}
-                      className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-1.5 rounded"
+                      className={`flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-1.5 rounded ${
+                        isDisabled ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
                     >
                       <Checkbox
                         checked={isSelected}
                         onCheckedChange={() => handleTagToggle(tag)}
+                        disabled={isDisabled}
                       />
                       <span className="text-sm text-gray-700 flex-1">{tag}</span>
                       {count > 0 && (
@@ -146,16 +195,36 @@ export function FilterBar({
             <div className="space-y-2">
               <p className="text-xs font-semibold text-gray-900 mb-2">Filter by location</p>
               <div className="max-h-64 overflow-y-auto space-y-1">
+                {/* No Location option - always show */}
+                <button
+                  onClick={handleNoLocationToggle}
+                  className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
+                    isNoLocationSelected
+                      ? 'bg-accent/10 text-accent font-medium'
+                      : 'hover:bg-gray-50 text-gray-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span>No Location</span>
+                    {noLocationCount > 0 && (
+                      <span className="text-xs text-gray-500">{noLocationCount}</span>
+                    )}
+                  </div>
+                </button>
                 {availableLocations.map((location) => {
                   const isSelected = selectedLocation === location
                   const count = locationCounts.get(location) || 0
+                  const isDisabled = isNoLocationSelected && !isSelected
                   return (
                     <button
                       key={location}
                       onClick={() => handleLocationSelect(location)}
+                      disabled={isDisabled}
                       className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
                         isSelected
                           ? 'bg-accent/10 text-accent font-medium'
+                          : isDisabled
+                          ? 'opacity-50 cursor-not-allowed'
                           : 'hover:bg-gray-50 text-gray-700'
                       }`}
                     >
@@ -264,7 +333,7 @@ export function FilterBar({
               variant="secondary"
               className="px-2.5 py-1 text-xs font-medium bg-gray-100 text-gray-700 border-0 rounded-full hover:bg-gray-200 transition-colors"
             >
-              {tag}
+              {tag === NO_TAGS_FILTER ? 'No Tags' : tag}
               <button
                 onClick={() => handleTagToggle(tag)}
                 className="ml-1.5 hover:text-gray-900 transition-colors"
@@ -278,7 +347,7 @@ export function FilterBar({
               variant="secondary"
               className="px-2.5 py-1 text-xs font-medium bg-gray-100 text-gray-700 border-0 rounded-full hover:bg-gray-200 transition-colors"
             >
-              {selectedLocation}
+              {selectedLocation === NO_LOCATION_FILTER ? 'No Location' : selectedLocation}
               <button
                 onClick={() => onLocationChange(null)}
                 className="ml-1.5 hover:text-gray-900 transition-colors"

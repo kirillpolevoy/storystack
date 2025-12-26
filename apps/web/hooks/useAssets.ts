@@ -9,6 +9,7 @@ const PAGE_SIZE = 50
 
 const LOCATION_PREFIX = '__LOCATION__'
 const NO_TAGS_FILTER = '__NO_TAGS__'
+const NO_LOCATION_FILTER = '__NO_LOCATION__'
 
 // Helper to check if a value is a location filter
 const isLocationFilter = (value: string): boolean => {
@@ -25,7 +26,8 @@ export type AssetViewFilter = 'all' | 'in-stories' | 'not-in-stories'
 export function useAssets(
   searchQuery?: string,
   selectedFilters?: string[],
-  viewFilter: AssetViewFilter = 'all'
+  viewFilter: AssetViewFilter = 'all',
+  dateRange?: { from: Date | null; to: Date | null }
 ) {
   const supabase = createClient()
 
@@ -33,7 +35,7 @@ export function useAssets(
   const activeWorkspaceId = useActiveWorkspace()
 
   const query = useInfiniteQuery({
-    queryKey: ['assets', activeWorkspaceId, searchQuery, selectedFilters, viewFilter],
+    queryKey: ['assets', activeWorkspaceId, searchQuery, selectedFilters, viewFilter, dateRange],
     enabled: !!activeWorkspaceId, // Only run query when workspace ID is available
     refetchOnMount: 'always', // Always refetch on mount to ensure fresh data
     refetchOnWindowFocus: false, // Don't refetch on window focus (already disabled in QueryClient)
@@ -60,8 +62,9 @@ export function useAssets(
 
       // Separate filters into tags and locations
       const hasNoTagsFilter = selectedFilters?.includes(NO_TAGS_FILTER)
+      const hasNoLocationFilter = selectedFilters?.includes(NO_LOCATION_FILTER)
       const locationFilters = selectedFilters?.filter((f) => isLocationFilter(f)).map(getLocationName) || []
-      const regularTags = selectedFilters?.filter((f) => f !== NO_TAGS_FILTER && !isLocationFilter(f)) || []
+      const regularTags = selectedFilters?.filter((f) => f !== NO_TAGS_FILTER && f !== NO_LOCATION_FILTER && !isLocationFilter(f)) || []
 
       // workspaceId is extracted from queryKey to ensure correct workspace
       if (!workspaceId) {
@@ -71,9 +74,14 @@ export function useAssets(
 
       console.log('[useAssets] Fetching assets for workspace:', workspaceId, '(from queryKey)')
 
-      // When searching, fetch more results to account for client-side filtering
-      // This ensures we don't miss matches due to pagination
-      const searchPageSize = searchQuery && searchQuery.trim() ? PAGE_SIZE * 3 : PAGE_SIZE
+      // When searching, "No Tags", "No Location", or date filter is active, fetch all matching assets
+      // This ensures we don't miss matches due to pagination when client-side filtering is needed
+      const hasDateFilter = dateRange && (dateRange.from || dateRange.to)
+      const needsClientSideFiltering = 
+        (searchQuery && searchQuery.trim()) || 
+        (hasNoTagsFilter && regularTags.length === 0) ||
+        (hasNoLocationFilter && locationFilters.length === 0) ||
+        hasDateFilter
       
       let query = supabase
         .from('assets')
@@ -81,7 +89,17 @@ export function useAssets(
         .eq('workspace_id', workspaceId)
         .is('deleted_at', null) // Exclude soft-deleted assets
         .order('created_at', { ascending: false })
-        .range(pageParam * searchPageSize, (pageParam + 1) * searchPageSize - 1)
+      
+      // When client-side filtering is needed, fetch all matching assets (no pagination limit)
+      // Then we'll paginate client-side after filtering
+      if (needsClientSideFiltering) {
+        // Fetch all assets (up to a reasonable limit) when client-side filtering is needed
+        // We'll paginate after filtering client-side
+        query = query.limit(10000) // Large limit to get all assets
+      } else {
+        // Normal pagination for other cases
+        query = query.range(pageParam * PAGE_SIZE, (pageParam + 1) * PAGE_SIZE - 1)
+      }
 
       // Note: Search filtering (including tags) is done client-side since Supabase doesn't support
       // array functions in filters. We fetch more results when searching to account for this.
@@ -91,16 +109,18 @@ export function useAssets(
       // If search is active, filters narrow down search results (AND logic)
       if (selectedFilters && selectedFilters.length > 0) {
         // Apply tag filters (OR logic within tags)
+        // Note: "No Tags" filter is applied client-side due to Supabase query limitations
         if (regularTags.length > 0) {
           query = query.contains('tags', regularTags)
-        } else if (hasNoTagsFilter) {
-          query = query.or('tags.is.null,tags.eq.[]')
         }
+        // hasNoTagsFilter is handled client-side below
 
         // Apply location filters (AND logic - must also match location)
+        // Note: "No Location" filter is applied client-side due to Supabase query limitations
         if (locationFilters.length > 0) {
           query = query.in('location', locationFilters)
         }
+        // hasNoLocationFilter is handled client-side below
       }
 
       const { data, error } = await query
@@ -189,13 +209,64 @@ export function useAssets(
         }
       }
 
-      // 3. Tag/location filters are now applied server-side above (before pagination)
-      // This ensures filters work correctly with search and proper pagination
+      // 3. Apply "No Tags" filter client-side (if needed)
+      // This is done client-side because Supabase query builder has limitations with empty array checks
+      if (hasNoTagsFilter && regularTags.length === 0) {
+        filteredData = filteredData.filter((asset) => {
+          const tags: string[] = Array.isArray(asset.tags) ? asset.tags : []
+          return tags.length === 0
+        })
+      }
+
+      // 4. Apply "No Location" filter client-side (if needed)
+      // This is done client-side because Supabase query builder has limitations with null/empty checks
+      if (hasNoLocationFilter && locationFilters.length === 0) {
+        filteredData = filteredData.filter((asset) => {
+          return !asset.location || asset.location.trim() === ''
+        })
+      }
+
+      // 5. Apply date filter client-side (if needed)
+      // This is done client-side because date_taken might not be indexed or we need flexible date filtering
+      if (hasDateFilter) {
+        filteredData = filteredData.filter((asset: any) => {
+          // Use date_taken if available, otherwise fall back to created_at
+          const dateToUse = asset.date_taken || asset.created_at
+          const assetDate = new Date(dateToUse)
+          
+          if (dateRange.from && assetDate < dateRange.from) return false
+          if (dateRange.to) {
+            const toDate = new Date(dateRange.to)
+            toDate.setHours(23, 59, 59, 999)
+            if (assetDate > toDate) return false
+          }
+          return true
+        })
+      }
+
+      // 5. Apply pagination client-side if we fetched all assets (for client-side filtering)
+      // Otherwise, pagination was already applied server-side
+      let paginatedData = filteredData
+      let hasMorePages = false
       
-      // 4. Date filter is applied in LibraryPage component after this hook returns
+      if (needsClientSideFiltering) {
+        // We fetched all assets, now paginate client-side
+        const startIndex = pageParam * PAGE_SIZE
+        const endIndex = startIndex + PAGE_SIZE
+        paginatedData = filteredData.slice(startIndex, endIndex)
+        hasMorePages = endIndex < filteredData.length
+      } else {
+        // Pagination was already applied server-side
+        hasMorePages = filteredData.length === PAGE_SIZE
+      }
+
+      // 5. Tag/location filters are now applied server-side above (before pagination)
+      // Date and "No Tags" filters are applied client-side above
+      // This ensures filters work correctly with search and proper pagination
 
       // Get total count from backend (before pagination and client-side filtering)
-      // This count reflects server-side filters: tags, location, search, and view filter
+      // This count reflects server-side filters: tags, location, search
+      // Client-side filters (date, "No Tags") are applied to count below
       let totalCount = 0
 
       try {
@@ -222,12 +293,12 @@ export function useAssets(
         }
 
         // Apply tag/location filters server-side (always, regardless of search)
+        // Note: "No Tags" filter count is calculated client-side
         if (selectedFilters && selectedFilters.length > 0) {
           if (regularTags.length > 0) {
             countQuery = countQuery.contains('tags', regularTags)
-          } else if (hasNoTagsFilter) {
-            countQuery = countQuery.or('tags.is.null,tags.eq.[]')
           }
+          // hasNoTagsFilter count is handled client-side
           if (locationFilters.length > 0) {
             countQuery = countQuery.in('location', locationFilters)
           }
@@ -240,6 +311,76 @@ export function useAssets(
         }
 
         totalCount = serverSideCount || 0
+
+        // Apply client-side filters to count ("No Tags", "No Location", and date filters)
+        if ((hasNoTagsFilter && regularTags.length === 0) || (hasNoLocationFilter && locationFilters.length === 0) || hasDateFilter) {
+          // Recalculate count based on client-side filtered data
+          // We need to fetch all matching assets to count properly
+          let clientSideCountQuery = supabase
+            .from('assets')
+            .select('id, tags, location, date_taken, created_at')
+            .eq('workspace_id', workspaceId)
+            .is('deleted_at', null)
+
+          // Apply same filters as main query (search, location, tags)
+          if (searchQuery && searchQuery.trim()) {
+            const searchTerms = searchQuery.trim().split(/\s+/).filter(term => term.length > 0)
+            if (searchTerms.length > 0) {
+              const searchConditions = searchTerms.map(term => 
+                `storage_path.ilike.%${term}%,original_filename.ilike.%${term}%,location.ilike.%${term}%`
+              ).join(',')
+              clientSideCountQuery = clientSideCountQuery.or(searchConditions)
+            }
+          }
+
+          if (locationFilters.length > 0) {
+            clientSideCountQuery = clientSideCountQuery.in('location', locationFilters)
+          }
+
+          if (regularTags.length > 0) {
+            clientSideCountQuery = clientSideCountQuery.contains('tags', regularTags)
+          }
+
+          const { data: allMatchingAssets, error: clientSideCountError } = await clientSideCountQuery
+          
+          if (!clientSideCountError && allMatchingAssets) {
+            // Apply client-side filters
+            let filteredForCount = allMatchingAssets
+            
+            // Filter for assets with no tags
+            if (hasNoTagsFilter && regularTags.length === 0) {
+              filteredForCount = filteredForCount.filter((asset: any) => {
+                const tags: string[] = Array.isArray(asset.tags) ? asset.tags : []
+                return tags.length === 0
+              })
+            }
+            
+            // Filter for assets with no location
+            if (hasNoLocationFilter && locationFilters.length === 0) {
+              filteredForCount = filteredForCount.filter((asset: any) => {
+                return !asset.location || asset.location.trim() === ''
+              })
+            }
+            
+            // Filter by date
+            if (hasDateFilter) {
+              filteredForCount = filteredForCount.filter((asset: any) => {
+                const dateToUse = asset.date_taken || asset.created_at
+                const assetDate = new Date(dateToUse)
+                
+                if (dateRange.from && assetDate < dateRange.from) return false
+                if (dateRange.to) {
+                  const toDate = new Date(dateRange.to)
+                  toDate.setHours(23, 59, 59, 999)
+                  if (assetDate > toDate) return false
+                }
+                return true
+              })
+            }
+            
+            totalCount = filteredForCount.length
+          }
+        }
 
         // Apply view filter count adjustment using asset_story_summary
         if (viewFilter !== 'all') {
@@ -266,10 +407,10 @@ export function useAssets(
           if (selectedFilters && selectedFilters.length > 0) {
             if (regularTags.length > 0) {
               viewCountQuery = viewCountQuery.contains('tags', regularTags)
-            } else if (hasNoTagsFilter) {
-              viewCountQuery = viewCountQuery.or('tags.is.null,tags.eq.[]')
             }
-            if (locationFilters.length > 0) {
+            // hasNoTagsFilter is handled client-side
+            // Note: "No Location" filter is handled client-side
+            if (locationFilters.length > 0 && !hasNoLocationFilter) {
               viewCountQuery = viewCountQuery.in('location', locationFilters)
             }
           }
@@ -290,14 +431,61 @@ export function useAssets(
                 storySummaryData.map((s: any) => [s.asset_id, s.story_count || 0])
               )
 
+              // Apply client-side filters to asset IDs if needed ("No Tags", "No Location", and date filters)
+              let filteredAssetIds = assetIds
+              if ((hasNoTagsFilter && regularTags.length === 0) || (hasNoLocationFilter && locationFilters.length === 0) || hasDateFilter) {
+                // Fetch tags, location, and dates for these assets to filter client-side
+                const { data: assetsWithFilters } = await supabase
+                  .from('assets')
+                  .select('id, tags, location, date_taken, created_at')
+                  .in('id', assetIds)
+                
+                if (assetsWithFilters) {
+                  let filtered = assetsWithFilters
+                  
+                  // Filter for assets with no tags
+                  if (hasNoTagsFilter && regularTags.length === 0) {
+                    filtered = filtered.filter((asset: any) => {
+                      const tags: string[] = Array.isArray(asset.tags) ? asset.tags : []
+                      return tags.length === 0
+                    })
+                  }
+                  
+                  // Filter for assets with no location
+                  if (hasNoLocationFilter && locationFilters.length === 0) {
+                    filtered = filtered.filter((asset: any) => {
+                      return !asset.location || asset.location.trim() === ''
+                    })
+                  }
+                  
+                  // Filter by date
+                  if (hasDateFilter) {
+                    filtered = filtered.filter((asset: any) => {
+                      const dateToUse = asset.date_taken || asset.created_at
+                      const assetDate = new Date(dateToUse)
+                      
+                      if (dateRange.from && assetDate < dateRange.from) return false
+                      if (dateRange.to) {
+                        const toDate = new Date(dateRange.to)
+                        toDate.setHours(23, 59, 59, 999)
+                        if (assetDate > toDate) return false
+                      }
+                      return true
+                    })
+                  }
+                  
+                  filteredAssetIds = filtered.map((asset: any) => asset.id)
+                }
+              }
+
               // Count assets based on view filter
               if (viewFilter === 'in-stories') {
-                totalCount = assetIds.filter((id: string) => {
+                totalCount = filteredAssetIds.filter((id: string) => {
                   const count = storySummaryMap.get(id) || 0
                   return count > 0
                 }).length
               } else if (viewFilter === 'not-in-stories') {
-                totalCount = assetIds.filter((id: string) => {
+                totalCount = filteredAssetIds.filter((id: string) => {
                   const count = storySummaryMap.get(id) || 0
                   return count === 0
                 }).length
@@ -311,8 +499,8 @@ export function useAssets(
         totalCount = filteredData.length
       }
 
-      // Map assets with public URLs and story membership data
-      const assetsWithUrls: Asset[] = filteredData.map((asset: any) => {
+      // Map assets with public URLs and story membership data (only paginated data)
+      const assetsWithUrls: Asset[] = paginatedData.map((asset: any) => {
         const thumbUrl = asset.storage_path_thumb
           ? supabase.storage.from('assets').getPublicUrl(asset.storage_path_thumb).data.publicUrl
           : asset.storage_path_preview
@@ -343,20 +531,12 @@ export function useAssets(
           story_count: storyMembership.story_count,
         } as Asset
       })
-
-        // For search queries, we fetched more results to account for client-side tag filtering
-        // So we need to limit to PAGE_SIZE and adjust pagination accordingly
-        const finalAssets = searchQuery && searchQuery.trim() 
-          ? assetsWithUrls.slice(0, PAGE_SIZE)
-          : assetsWithUrls
         
-        return {
-          assets: finalAssets,
-          nextPage: (searchQuery && searchQuery.trim() 
-            ? filteredData.length > PAGE_SIZE 
-            : filteredData.length === PAGE_SIZE) ? pageParam + 1 : null,
-          totalCount: totalCount, // Backend-driven count
-        }
+      return {
+        assets: assetsWithUrls,
+        nextPage: hasMorePages ? pageParam + 1 : null,
+        totalCount: totalCount, // Backend-driven count
+      }
       } catch (error) {
         console.error('[useAssets] Error:', error)
         throw error
