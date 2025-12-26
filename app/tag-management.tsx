@@ -129,33 +129,51 @@ export default function TagManagementScreen() {
       const deletedTagsSet = new Set<string>(deletedTags);
       
       // Load custom tags (tags that workspace has created but may not be used yet)
+      // Prioritize database over AsyncStorage now that column exists
       let customTags: string[] = [];
+      let databaseColumnExists = false;
       if (supabase && workspaceId) {
         try {
           const { data: config, error } = await supabase
             .from('tag_config')
             .select('custom_tags')
             .eq('workspace_id', workspaceId)
-            .single();
+            .maybeSingle(); // Use maybeSingle() instead of single() to handle missing rows gracefully
           
-          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column") && !error.message?.includes("Could not find the 'workspace_id' column")) {
-            console.warn('[TagManagement] Error loading custom_tags from Supabase:', error);
-          }
-          
-          if (config?.custom_tags && Array.isArray(config.custom_tags)) {
-            customTags = config.custom_tags;
+          if (error) {
+            // Check if error is about missing column (not just missing row)
+            if (error.code === '42703' || error.message?.includes("Could not find the 'custom_tags' column")) {
+              console.warn('[TagManagement] custom_tags column does not exist in database');
+              databaseColumnExists = false;
+            } else if (error.code !== 'PGRST116' && !error.message?.includes("Could not find the 'workspace_id' column")) {
+              console.warn('[TagManagement] Error loading custom_tags from Supabase:', error);
+            }
+          } else {
+            // Query succeeded - column exists (even if config is null, column exists)
+            databaseColumnExists = true;
+            if (config?.custom_tags && Array.isArray(config.custom_tags)) {
+              customTags = config.custom_tags;
+              console.log('[TagManagement] ✅ Loaded custom_tags from database:', customTags.length, 'tags');
+            } else {
+              // Column exists but no row yet - use empty array (don't fall back to AsyncStorage)
+              customTags = [];
+              console.log('[TagManagement] ✅ custom_tags column exists but no tags yet');
+            }
           }
         } catch (error) {
-          console.warn('[TagManagement] Failed to load custom_tags from Supabase, using AsyncStorage:', error);
+          console.warn('[TagManagement] Failed to load custom_tags from Supabase:', error);
         }
       }
-      // Fallback to AsyncStorage - ONLY if Supabase failed AND we have workspace ID
-      // Use workspace-specific key to prevent cross-workspace data leakage
-      if (customTags.length === 0 && workspaceId) {
+      // Fallback to workspace-specific AsyncStorage - ONLY if database column doesn't exist
+      // If column exists, prioritize database (even if empty) over AsyncStorage
+      if (customTags.length === 0 && workspaceId && !databaseColumnExists) {
         try {
           const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${workspaceId}`;
           const customTagsJson = await AsyncStorage.getItem(workspaceSpecificKey);
-          customTags = customTagsJson ? JSON.parse(customTagsJson) : [];
+          if (customTagsJson) {
+            customTags = JSON.parse(customTagsJson);
+            console.log('[TagManagement] Loaded custom_tags from AsyncStorage (fallback):', customTags.length, 'tags');
+          }
         } catch (error) {
           console.warn('[TagManagement] Failed to load custom_tags from AsyncStorage:', error);
           customTags = [];
@@ -1050,29 +1068,43 @@ export default function TagManagementScreen() {
       }
 
       // Load current custom tags (workspace-specific)
+      // Prioritize database over AsyncStorage now that column exists
       let currentCustomTags: string[] = [];
+      let databaseColumnExists = false;
       if (supabase && activeWorkspaceId) {
         try {
           const { data: config, error } = await supabase
             .from('tag_config')
             .select('custom_tags')
             .eq('workspace_id', activeWorkspaceId)
-            .single();
+            .maybeSingle(); // Use maybeSingle() instead of single() to handle missing rows gracefully
           
-          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column") && !error.message?.includes("Could not find the 'workspace_id' column")) {
-            console.warn('[TagManagement] Error loading custom_tags from Supabase:', error);
-          }
-          
-          if (config?.custom_tags && Array.isArray(config.custom_tags)) {
-            currentCustomTags = config.custom_tags;
+          if (error) {
+            // Check if error is about missing column (not just missing row)
+            if (error.code === '42703' || error.message?.includes("Could not find the 'custom_tags' column")) {
+              console.warn('[TagManagement] custom_tags column does not exist in database');
+              databaseColumnExists = false;
+            } else if (error.code !== 'PGRST116' && !error.message?.includes("Could not find the 'workspace_id' column")) {
+              console.warn('[TagManagement] Error loading custom_tags from Supabase:', error);
+            }
+          } else {
+            // Query succeeded - column exists (even if config is null, column exists)
+            databaseColumnExists = true;
+            if (config?.custom_tags && Array.isArray(config.custom_tags)) {
+              currentCustomTags = config.custom_tags;
+            } else {
+              // Column exists but no row yet - use empty array (don't fall back to AsyncStorage)
+              currentCustomTags = [];
+            }
           }
         } catch (error) {
-          // Column doesn't exist, use AsyncStorage
+          console.warn('[TagManagement] Failed to load custom_tags from Supabase:', error);
         }
       }
       
-      // Fallback to workspace-specific AsyncStorage
-      if (currentCustomTags.length === 0 && activeWorkspaceId) {
+      // Fallback to workspace-specific AsyncStorage - ONLY if database column doesn't exist
+      // If column exists, prioritize database over AsyncStorage
+      if (currentCustomTags.length === 0 && activeWorkspaceId && !databaseColumnExists) {
         try {
           const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
           const customTagsJson = await AsyncStorage.getItem(workspaceSpecificKey);
@@ -1133,24 +1165,22 @@ export default function TagManagementScreen() {
 
   const removeCustomTag = async (tagName: string) => {
     try {
-      // Get current user ID
-      let userId: string | null = null;
-      if (supabase) {
-        const { data: { user } } = await supabase.auth.getUser();
-        userId = user?.id || null;
+      if (!activeWorkspaceId) {
+        console.warn('[TagManagement] No workspace ID - cannot remove custom tag from database');
+        return;
       }
 
-      // Load current custom tags (user-specific)
+      // Load current custom tags (workspace-specific)
       let currentCustomTags: string[] = [];
-      if (supabase && userId) {
+      if (supabase && activeWorkspaceId) {
         try {
           const { data: config, error } = await supabase
             .from('tag_config')
             .select('custom_tags')
-            .eq('user_id', userId)
-            .single();
+            .eq('workspace_id', activeWorkspaceId)
+            .maybeSingle();
           
-          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column") && !error.message?.includes("Could not find the 'user_id' column")) {
+          if (error && error.code !== 'PGRST204' && !error.message?.includes("Could not find the 'custom_tags' column")) {
             console.warn('[TagManagement] Error loading custom_tags from Supabase:', error);
           }
           
@@ -1159,14 +1189,15 @@ export default function TagManagementScreen() {
           }
         } catch (error) {
           // Column doesn't exist, use AsyncStorage
+          console.warn('[TagManagement] custom_tags column may not exist, will fallback to AsyncStorage');
         }
       }
       
-      // Fallback to user-specific AsyncStorage
-      if (currentCustomTags.length === 0 && userId) {
+      // Fallback to workspace-specific AsyncStorage
+      if (currentCustomTags.length === 0 && activeWorkspaceId) {
         try {
-          const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
-          const customTagsJson = await AsyncStorage.getItem(userSpecificKey);
+          const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+          const customTagsJson = await AsyncStorage.getItem(workspaceSpecificKey);
           currentCustomTags = customTagsJson ? JSON.parse(customTagsJson) : [];
         } catch (error) {
           currentCustomTags = [];
@@ -1176,13 +1207,13 @@ export default function TagManagementScreen() {
       // Remove tag
       const updatedCustomTags = currentCustomTags.filter((t) => t !== tagName);
       
-      // Save to Supabase if available
-      if (supabase && userId) {
+      // Save to Supabase if available (workspace-specific)
+      if (supabase && activeWorkspaceId) {
         let error = null;
         try {
           const result = await supabase
             .from('tag_config')
-            .upsert({ user_id: userId, custom_tags: updatedCustomTags }, { onConflict: 'user_id' });
+            .upsert({ workspace_id: activeWorkspaceId, custom_tags: updatedCustomTags }, { onConflict: 'workspace_id' });
           error = result.error;
         } catch (upsertError: any) {
           // If upsert fails, try update as fallback
@@ -1190,7 +1221,7 @@ export default function TagManagementScreen() {
           const updateResult = await supabase
             .from('tag_config')
             .update({ custom_tags: updatedCustomTags })
-            .eq('user_id', userId);
+            .eq('workspace_id', activeWorkspaceId);
           error = updateResult.error;
         }
         
@@ -1201,15 +1232,16 @@ export default function TagManagementScreen() {
             console.error('[TagManagement] Supabase save custom_tags failed', error);
             console.error('[TagManagement] Error code:', error.code);
           }
-          const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
-          await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
+          const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+          await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(updatedCustomTags));
         } else {
-          const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
-          await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
+          // Also save to workspace-specific AsyncStorage as backup
+          const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+          await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(updatedCustomTags));
         }
-      } else if (userId) {
-        const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
-        await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
+      } else if (activeWorkspaceId) {
+        const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+        await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(updatedCustomTags));
       }
       
       console.log(`[TagManagement] Custom tag "${tagName}" removed`);

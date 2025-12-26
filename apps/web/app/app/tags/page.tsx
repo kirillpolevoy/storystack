@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -50,6 +51,7 @@ type SortOption = 'alphabetical' | 'most-used' | 'ai-enabled' | 'least-used'
 type FilterOption = 'all' | 'ai-enabled' | 'unused'
 
 export default function TagsPage() {
+  const router = useRouter()
   const [searchQuery, setSearchQuery] = useState('')
   const [sortBy, setSortBy] = useState<SortOption>('alphabetical')
   const [filterBy, setFilterBy] = useState<FilterOption>('all')
@@ -57,11 +59,17 @@ export default function TagsPage() {
   const [editingTag, setEditingTag] = useState<string | null>(null)
   const [editTagName, setEditTagName] = useState('')
   const [deleteTagName, setDeleteTagName] = useState<string | null>(null)
+  const [bulkDeleteTags, setBulkDeleteTags] = useState<Set<string>>(new Set())
   const [showNewTagDialog, setShowNewTagDialog] = useState(false)
   const [openMenuTag, setOpenMenuTag] = useState<string | null>(null)
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set())
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null)
   const [togglingTag, setTogglingTag] = useState<string | null>(null)
+  
+  // Cache whether custom_tags column exists to avoid repeated 400 errors
+  // Start with null (unknown) - we'll try once to detect, then cache the result
+  // This matches mobile app behavior: try database first, handle errors gracefully
+  const customTagsColumnExistsRef = useRef<boolean | null>(null)
   
   // Premium delete flow state
   const [isDeleting, setIsDeleting] = useState(false)
@@ -124,39 +132,68 @@ export default function TagsPage() {
 
       console.log('[TagManagement] Found tags in assets:', Array.from(tagCounts.keys()))
 
-      // Get tag config (auto_tags for AI) for the active workspace
+      // Get tag config (auto_tags for AI and custom_tags for user-created tags) for the active workspace
+      // Match mobile app: query both columns together, handle errors gracefully
       let autoTags: string[] = []
+      let customTags: string[] = []
       
       console.log('[TagManagement] Fetching tag_config for workspace:', workspaceId)
+      
+      // Try fetching both columns together (like mobile app does)
       const { data: config, error: configError } = await supabase
         .from('tag_config')
-        .select('auto_tags')
+        .select('auto_tags, custom_tags')
         .eq('workspace_id', workspaceId)
-        .single()
+        .maybeSingle()
 
       console.log('[TagManagement] Query result - data:', config, 'error:', configError)
 
       if (configError) {
         if (configError.code === 'PGRST116') {
           console.log('[TagManagement] No tag_config found for workspace (new workspace) - this is OK')
+        } else if (
+          configError.code === '42703' || // PostgreSQL: undefined column
+          configError.code === '400' || 
+          configError.message?.includes('custom_tags') || 
+          configError.message?.includes('column') ||
+          configError.message?.includes('does not exist')
+        ) {
+          // custom_tags column doesn't exist - cache this and fetch just auto_tags
+          customTagsColumnExistsRef.current = false
+          console.log('[TagManagement] custom_tags column does not exist (error code:', configError.code, '), fetching just auto_tags')
+          const { data: autoConfig } = await supabase
+            .from('tag_config')
+            .select('auto_tags')
+            .eq('workspace_id', workspaceId)
+            .maybeSingle()
+          
+          if (autoConfig?.auto_tags && Array.isArray(autoConfig.auto_tags)) {
+            autoTags = autoConfig.auto_tags
+            console.log('[TagManagement] ✅ Loaded auto_tags:', autoTags)
+          }
         } else {
           console.error('[TagManagement] Config fetch error:', configError.code, configError.message, configError)
         }
-      } else {
-        console.log('[TagManagement] Config fetched successfully:', JSON.stringify(config, null, 2))
-        
-        if (config?.auto_tags && Array.isArray(config.auto_tags)) {
+      } else if (config) {
+        if (config.auto_tags && Array.isArray(config.auto_tags)) {
           autoTags = config.auto_tags
           console.log('[TagManagement] ✅ Loaded auto_tags:', autoTags)
-        } else {
-          console.warn('[TagManagement] ⚠️ auto_tags is null/undefined/not an array')
+        }
+        
+        if (config.custom_tags && Array.isArray(config.custom_tags)) {
+          customTags = config.custom_tags
+          console.log('[TagManagement] ✅ Loaded custom_tags:', customTags)
+          // Column exists - cache it
+          customTagsColumnExistsRef.current = true
         }
       }
 
-      // Combine used tags from assets AND auto_tags config
-      // Tags from assets will persist, and auto_tags ensures AI-enabled tags show even if unused
+      // Combine used tags from assets, custom_tags (user-created tags), and auto_tags config
+      // Tags from assets will persist, custom_tags ensures user-created tags show even if unused,
+      // and auto_tags ensures AI-enabled tags show even if unused
       const allTags = new Set([
         ...tagCounts.keys(),      // Tags currently used in assets
+        ...customTags,            // User-created tags (may not be used yet)
         ...autoTags,              // Tags with AI enabled (may not be used yet)
       ])
       console.log('[TagManagement] All unique tags (from assets + custom_tags + auto_tags):', Array.from(allTags))
@@ -237,54 +274,97 @@ export default function TagsPage() {
 
       if (!activeWorkspaceId) throw new Error('No active workspace')
 
-      const { data: existingConfig } = await supabase
-        .from('tag_config')
-        .select('auto_tags')
-        .eq('workspace_id', activeWorkspaceId)
-        .single()
-
-      const currentAutoTags = existingConfig?.auto_tags && Array.isArray(existingConfig.auto_tags) 
-        ? existingConfig.auto_tags 
-        : []
-
-      // Note: New tags are NOT added to auto_tags by default (user must enable AI manually)
-      // This matches mobile app behavior where new tags have isAutoTag: false
-      // Tags will persist because they're used in assets
-
-      const { error } = await supabase
-        .from('tag_config')
-        .upsert(
-          { 
-            workspace_id: activeWorkspaceId, 
-            auto_tags: currentAutoTags,
-          },
-          { onConflict: 'workspace_id' }
-        )
-
-      if (error) {
-        const insertResult = await supabase
+      // Get existing custom_tags to append new tag
+      // Only query if we haven't confirmed the column doesn't exist
+      let currentCustomTags: string[] = []
+      
+      if (customTagsColumnExistsRef.current !== false) {
+        // Try fetching custom_tags (like mobile app does)
+        const { data: existingConfig, error: fetchError } = await supabase
           .from('tag_config')
-          .insert({ 
-            workspace_id: activeWorkspaceId, 
-            auto_tags: currentAutoTags,
-          })
-        
-        if (insertResult.error) {
-          if (insertResult.error.code === '23505' || insertResult.error.message?.includes('duplicate')) {
-            const updateResult = await supabase
-              .from('tag_config')
-              .update({ 
-                auto_tags: currentAutoTags,
-              })
-              .eq('workspace_id', activeWorkspaceId)
-            
-            if (updateResult.error) {
-              throw updateResult.error
-            }
-          } else {
-            throw insertResult.error
+          .select('custom_tags')
+          .eq('workspace_id', activeWorkspaceId)
+          .maybeSingle()
+
+        if (existingConfig?.custom_tags && Array.isArray(existingConfig.custom_tags)) {
+          currentCustomTags = existingConfig.custom_tags
+          // Column exists - cache it
+          customTagsColumnExistsRef.current = true
+        } else if (fetchError) {
+          // If error is about missing column, cache it
+          if (
+            fetchError.code === '42703' || // PostgreSQL: undefined column
+            fetchError.code === '400' || 
+            fetchError.message?.includes('custom_tags') || 
+            fetchError.message?.includes('column') ||
+            fetchError.message?.includes('does not exist')
+          ) {
+            customTagsColumnExistsRef.current = false
+            console.log('[TagManagement] custom_tags column does not exist - tag will appear when used in an asset')
           }
         }
+      } else {
+        console.log('[TagManagement] Skipping custom_tags query - column does not exist (cached)')
+      }
+
+      // Add new tag to custom_tags (try optimistically - if column doesn't exist, we'll handle the error)
+      // Note: New tags are NOT added to auto_tags by default (user must enable AI manually)
+      // This matches mobile app behavior where new tags have isAutoTag: false
+      const updatedCustomTags = currentCustomTags.includes(tagName)
+        ? currentCustomTags
+        : [...currentCustomTags, tagName]
+
+      // Only try to save to custom_tags if column exists (or we don't know yet)
+      if (customTagsColumnExistsRef.current !== false) {
+        // Match mobile app: upsert ONLY custom_tags (not auto_tags) - simpler and more reliable
+        // Mobile app does: upsert({ workspace_id, custom_tags }, { onConflict: 'workspace_id' })
+        const { error: customTagsError } = await supabase
+          .from('tag_config')
+          .upsert(
+            { 
+              workspace_id: activeWorkspaceId, 
+              custom_tags: updatedCustomTags 
+            }, 
+            { onConflict: 'workspace_id' }
+          )
+
+        if (customTagsError) {
+          // Check if error is due to missing custom_tags column
+          const isColumnMissingError = 
+            customTagsError.code === '42703' || // PostgreSQL: undefined column
+            customTagsError.code === '400' || 
+            customTagsError.message?.includes('custom_tags') || 
+            customTagsError.message?.includes('column') ||
+            customTagsError.message?.includes('does not exist')
+          
+          if (isColumnMissingError) {
+            // custom_tags column doesn't exist - cache this
+            customTagsColumnExistsRef.current = false
+            console.log('[TagManagement] ⚠️ custom_tags column does not exist - tag will appear once used in an asset')
+            // Don't throw error - tag creation "succeeds" but won't persist until used
+          } else {
+            // Some other error - try update as fallback (like mobile app does)
+            const { error: updateError } = await supabase
+              .from('tag_config')
+              .update({ custom_tags: updatedCustomTags })
+              .eq('workspace_id', activeWorkspaceId)
+            
+            if (updateError) {
+              throw updateError
+            } else {
+              customTagsColumnExistsRef.current = true
+              console.log('[TagManagement] ✅ Tag created successfully and saved to custom_tags:', tagName)
+            }
+          }
+        } else {
+          // Success! Tag saved to custom_tags
+          // Update cache to reflect that column exists
+          customTagsColumnExistsRef.current = true
+          console.log('[TagManagement] ✅ Tag created successfully and saved to custom_tags:', tagName)
+        }
+      } else {
+        // Column doesn't exist - tag will appear when used in an asset
+        console.log('[TagManagement] ⚠️ custom_tags column does not exist - tag will appear once used in an asset')
       }
     },
     onSuccess: () => {
@@ -292,6 +372,20 @@ export default function TagsPage() {
       queryClient.invalidateQueries({ queryKey: ['availableTags'] })
       setNewTagName('')
       setShowNewTagDialog(false)
+      // Show success message
+      setToast({
+        message: 'Tag created successfully',
+        type: 'success',
+      })
+      setTimeout(() => setToast(null), 3000)
+    },
+    onError: (error: any) => {
+      console.error('[TagManagement] Tag creation failed:', error)
+      setToast({
+        message: `Failed to create tag: ${error.message || 'Unknown error'}`,
+        type: 'error',
+      })
+      setTimeout(() => setToast(null), 4000)
     },
   })
 
@@ -328,27 +422,93 @@ export default function TagsPage() {
         await Promise.all(updates)
       }
 
-      // Update tag_config: rename in auto_tags
-      const { data: config } = await supabase
+      // Update tag_config: rename in auto_tags and custom_tags
+      let customTagsColumnExists = false
+      
+      // First fetch auto_tags (this column definitely exists)
+      const { data: config, error: configError } = await supabase
         .from('tag_config')
         .select('auto_tags')
         .eq('workspace_id', activeWorkspaceId)
-        .single()
+        .maybeSingle()
 
       if (config) {
         const updatedAutoTags = config.auto_tags && Array.isArray(config.auto_tags)
           ? config.auto_tags.map((tag: string) => tag === oldName ? newName : tag)
           : []
-
-        await supabase
-          .from('tag_config')
-          .upsert(
-            {
-              workspace_id: activeWorkspaceId,
-              auto_tags: updatedAutoTags,
-            },
-            { onConflict: 'workspace_id' }
+        
+        // Try to fetch and update custom_tags separately (don't fail if column doesn't exist)
+        // Skip query if we already know the column doesn't exist (cached as false)
+        // Only query if we know it exists (true)
+        let updatedCustomTags: string[] = []
+        if (customTagsColumnExistsRef.current !== false) {
+          // NOTE: Supabase queries return { data, error }, they don't throw exceptions
+          const { data: customTagsConfig, error: customTagsError } = await supabase
+            .from('tag_config')
+            .select('custom_tags')
+            .eq('workspace_id', activeWorkspaceId)
+            .maybeSingle()
+          
+          // Check if error is due to missing column (400 Bad Request)
+          const isColumnMissingError = customTagsError && (
+            customTagsError.code === '400' ||
+            customTagsError.message?.includes('400') ||
+            customTagsError.message?.includes('custom_tags') ||
+            customTagsError.code === '42703' ||
+            (customTagsError.message?.includes('column') && customTagsError.message?.includes('does not exist'))
           )
+          
+          if (isColumnMissingError) {
+            // custom_tags column doesn't exist - cache this to avoid future queries
+            customTagsColumnExistsRef.current = false
+            customTagsColumnExists = false
+          } else if (customTagsConfig && 'custom_tags' in customTagsConfig) {
+            customTagsColumnExistsRef.current = true
+            customTagsColumnExists = true
+            updatedCustomTags = customTagsConfig.custom_tags && Array.isArray(customTagsConfig.custom_tags)
+              ? customTagsConfig.custom_tags.map((tag: string) => tag === oldName ? newName : tag)
+              : []
+          } else if (customTagsError) {
+            console.warn('[TagManagement] Error fetching custom_tags:', customTagsError)
+            customTagsColumnExists = false
+          }
+        } else {
+          // Column doesn't exist (cached), skip query
+          customTagsColumnExists = false
+        }
+
+        // Prepare upsert data - only include custom_tags if column exists
+        const upsertData: any = {
+          workspace_id: activeWorkspaceId,
+          auto_tags: updatedAutoTags,
+        }
+        
+        if (customTagsColumnExists) {
+          upsertData.custom_tags = updatedCustomTags
+        }
+
+        // Try to save both, but handle gracefully if custom_tags column doesn't exist
+        const { error: upsertError } = await supabase
+          .from('tag_config')
+          .upsert(upsertData, { onConflict: 'workspace_id' })
+        
+        // If upsert fails due to custom_tags column (400 error), try with just auto_tags
+        if (upsertError && (
+          upsertError.code === '400' || 
+          upsertError.message?.includes('400') ||
+          (upsertError.message?.includes('custom_tags') && customTagsColumnExists) || 
+          upsertError.code === '42703'
+        )) {
+          await supabase
+            .from('tag_config')
+            .upsert(
+              {
+                workspace_id: activeWorkspaceId,
+                auto_tags: updatedAutoTags,
+              },
+              { onConflict: 'workspace_id' }
+            )
+        }
       }
     },
     onSuccess: () => {
@@ -370,6 +530,7 @@ export default function TagsPage() {
 
       if (!activeWorkspaceId) throw new Error('No active workspace')
 
+      // Remove tag from all assets
       const { data: assets } = await supabase
         .from('assets')
         .select('id, tags')
@@ -377,7 +538,7 @@ export default function TagsPage() {
         .is('deleted_at', null)
         .contains('tags', [tagName])
 
-      if (assets) {
+      if (assets && assets.length > 0) {
         const updates = assets.map((asset) => {
           const updatedTags = (asset.tags || []).filter((tag: string) => tag !== tagName)
           return supabase
@@ -389,32 +550,100 @@ export default function TagsPage() {
         await Promise.all(updates)
       }
 
-      // Remove tag from tag_config (auto_tags)
-      const { data: config } = await supabase
+      // Remove tag from tag_config (auto_tags and custom_tags)
+      // First fetch auto_tags (this column definitely exists)
+      const { data: config, error: configError } = await supabase
         .from('tag_config')
         .select('auto_tags')
         .eq('workspace_id', activeWorkspaceId)
-        .single()
+        .maybeSingle()
 
       if (config) {
         const updatedAutoTags = config.auto_tags && Array.isArray(config.auto_tags)
           ? config.auto_tags.filter((tag: string) => tag !== tagName)
           : []
         
-        const { error: configError } = await supabase
-          .from('tag_config')
-          .upsert(
-            { 
-              workspace_id: activeWorkspaceId, 
-              auto_tags: updatedAutoTags,
-            },
-            { onConflict: 'workspace_id' }
+        // Try to fetch and update custom_tags separately (don't fail if column doesn't exist)
+        let updatedCustomTags: string[] = []
+        let customTagsColumnExists = false
+        
+        if (customTagsColumnExistsRef.current !== false) {
+          const { data: customTagsConfig, error: customTagsError } = await supabase
+            .from('tag_config')
+            .select('custom_tags')
+            .eq('workspace_id', activeWorkspaceId)
+            .maybeSingle()
+          
+          // Check if error is due to missing column
+          const isColumnMissingError = customTagsError && (
+            customTagsError.code === '42703' ||
+            customTagsError.code === '400' ||
+            customTagsError.message?.includes('custom_tags') ||
+            customTagsError.message?.includes('column') ||
+            customTagsError.message?.includes('does not exist')
           )
+          
+          if (isColumnMissingError) {
+            customTagsColumnExistsRef.current = false
+            customTagsColumnExists = false
+          } else if (customTagsConfig && 'custom_tags' in customTagsConfig) {
+            customTagsColumnExistsRef.current = true
+            customTagsColumnExists = true
+            updatedCustomTags = customTagsConfig.custom_tags && Array.isArray(customTagsConfig.custom_tags)
+              ? customTagsConfig.custom_tags.filter((tag: string) => tag !== tagName)
+              : []
+          }
+        } else {
+          customTagsColumnExists = false
+        }
+        
+        // Prepare upsert data - only include custom_tags if column exists
+        const upsertData: any = {
+          workspace_id: activeWorkspaceId,
+          auto_tags: updatedAutoTags,
+        }
+        
+        if (customTagsColumnExists) {
+          upsertData.custom_tags = updatedCustomTags
+        }
+        
+        const { error: upsertError } = await supabase
+          .from('tag_config')
+          .upsert(upsertData, { onConflict: 'workspace_id' })
 
-        if (configError) {
-          console.error('[TagsPage] Failed to remove tag from tag_config:', configError)
+        // If upsert fails due to custom_tags column, try with just auto_tags
+        if (upsertError && (
+          upsertError.code === '42703' ||
+          upsertError.code === '400' ||
+          (upsertError.message?.includes('custom_tags') && customTagsColumnExists)
+        )) {
+          await supabase
+            .from('tag_config')
+            .upsert(
+              { 
+                workspace_id: activeWorkspaceId, 
+                auto_tags: updatedAutoTags,
+              },
+              { onConflict: 'workspace_id' }
+            )
+        } else if (upsertError) {
+          console.error('[TagsPage] Failed to remove tag from tag_config:', upsertError)
         }
       }
+    },
+    onSuccess: () => {
+      // Invalidate and refetch all related queries to refresh data (matches library/stories delete pattern)
+      queryClient.invalidateQueries({ queryKey: ['tags', activeWorkspaceId] })
+      queryClient.invalidateQueries({ queryKey: ['assets'] })
+      queryClient.invalidateQueries({ queryKey: ['availableTags'] })
+      
+      // Explicitly refetch tags to update UI immediately
+      queryClient.refetchQueries({ queryKey: ['tags', activeWorkspaceId] })
+    },
+    onError: (error: any) => {
+      console.error('[TagsPage] Delete tag failed:', error)
+      // Invalidate queries to ensure UI is in sync
+      queryClient.invalidateQueries({ queryKey: ['tags', activeWorkspaceId] })
     },
   })
 
@@ -449,36 +678,37 @@ export default function TagsPage() {
     setDeleteProgress({ current: 0, total: 1 })
 
     try {
-      queryClient.setQueryData(['tags'], (oldData: TagConfig[] | undefined) => {
-        if (!oldData) return oldData
-        return oldData.filter((tag) => tag.name !== deleteTagName)
-      })
-
+      // Store for undo (if needed)
       setDeletedTagForUndo(tagToDelete)
       setDeletedTagName(tagToDelete.name)
 
+      // Delete the tag - mutation handles query invalidation on success
       await deleteTagMutation.mutateAsync(deleteTagName)
       setDeleteProgress({ current: 1, total: 1 })
 
-      setShowDeleteSuccess(true)
+      // Close delete dialog immediately
+      setDeleteTagName(null)
+      setIsDeleting(false)
 
+      // Show success toast (matches library/stories delete pattern)
+      setShowDeleteSuccess(true)
+      
+      // Auto-dismiss success notification after 3 seconds (matches library pattern)
       setTimeout(() => {
         setShowDeleteSuccess(false)
         setDeletedTagForUndo(null)
-      }, 5000)
-
-      queryClient.invalidateQueries({ queryKey: ['tags', activeWorkspaceId] })
-      queryClient.invalidateQueries({ queryKey: ['assets'] })
-      queryClient.invalidateQueries({ queryKey: ['availableTags'] })
+      }, 3000)
 
     } catch (error) {
       console.error('[TagsPage] Delete failed:', error)
-      queryClient.invalidateQueries({ queryKey: ['tags'] })
-      alert('Failed to delete tag. Please try again.')
-    } finally {
       setIsDeleting(false)
+      setToast({
+        message: 'Failed to delete tag. Please try again.',
+        type: 'error',
+      })
+      setTimeout(() => setToast(null), 4000)
+    } finally {
       setDeleteProgress({ current: 0, total: 0 })
-      setDeleteTagName(null)
     }
   }
 
@@ -587,11 +817,16 @@ export default function TagsPage() {
         .from('tag_config')
         .select('auto_tags')
         .eq('workspace_id', activeWorkspaceId)
-        .single()
+        .maybeSingle()
 
       if (verifyError) {
         console.error('[TagManagement] ❌ Verify read failed:', verifyError)
         throw new Error('Failed to verify database save')
+      }
+      
+      if (!verifyData) {
+        console.error('[TagManagement] ❌ Verify read returned no data')
+        throw new Error('Failed to verify database save - no data returned')
       }
 
       const savedAutoTags = verifyData?.auto_tags || []
@@ -747,23 +982,69 @@ export default function TagsPage() {
 
   const handleBulkDelete = useCallback(() => {
     if (selectedTags.size === 0) return
-    // For now, show alert - could enhance with bulk delete dialog
-    const confirmDelete = window.confirm(
-      `Delete ${selectedTags.size} tag${selectedTags.size !== 1 ? 's' : ''}? This will remove them from all photos.`
-    )
-    if (confirmDelete) {
-      // Delete each tag
-      Array.from(selectedTags).forEach(tagName => {
-        deleteTagMutation.mutate(tagName)
-      })
+    // Show bulk delete confirmation dialog (matches single delete pattern)
+    setBulkDeleteTags(new Set(selectedTags))
+  }, [selectedTags])
+
+  const confirmBulkDelete = useCallback(async () => {
+    if (bulkDeleteTags.size === 0) return
+
+    const tagsToDelete = Array.from(bulkDeleteTags)
+    setIsDeleting(true)
+    setDeleteProgress({ current: 0, total: tagsToDelete.length })
+
+    try {
+      let successCount = 0
+      let errorCount = 0
+
+      // Delete each tag sequentially
+      for (let i = 0; i < tagsToDelete.length; i++) {
+        try {
+          await deleteTagMutation.mutateAsync(tagsToDelete[i])
+          successCount++
+        } catch (error) {
+          console.error(`[TagsPage] Failed to delete tag ${tagsToDelete[i]}:`, error)
+          errorCount++
+        }
+        setDeleteProgress({ current: i + 1, total: tagsToDelete.length })
+      }
+
+      // Close dialog and clear selection
+      setBulkDeleteTags(new Set())
       setSelectedTags(new Set())
+      setIsDeleting(false)
+
+      // Show success toast
+      if (successCount > 0) {
+        setDeletedTagName(`${successCount} tag${successCount !== 1 ? 's' : ''}`)
+        setShowDeleteSuccess(true)
+        setTimeout(() => {
+          setShowDeleteSuccess(false)
+          setDeletedTagName('')
+        }, 3000)
+      }
+
+      // Show error toast if any failed
+      if (errorCount > 0) {
+        setToast({
+          message: `Failed to delete ${errorCount} tag${errorCount !== 1 ? 's' : ''}. Please try again.`,
+          type: 'error',
+        })
+        setTimeout(() => setToast(null), 4000)
+      }
+
+    } catch (error) {
+      console.error('[TagsPage] Bulk delete failed:', error)
+      setIsDeleting(false)
       setToast({
-        message: `Deleting ${selectedTags.size} tag${selectedTags.size !== 1 ? 's' : ''}...`,
-        type: 'info',
+        message: 'Failed to delete tags. Please try again.',
+        type: 'error',
       })
-      setTimeout(() => setToast(null), 3000)
+      setTimeout(() => setToast(null), 4000)
+    } finally {
+      setDeleteProgress({ current: 0, total: 0 })
     }
-  }, [selectedTags, deleteTagMutation])
+  }, [bulkDeleteTags, deleteTagMutation])
 
   const handleToggleTagSelection = useCallback((tagName: string) => {
     setSelectedTags(prev => {
@@ -1292,6 +1573,37 @@ export default function TagsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Bulk Delete Tags Dialog */}
+      <AlertDialog open={bulkDeleteTags.size > 0 && !isDeleting} onOpenChange={(open) => !open && setBulkDeleteTags(new Set())}>
+        <AlertDialogContent className="sm:max-w-md mx-4 sm:mx-auto">
+          <AlertDialogHeader>
+            <div className="flex items-start sm:items-center gap-3 sm:gap-4 mb-2">
+              <div className="h-10 w-10 sm:h-12 sm:w-12 rounded-xl bg-red-50 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="h-5 w-5 sm:h-6 sm:w-6 text-red-600" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <AlertDialogTitle className="text-lg sm:text-xl font-semibold text-gray-900">
+                  Delete {bulkDeleteTags.size} Tag{bulkDeleteTags.size !== 1 ? 's' : ''}?
+                </AlertDialogTitle>
+                <AlertDialogDescription className="text-xs sm:text-sm text-gray-600 mt-2 sm:pl-0">
+                  This will remove {bulkDeleteTags.size === 1 ? 'this tag' : 'these tags'} from all photos. This action cannot be undone.
+                </AlertDialogDescription>
+              </div>
+            </div>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col-reverse sm:flex-row sm:justify-end gap-3 mt-6">
+            <AlertDialogCancel className="mt-0 h-10 px-5 rounded-lg w-full sm:w-auto">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmBulkDelete}
+              className="bg-red-600 hover:bg-red-700 text-white h-10 px-5 rounded-lg font-semibold w-full sm:w-auto"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete {bulkDeleteTags.size} Tag{bulkDeleteTags.size !== 1 ? 's' : ''}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Delete Progress Dialog */}
       {isDeleting && (
         <AlertDialog open={isDeleting}>
@@ -1321,34 +1633,32 @@ export default function TagsPage() {
         </AlertDialog>
       )}
 
-      {/* Delete Success Toast */}
+      {/* Delete Success Toast - Matches library/stories delete pattern */}
       {showDeleteSuccess && (
-        <div className="fixed bottom-4 sm:bottom-6 left-4 right-4 sm:left-auto sm:right-6 z-50 animate-in slide-in-from-bottom-2 fade-in-0 duration-300 max-w-sm sm:max-w-none sm:min-w-[360px]">
-          <div className="rounded-xl border border-gray-200 bg-white shadow-xl p-4">
-            <div className="flex items-start gap-3">
-              <div className="h-10 w-10 rounded-full bg-green-50 flex items-center justify-center flex-shrink-0">
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900">
-                  Tag deleted
-                </p>
-                <p className="text-xs text-gray-600 mt-0.5 break-words">
-                  &quot;{deletedTagName}&quot; has been removed from all photos
-                </p>
-              </div>
-              {deletedTagForUndo && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleUndoDelete}
-                  className="h-8 px-3 text-xs font-medium text-accent hover:text-accent/80 hover:bg-accent/5 flex-shrink-0 rounded-lg"
-                >
-                  <Undo2 className="h-3.5 w-3.5 mr-1.5" />
-                  Undo
-                </Button>
-              )}
+        <div className="fixed left-1/2 top-6 z-50 -translate-x-1/2 animate-in slide-in-from-top-5 fade-in-0">
+          <div className="mx-4 flex items-center gap-3 rounded-2xl bg-white p-4 shadow-lg ring-1 ring-gray-200">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-50">
+              <CheckCircle2 className="h-6 w-6 text-green-600" />
             </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-gray-900">
+                Tag deleted
+              </p>
+              <p className="text-xs text-gray-600 mt-0.5 break-words">
+                &quot;{deletedTagName}&quot; has been removed from all photos
+              </p>
+            </div>
+            {deletedTagForUndo && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleUndoDelete}
+                className="h-8 px-3 text-xs font-medium text-accent hover:text-accent/80 hover:bg-accent/5 flex-shrink-0 rounded-lg"
+              >
+                <Undo2 className="h-3.5 w-3.5 mr-1.5" />
+                Undo
+              </Button>
+            )}
           </div>
         </div>
       )}

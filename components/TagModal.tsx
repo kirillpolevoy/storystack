@@ -7,6 +7,7 @@ import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { Asset, TagVocabulary } from '@/types';
 import { queueAutoTag } from '@/utils/autoTagQueue';
 import { supabase } from '@/lib/supabase';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -33,9 +34,11 @@ type TagModalProps = {
   allAssets?: Asset[];
   onAssetChange?: (asset: Asset) => void;
   autoTaggingAssets?: Set<string>; // Track which assets are currently being tagged
+  onTagsRefreshed?: () => void; // Callback to refresh available tags after creating a new tag
 };
 
-export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTags = [], multipleAssets = [], onDelete, onAutoTagSuccess, allAssets = [], onAssetChange, autoTaggingAssets = new Set() }: TagModalProps) {
+export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTags = [], multipleAssets = [], onDelete, onAutoTagSuccess, allAssets = [], onAssetChange, autoTaggingAssets = new Set(), onTagsRefreshed }: TagModalProps) {
+  const { activeWorkspaceId } = useWorkspace();
   console.log('[TagModal] Component rendering - visible:', visible, 'asset:', asset?.id);
   console.log('[TagModal] Props - allAssets.length:', allAssets.length, 'allAssets IDs:', allAssets.map(a => a.id));
   console.log('[TagModal] Props - onAssetChange:', typeof onAssetChange, 'exists:', !!onAssetChange);
@@ -1072,6 +1075,14 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
   // Track previous asset ID to detect asset changes
   const prevAssetIdForTagsRef = useRef<string | null>(null);
   
+  // Refresh available tags when modal opens to ensure we have latest tags from database
+  useEffect(() => {
+    if (visible && onTagsRefreshed) {
+      // Refresh tags when modal opens to pick up any tags created elsewhere (e.g., web app)
+      onTagsRefreshed();
+    }
+  }, [visible]); // Only when modal visibility changes, not on every render
+
   // Load tags when asset changes - sync with latest tags from asset prop
   useEffect(() => {
     if (asset) {
@@ -1209,19 +1220,75 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
     });
   };
   
-  const handleAddTag = () => {
+  const handleAddTag = async () => {
     const trimmed = newTag.trim();
     if (!trimmed) return;
+    
+    // Check if tag already exists in local tags
+    if (localTags.includes(trimmed)) {
+      return;
+    }
+    
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setLocalTags((prev) => {
-      if (prev.includes(trimmed)) {
-        return prev;
-      }
-      return [...prev, trimmed];
-    });
+    
+    // Add to local tags immediately for responsive UI
+    setLocalTags((prev) => [...prev, trimmed]);
     setNewTag('');
     Keyboard.dismiss();
     setIsInputFocused(false);
+    
+    // Save to custom_tags in database so it appears in suggested tags
+    if (supabase && activeWorkspaceId) {
+      try {
+        // Load current custom tags
+        const { data: config, error: fetchError } = await supabase
+          .from('tag_config')
+          .select('custom_tags')
+          .eq('workspace_id', activeWorkspaceId)
+          .maybeSingle();
+        
+        let currentCustomTags: string[] = [];
+        if (!fetchError && config && 'custom_tags' in config && Array.isArray((config as any).custom_tags)) {
+          currentCustomTags = (config as any).custom_tags;
+        }
+        
+        // Add new tag if not already present
+        if (!currentCustomTags.includes(trimmed)) {
+          const updatedCustomTags = [...currentCustomTags, trimmed];
+          
+          // Save to database - use type assertion since custom_tags column may not be in types
+          const { error: saveError } = await supabase
+            .from('tag_config')
+            .upsert(
+              { workspace_id: activeWorkspaceId, custom_tags: updatedCustomTags } as any,
+              { onConflict: 'workspace_id' }
+            );
+          
+          if (saveError) {
+            // If upsert fails, try update as fallback
+            if (saveError.code !== '42703' && !saveError.message?.includes('custom_tags')) {
+              const { error: updateError } = await (supabase
+                .from('tag_config') as any)
+                .update({ custom_tags: updatedCustomTags })
+                .eq('workspace_id', activeWorkspaceId);
+              
+              if (updateError) {
+                console.warn('[TagModal] Failed to save custom tag:', updateError);
+              } else {
+                // Success - refresh available tags
+                onTagsRefreshed?.();
+              }
+            }
+          } else {
+            // Success - refresh available tags
+            onTagsRefreshed?.();
+          }
+        }
+      } catch (error) {
+        console.warn('[TagModal] Error saving custom tag:', error);
+        // Don't block UI - tag is already added locally
+      }
+    }
   };
   
 

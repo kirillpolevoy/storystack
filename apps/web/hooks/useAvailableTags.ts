@@ -52,15 +52,23 @@ export function useAvailableTags() {
         }
       })
 
-      // Also include tags from tag_config.auto_tags (even if they have 0 photos)
+      // Also include tags from tag_config.auto_tags and custom_tags (even if they have 0 photos)
       const { data: config } = await supabase
         .from('tag_config')
-        .select('auto_tags')
+        .select('auto_tags, custom_tags')
         .eq('workspace_id', workspaceId)
         .single()
 
       if (config?.auto_tags && Array.isArray(config.auto_tags)) {
         config.auto_tags.forEach((tag: string) => {
+          if (tag && tag.trim()) {
+            allTags.add(tag.trim())
+          }
+        })
+      }
+      
+      if (config?.custom_tags && Array.isArray(config.custom_tags)) {
+        config.custom_tags.forEach((tag: string) => {
           if (tag && tag.trim()) {
             allTags.add(tag.trim())
           }

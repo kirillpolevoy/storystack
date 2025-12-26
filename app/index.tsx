@@ -3244,6 +3244,17 @@ export default function LibraryScreen() {
         onDelete={handleDeleteAsset}
         onAutoTagSuccess={handleManualAutoTagSuccess}
         allAssets={filteredAssets}
+        onTagsRefreshed={async () => {
+          // Refresh available tags when a new tag is created
+          if (activeWorkspaceId) {
+            try {
+              const tags = await getAllAvailableTags(activeWorkspaceId);
+              setAllAvailableTags(tags);
+            } catch (error) {
+              console.error('[LibraryScreen] Failed to refresh available tags:', error);
+            }
+          }
+        }}
         onAssetChange={(newAsset) => {
           setActiveAsset(newAsset);
         }}

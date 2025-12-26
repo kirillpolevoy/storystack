@@ -1287,6 +1287,17 @@ export default function CampaignDetailScreen() {
         onUpdateTags={updateTags}
         allAvailableTags={allAvailableTags}
         allAssets={filteredAssets}
+        onTagsRefreshed={async () => {
+          // Refresh available tags when a new tag is created
+          if (campaign?.workspace_id) {
+            try {
+              const tags = await getAllAvailableTags(campaign.workspace_id);
+              setAllAvailableTags(tags);
+            } catch (error) {
+              console.error('[CampaignDetail] Failed to refresh available tags:', error);
+            }
+          }
+        }}
         onAssetChange={(newAsset) => {
           setActiveAsset(newAsset);
         }}
