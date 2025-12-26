@@ -340,11 +340,21 @@ export default function CampaignDetailScreen() {
     return () => clearInterval(interval);
   }, [campaignId, supabase, autoTaggingAssets, loadCampaign, newlyImportedAssetIds, showRetryNotificationBanner]);
 
+  // Get workspaceId from assets (assets have workspace_id)
+  const workspaceId = useMemo(() => {
+    if (assets.length > 0 && assets[0].workspace_id) {
+      return assets[0].workspace_id;
+    }
+    return null;
+  }, [assets]);
+
   // Load all available tags from tag library
   useEffect(() => {
+    if (!workspaceId) return;
+    
     const loadAvailableTags = async () => {
       try {
-        const tags = await getAllAvailableTags();
+        const tags = await getAllAvailableTags(workspaceId);
         setAllAvailableTags(tags);
       } catch (error) {
         console.error('[CampaignDetail] Failed to load available tags:', error);
@@ -353,14 +363,14 @@ export default function CampaignDetailScreen() {
       }
     };
     loadAvailableTags();
-  }, []);
+  }, [workspaceId]);
 
   // Reload available tags when tag modal opens (to reflect any changes from tag management)
   useEffect(() => {
-    if (isTagModalOpen) {
+    if (isTagModalOpen && workspaceId) {
       const loadAvailableTags = async () => {
         try {
-          const tags = await getAllAvailableTags();
+          const tags = await getAllAvailableTags(workspaceId);
           setAllAvailableTags(tags);
         } catch (error) {
           console.error('[CampaignDetail] Failed to reload available tags:', error);
@@ -369,7 +379,7 @@ export default function CampaignDetailScreen() {
       };
       loadAvailableTags();
     }
-  }, [isTagModalOpen]);
+  }, [isTagModalOpen, workspaceId]);
 
   const processImport = useCallback(async (
     assetsToImport: ImagePickerAsset[],

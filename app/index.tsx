@@ -613,10 +613,10 @@ export default function LibraryScreen() {
 
   // Reload available tags when tag modal opens (to reflect any changes from tag management)
   useEffect(() => {
-    if (isTagModalOpen && session?.user?.id) {
+    if (isTagModalOpen && activeWorkspaceId) {
       const reloadTags = async () => {
         try {
-          const tags = await getAllAvailableTags(session.user.id);
+          const tags = await getAllAvailableTags(activeWorkspaceId);
           setAllAvailableTags(tags);
         } catch (error) {
           console.error('[LibraryScreen] Failed to reload available tags:', error);
@@ -625,7 +625,7 @@ export default function LibraryScreen() {
       };
       reloadTags();
     }
-  }, [isTagModalOpen, session]);
+  }, [isTagModalOpen, activeWorkspaceId]);
 
   const processImport = useCallback(async (
     assetsToImport: ImagePicker.ImagePickerAsset[],

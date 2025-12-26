@@ -1458,13 +1458,13 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                   }}
                   pointerEvents="none"
                 >
-                  {asset?.publicUrl && (
+                  {asset?.publicUrl ? (
                     <Image
                       source={{ uri: asset.publicUrl }}
                       style={{ width: '100%', height: '100%' }}
                       resizeMode="contain"
                     />
-                  )}
+                  ) : null}
                 </Animated.View>
               )}
               
@@ -1485,20 +1485,20 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                     pointerEvents: 'none',
                   }}
                 >
-                  {swipeDirection === 'right' && prevAsset?.publicUrl && (
+                  {swipeDirection === 'right' && prevAsset?.publicUrl ? (
                     <Image
                       source={{ uri: prevAsset.publicUrl }}
                       style={{ width: '100%', height: '100%' }}
                       resizeMode="contain"
                     />
-                  )}
-                  {swipeDirection === 'left' && nextAsset?.publicUrl && (
+                  ) : null}
+                  {swipeDirection === 'left' && nextAsset?.publicUrl ? (
                     <Image
                       source={{ uri: nextAsset.publicUrl }}
                       style={{ width: '100%', height: '100%' }}
                       resizeMode="contain"
                     />
-                  )}
+                  ) : null}
                 </Animated.View>
               )}
             </View>
@@ -1522,13 +1522,13 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                 transform: [{ translateX: photoTranslateX }],
               }}
             >
-              {asset?.publicUrl && (
+              {asset?.publicUrl ? (
                 <Image
                   source={{ uri: asset.publicUrl }}
                   style={{ width: '100%', height: '100%' }}
                   resizeMode="contain"
                 />
-              )}
+              ) : null}
             </Animated.View>
           </View>
         )}
@@ -1559,43 +1559,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
           >
             <MaterialCommunityIcons name="close" size={24} color={isMultiEdit ? "#111827" : "#ffffff"} />
           </TouchableOpacity>
-          
-          {/* Done button - always visible in multi-edit, conditional in single-edit */}
-          {isMultiEdit ? (
-            <TouchableOpacity
-              onPress={() => handleSave(false)} // false = close modal (for multi-edit, this goes back to library)
-              activeOpacity={0.6}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <Text
-                style={{
-                  fontSize: 17,
-                  fontWeight: '600',
-                  color: localTags.length > 0 ? '#b38f5b' : '#9ca3af',
-                }}
-              >
-                Done
-              </Text>
-            </TouchableOpacity>
-          ) : isPanelVisible ? (
-            <TouchableOpacity
-              onPress={() => handleSave(false)}
-              activeOpacity={0.6}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <Text
-                style={{
-                  fontSize: 17,
-                  fontWeight: '600',
-                  color: hasChanges ? '#b38f5b' : '#ffffff',
-                }}
-              >
-                Done
-              </Text>
-            </TouchableOpacity>
-          ) : null}
         </View>
-        )}
         
         {/* Success Banner */}
         {showSuccessMessage && (
@@ -1739,7 +1703,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
         )}
         
         {/* Tag Display & Swipe Up Indicator - Bottom (only show in single-edit mode) */}
-        {!isPanelVisible && asset && !isMultiEdit && (
+        {(!isPanelVisible && asset !== null && asset !== undefined && !isMultiEdit) ? (
           <Animated.View
             style={{
               position: 'absolute',
@@ -1757,81 +1721,97 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
             {/* When panel is dismissed, show savedTags if available (user's saved tags), otherwise asset.tags */}
             {/* This ensures we show the latest user-edited tags, not stale OpenAI tags */}
             <View pointerEvents="none">
-              {((savedTags.length > 0 ? savedTags : asset.tags) ?? []).length > 0 ? (
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    flexWrap: 'wrap',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    maxWidth: SCREEN_WIDTH - 48,
-                    marginBottom: 16,
-                    gap: 6,
-                    paddingHorizontal: 4,
-                  }}
-                >
-                  {(savedTags.length > 0 ? savedTags : (asset.tags ?? [])).map((tag) => (
+              {(() => {
+                // Defensive check: ensure we always have an array
+                const savedTagsArray = Array.isArray(savedTags) ? savedTags : [];
+                const assetTagsArray = Array.isArray(asset?.tags) ? asset.tags : [];
+                const tagsToShow = savedTagsArray.length > 0 ? savedTagsArray : assetTagsArray;
+                const hasTags = tagsToShow.length > 0;
+                
+                if (hasTags) {
+                  return (
                     <View
-                      key={tag}
                       style={{
-                        backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                        borderRadius: 20,
-                        paddingVertical: 10,
-                        paddingHorizontal: 16,
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 4 },
-                        shadowOpacity: 0.15,
-                        shadowRadius: 12,
-                        elevation: 8,
-                        borderWidth: 0.5,
-                        borderColor: 'rgba(0, 0, 0, 0.05)',
+                        flexDirection: 'row',
+                        flexWrap: 'wrap',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        maxWidth: SCREEN_WIDTH - 48,
+                        marginBottom: 16,
+                        gap: 6,
+                        paddingHorizontal: 4,
                       }}
                     >
-                      <Text
-                        style={{
-                          fontSize: 15,
-                          fontWeight: '500',
-                          color: '#111827',
-                          letterSpacing: -0.3,
-                        }}
-                      >
-                        {tag}
-                      </Text>
+                      {tagsToShow.map((tag) => {
+                        // Ensure tag is a string before rendering
+                        const tagString = typeof tag === 'string' ? tag : String(tag);
+                        return (
+                          <View
+                            key={tagString}
+                            style={{
+                              backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                              borderRadius: 20,
+                              paddingVertical: 10,
+                              paddingHorizontal: 16,
+                              shadowColor: '#000',
+                              shadowOffset: { width: 0, height: 4 },
+                              shadowOpacity: 0.15,
+                              shadowRadius: 12,
+                              elevation: 8,
+                              borderWidth: 0.5,
+                              borderColor: 'rgba(0, 0, 0, 0.05)',
+                            }}
+                          >
+                            <Text
+                              style={{
+                                fontSize: 15,
+                                fontWeight: '500',
+                                color: '#111827',
+                                letterSpacing: -0.3,
+                              }}
+                            >
+                              {tagString}
+                            </Text>
+                          </View>
+                        );
+                      })}
                     </View>
-                  ))}
-                </View>
-              ) : (
-                <View
-                  style={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-                    borderRadius: 24,
-                    paddingVertical: 12,
-                    paddingHorizontal: 20,
-                    marginBottom: 16,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    borderWidth: 1,
-                    borderColor: 'rgba(255, 255, 255, 0.2)',
-                  }}
-                >
-                  <MaterialCommunityIcons 
-                    name="tag-outline" 
-                    size={16} 
-                    color="rgba(255, 255, 255, 0.8)" 
-                    style={{ marginRight: 8 }}
-                  />
-                  <Text
+                  );
+                }
+                
+                return (
+                  <View
                     style={{
-                      fontSize: 15,
-                      fontWeight: '500',
-                      color: 'rgba(255, 255, 255, 0.85)',
-                      letterSpacing: -0.2,
+                      backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                      borderRadius: 24,
+                      paddingVertical: 12,
+                      paddingHorizontal: 20,
+                      marginBottom: 16,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      borderWidth: 1,
+                      borderColor: 'rgba(255, 255, 255, 0.2)',
                     }}
                   >
-                    No tags
-                  </Text>
-                </View>
-              )}
+                    <MaterialCommunityIcons 
+                      name="tag-outline" 
+                      size={16} 
+                      color="rgba(255, 255, 255, 0.8)" 
+                      style={{ marginRight: 8 }}
+                    />
+                    <Text
+                      style={{
+                        fontSize: 15,
+                        fontWeight: '500',
+                        color: 'rgba(255, 255, 255, 0.85)',
+                        letterSpacing: -0.2,
+                      }}
+                    >
+                      No tags
+                    </Text>
+                  </View>
+                );
+              })()}
             </View>
             
             {/* Swipe Up Indicator */}
@@ -1908,10 +1888,11 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                 Swipe up for details
               </Text>
             </TouchableOpacity>
-            )}
+          </Animated.View>
+        ) : null}
             
             {/* Auto-tag Status Indicator - Show when actively tagging or pending */}
-            {(autoTaggingAssets.has(asset.id) || asset.auto_tag_status === 'pending') && (
+            {asset && (autoTaggingAssets.has(asset.id) || asset.auto_tag_status === 'pending') ? (
               <View
                 style={{
                   marginTop: 10,
@@ -1936,8 +1917,8 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                   Auto-tagging...
                 </Text>
               </View>
-            )}
-            {asset.auto_tag_status === 'failed' && !autoTaggingAssets.has(asset.id) && (
+            ) : null}
+            {asset && asset.auto_tag_status === 'failed' && !autoTaggingAssets.has(asset.id) ? (
               <TouchableOpacity
                 onPress={handleRetryAutoTag}
                 style={{
@@ -1963,9 +1944,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                   Tagging failed
                 </Text>
               </TouchableOpacity>
-            )}
-          </Animated.View>
-        )}
+            ) : null}
         
         {/* Bottom Panel - Slides up when swiping up */}
         <Animated.View
@@ -1988,39 +1967,11 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
           {/* Panel content */}
           <View
             style={{
-              flexDirection: 'row',
-              justifyContent: 'space-between',
-              alignItems: 'center',
               borderBottomWidth: 1,
               borderBottomColor: '#e5e7eb',
             }}
           >
-              <TouchableOpacity
-                onPress={handleClose}
-                activeOpacity={0.6}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              >
-                <MaterialCommunityIcons name="close" size={24} color="#111827" />
-              </TouchableOpacity>
-              
-              {isPanelVisible && (
-                <TouchableOpacity
-                  onPress={() => handleSave(false)}
-                  activeOpacity={0.6}
-                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                >
-                  <Text
-                    style={{
-                      fontSize: 17,
-                      fontWeight: '600',
-                      color: hasChanges ? '#b38f5b' : '#9ca3af',
-                    }}
-                  >
-                    Done
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
+          </View>
           
           {/* Panel handle indicator - only show in single-edit mode */}
           {!isMultiEdit && (
@@ -2094,7 +2045,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                         )}
                       </View>
                     ))}
-                    {multipleAssets.length > 6 && (
+                    {multipleAssets.length > 6 ? (
                       <View
                         style={{
                           width: (SCREEN_WIDTH - 52) / 6 - 5,
@@ -2109,7 +2060,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                           +{multipleAssets.length - 6}
                         </Text>
                       </View>
-                    )}
+                    ) : null}
                   </View>
                 </View>
               )}
@@ -2198,7 +2149,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                   />
                   
                   {/* Clear button - only show when there's text */}
-                  {location.length > 0 && (
+                  {location.length > 0 ? (
                     <TouchableOpacity
                       onPress={() => setLocation('')}
                       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -2218,11 +2169,11 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                         color="#6b7280" 
                       />
                     </TouchableOpacity>
-                  )}
+                  ) : null}
                 </TouchableOpacity>
                 
                 {/* Helper text for multi-edit */}
-                {isMultiEdit && location && (
+                {isMultiEdit && location.length > 0 && (
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
                     <MaterialCommunityIcons name="information-outline" size={14} color="#6b7280" style={{ marginRight: 6 }} />
                     <Text style={{ fontSize: 13, color: '#6b7280', flex: 1 }}>
@@ -2232,7 +2183,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                 )}
                 
                 {/* Helper text for empty state - subtle guidance */}
-                {!location && !isMultiEdit && (
+                {(!location || location.length === 0) && !isMultiEdit && (
                   <View style={{ 
                     marginTop: 8, 
                     flexDirection: 'row', 
@@ -2251,7 +2202,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
               </View>
               
               {/* Auto-tag / Re-tag Section - Primary action after location */}
-              {asset && (
+              {!!asset && (
                 <View style={{ marginBottom: 32 }}>
                   <TouchableOpacity
                     onPress={handleRetryAutoTag}
@@ -2450,7 +2401,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                       borderColor: isInputFocused ? '#b38f5b' : '#e5e7eb',
                     }}
                   />
-                  {newTag.trim().length > 0 && (
+                  {newTag.trim().length > 0 ? (
                     <TouchableOpacity
                       onPress={handleAddTag}
                       activeOpacity={0.85}
@@ -2466,7 +2417,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
                         Add
                       </Text>
                     </TouchableOpacity>
-                  )}
+                  ) : null}
                 </View>
               </View>
               
@@ -2534,7 +2485,7 @@ export function TagModal({ asset, visible, onClose, onUpdateTags, allAvailableTa
               )}
               
               {/* Delete Button */}
-              {!isMultiEdit && asset && onDelete && (
+              {!isMultiEdit && !!asset && !!onDelete && (
                 <View style={{ marginTop: 40, marginBottom: 20 }}>
                   <TouchableOpacity
                     onPress={handleDelete}

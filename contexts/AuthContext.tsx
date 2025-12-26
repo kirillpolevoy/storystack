@@ -34,34 +34,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     
+    // Helper to detect refresh token errors (suppress from user-facing logs)
+    const isRefreshTokenError = (error: any): boolean => {
+      const errorMessage = error?.message || '';
+      const errorName = error?.name || '';
+      const errorCode = error?.status || error?.code || '';
+      
+      return (
+        errorName === 'AuthApiError' ||
+        errorMessage.includes('Refresh Token') || 
+        errorMessage.includes('refresh_token') ||
+        errorMessage.includes('Invalid Refresh Token') ||
+        errorMessage.includes('refresh token not found') ||
+        errorMessage.includes('Refresh Token Not Found') ||
+        (errorMessage.toLowerCase().includes('refresh') && errorMessage.toLowerCase().includes('token')) ||
+        (errorName === 'AuthApiError' && (errorMessage.toLowerCase().includes('refresh') || errorMessage.toLowerCase().includes('token'))) ||
+        errorCode === 401
+      );
+    };
+    
     supabase.auth.getSession()
       .then(({ data: { session }, error }) => {
         if (error) {
-          // Handle refresh token errors gracefully
-          const errorMessage = error.message || '';
-          const errorName = (error as any)?.name || '';
-          const errorCode = (error as any)?.status || (error as any)?.code || '';
-          
-          // More comprehensive refresh token error detection
-          const isRefreshTokenError = 
-            errorName === 'AuthApiError' ||
-            errorMessage.includes('Refresh Token') || 
-            errorMessage.includes('refresh_token') ||
-            errorMessage.includes('Invalid Refresh Token') ||
-            errorMessage.includes('refresh token not found') ||
-            errorMessage.includes('Refresh Token Not Found') ||
-            errorMessage.toLowerCase().includes('refresh') && errorMessage.toLowerCase().includes('token') ||
-            (errorName === 'AuthApiError' && (errorMessage.toLowerCase().includes('refresh') || errorMessage.toLowerCase().includes('token'))) ||
-            errorCode === 401; // 401 Unauthorized often indicates token issues
-            
-          if (isRefreshTokenError) {
-            console.warn('[AuthContext] Invalid refresh token, clearing session:', { errorMessage, errorName, errorCode });
-            // Clear invalid session from storage and let user sign in again
+          // Handle refresh token errors silently (don't show to users)
+          if (isRefreshTokenError(error)) {
+            // Silently clear invalid session - this is expected when token is expired/missing
             supabase.auth.signOut().catch(() => {
               // Ignore errors during sign out
             });
             setSession(null);
           } else {
+            // Only log non-refresh-token errors
             console.error('[AuthContext] Error getting session:', error);
             setSession(null);
           }
@@ -71,28 +74,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLoading(false);
       })
       .catch((error) => {
-        // Handle AuthApiError specifically
-        const errorMessage = error?.message || '';
-        const errorName = error?.name || '';
-        const errorCode = error?.status || error?.code || '';
-        
-        // More comprehensive refresh token error detection
-        const isRefreshTokenError = 
-          errorName === 'AuthApiError' ||
-          errorMessage.includes('Refresh Token') || 
-          errorMessage.includes('refresh_token') ||
-          errorMessage.includes('Invalid Refresh Token') ||
-          errorMessage.includes('refresh token not found') ||
-          errorMessage.includes('Refresh Token Not Found') ||
-          errorMessage.toLowerCase().includes('refresh') && errorMessage.toLowerCase().includes('token') ||
-          (errorName === 'AuthApiError' && (errorMessage.toLowerCase().includes('refresh') || errorMessage.toLowerCase().includes('token'))) ||
-          errorCode === 401;
-          
-        if (isRefreshTokenError) {
-          console.warn('[AuthContext] Invalid refresh token (catch), clearing session:', { errorMessage, errorName, errorCode });
+        // Handle refresh token errors silently
+        if (isRefreshTokenError(error)) {
+          // Silently clear invalid session - expected behavior
           supabase.auth.signOut().catch(() => {});
           setSession(null);
         } else {
+          // Only log unexpected errors
           console.error('[AuthContext] Unexpected error getting session:', error);
           setSession(null);
         }
@@ -161,7 +149,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const errorName = error?.name || '';
         const errorCode = error?.status || error?.code || '';
         
-        // More comprehensive refresh token error detection
+        // Detect refresh token errors (suppress from user-facing logs)
         const isRefreshTokenError = 
           errorName === 'AuthApiError' ||
           errorMessage.includes('Refresh Token') || 
@@ -169,12 +157,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           errorMessage.includes('Invalid Refresh Token') ||
           errorMessage.includes('refresh token not found') ||
           errorMessage.includes('Refresh Token Not Found') ||
-          errorMessage.toLowerCase().includes('refresh') && errorMessage.toLowerCase().includes('token') ||
+          (errorMessage.toLowerCase().includes('refresh') && errorMessage.toLowerCase().includes('token')) ||
           (errorName === 'AuthApiError' && (errorMessage.toLowerCase().includes('refresh') || errorMessage.toLowerCase().includes('token'))) ||
           errorCode === 401;
           
         if (isRefreshTokenError) {
-          console.warn('[AuthContext] Refresh token error in auth state change:', { errorMessage, errorName, errorCode });
+          // Silently handle refresh token errors - expected when token is expired/missing
           try {
             await supabase.auth.signOut();
           } catch (signOutError) {
@@ -182,6 +170,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
           setSession(null);
         } else {
+          // Only log non-refresh-token errors
           console.error('[AuthContext] Error in auth state change:', error);
         }
         setLoading(false);
