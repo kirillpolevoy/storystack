@@ -212,6 +212,7 @@ serve(async (req) => {
       try {
         const resendApiKey = Deno.env.get('RESEND_API_KEY')
         const siteUrl = Deno.env.get('SITE_URL') || 'https://storystackstudios.com'
+        const logoUrl = `${siteUrl}/logo.png`
         const inviteLink = `${siteUrl}/signup?invite=${invitation.id}`
         const workspaceName = workspace?.name || 'a workspace'
         const inviterEmail = inviter?.user?.email || 'a team member'
@@ -251,42 +252,116 @@ serve(async (req) => {
                   <meta charset="utf-8">
                   <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 </head>
-                <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-                  <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
-                    <h1 style="color: white; margin: 0; font-size: 28px;">StoryStack</h1>
-                  </div>
-                  <div style="background: #ffffff; padding: 40px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
-                    <h2 style="color: #111827; margin-top: 0;">You've been invited!</h2>
-                    <p style="font-size: 16px; color: #4b5563;">
-                      <strong>${inviterName}</strong> has invited you to join <strong>${workspaceName}</strong> on StoryStack.
-                    </p>
-                    <p style="font-size: 16px; color: #4b5563;">
-                      You'll have <strong>${role}</strong> access to the workspace.
-                    </p>
-                    <div style="text-align: center; margin: 40px 0;">
-                      <a href="${inviteLink}" style="display: inline-block; background: #667eea; color: white; text-decoration: none; padding: 14px 28px; border-radius: 6px; font-weight: 600; font-size: 16px;">
-                        Accept Invitation
-                      </a>
-                    </div>
-                    <p style="font-size: 14px; color: #6b7280; margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
-                      If the button doesn't work, copy and paste this link into your browser:<br>
-                      <a href="${inviteLink}" style="color: #667eea; word-break: break-all;">${inviteLink}</a>
-                    </p>
-                    <p style="font-size: 12px; color: #9ca3af; margin-top: 30px;">
-                      This invitation will expire in 30 days. If you didn't expect this invitation, you can safely ignore this email.
-                    </p>
-                  </div>
+                <body style="margin: 0; padding: 0; background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;">
+                  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #ffffff;">
+                    <tr>
+                      <td align="center" style="padding: 0;">
+                        <!-- Main Container -->
+                        <table role="presentation" style="max-width: 600px; width: 100%; border-collapse: collapse; margin: 0 auto;">
+                          <!-- Spacer Top -->
+                          <tr>
+                            <td style="padding: 64px 24px 0 24px;">
+                              <!-- Logo -->
+                              <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                  <td style="padding-bottom: 48px;">
+                                    <table role="presentation" style="border-collapse: collapse;">
+                                      <tr>
+                                        <td style="padding-right: 12px; vertical-align: middle;">
+                                          <img src="${logoUrl}" alt="StoryStack" width="32" height="32" style="display: block; width: 32px; height: 32px;" />
+                                        </td>
+                                        <td style="vertical-align: middle;">
+                                          <div style="font-size: 24px; font-weight: 600; color: #111827; letter-spacing: -0.5px;">StoryStack</div>
+                                        </td>
+                                      </tr>
+                                    </table>
+                                  </td>
+                                </tr>
+                              </table>
+                              
+                              <!-- Main Content -->
+                              <h1 style="margin: 0 0 16px 0; color: #111827; font-size: 32px; font-weight: 600; line-height: 1.2; letter-spacing: -0.8px;">
+                                You're invited to join<br>${workspaceName}
+                              </h1>
+                              
+                              <p style="margin: 0 0 32px 0; font-size: 17px; line-height: 1.6; color: #484848; font-weight: 400;">
+                                ${inviterName} invited you to collaborate on StoryStack. You'll be able to organize, tag, and share your visual content together.
+                              </p>
+                              
+                              <!-- Role Badge -->
+                              <table role="presentation" style="width: 100%; border-collapse: collapse; margin-bottom: 40px;">
+                                <tr>
+                                  <td>
+                                    <div style="display: inline-block; background-color: #f7f7f7; border-radius: 8px; padding: 8px 16px; font-size: 14px; color: #484848; font-weight: 500;">
+                                      ${role.charAt(0).toUpperCase() + role.slice(1)} access
+                                    </div>
+                                  </td>
+                                </tr>
+                              </table>
+                              
+                              <!-- CTA Button -->
+                              <table role="presentation" style="width: 100%; border-collapse: collapse; margin-bottom: 48px;">
+                                <tr>
+                                  <td>
+                                    <a href="${inviteLink}" style="display: inline-block; background-color: #b38f5b; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 8px; font-weight: 600; font-size: 16px; letter-spacing: -0.2px; text-align: center; min-width: 200px;">
+                                      Accept invitation
+                                    </a>
+                                  </td>
+                                </tr>
+                              </table>
+                              
+                              <!-- Divider -->
+                              <div style="border-top: 1px solid #ebebeb; margin: 48px 0;"></div>
+                              
+                              <!-- Fallback Link -->
+                              <p style="margin: 0 0 12px 0; font-size: 14px; line-height: 1.5; color: #717171;">
+                                Or copy and paste this link:
+                              </p>
+                              <p style="margin: 0 0 48px 0; font-size: 13px; line-height: 1.6; word-break: break-all;">
+                                <a href="${inviteLink}" style="color: #b38f5b; text-decoration: underline;">${inviteLink}</a>
+                              </p>
+                              
+                              <!-- Footer Note -->
+                              <p style="margin: 0; font-size: 13px; line-height: 1.6; color: #717171; padding-top: 32px; border-top: 1px solid #ebebeb;">
+                                This invitation expires in 30 days. If you didn't expect this invitation, you can safely ignore this email.
+                              </p>
+                            </td>
+                          </tr>
+                          
+                          <!-- Bottom Spacer -->
+                          <tr>
+                            <td style="padding: 48px 24px 64px 24px;">
+                              <!-- Footer -->
+                              <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                  <td align="center" style="padding-top: 32px; border-top: 1px solid #ebebeb;">
+                                    <p style="margin: 0; font-size: 12px; color: #b0b0b0; line-height: 1.5;">
+                                      © ${new Date().getFullYear()} StoryStack
+                                    </p>
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
                 </body>
               </html>
             `,
             text: `
-You've been invited to join ${workspaceName} on StoryStack!
+You're invited to join ${workspaceName}
 
-${inviterName} has invited you to join ${workspaceName}. You'll have ${role} access to the workspace.
+${inviterName} invited you to collaborate on StoryStack. You'll be able to organize, tag, and share your visual content together.
+
+You'll have ${role} access to the workspace.
 
 Accept your invitation: ${inviteLink}
 
-This invitation will expire in 30 days. If you didn't expect this invitation, you can safely ignore this email.
+This invitation expires in 30 days. If you didn't expect this invitation, you can safely ignore this email.
+
+© ${new Date().getFullYear()} StoryStack
             `.trim(),
           }
 
@@ -431,6 +506,7 @@ This invitation will expire in 30 days. If you didn't expect this invitation, yo
 
       const resendApiKey = Deno.env.get('RESEND_API_KEY')
       const siteUrl = Deno.env.get('SITE_URL') || 'https://storystackstudios.com'
+      const logoUrl = `${siteUrl}/logo.png`
       const workspaceName = workspace?.name || 'a workspace'
       const inviterEmail = inviter?.user?.email || 'a team member'
       const inviterName = inviter?.user?.user_metadata?.full_name || inviterEmail.split('@')[0]
@@ -460,28 +536,104 @@ This invitation will expire in 30 days. If you didn't expect this invitation, yo
                   <meta charset="utf-8">
                   <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 </head>
-                <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-                  <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
-                    <h1 style="color: white; margin: 0; font-size: 28px;">StoryStack</h1>
-                  </div>
-                  <div style="background: #ffffff; padding: 40px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
-                    <h2 style="color: #111827; margin-top: 0;">You've been added to a workspace!</h2>
-                    <p style="font-size: 16px; color: #4b5563;">
-                      <strong>${inviterName}</strong> has added you to <strong>${workspaceName}</strong> on StoryStack.
-                    </p>
-                    <p style="font-size: 16px; color: #4b5563;">
-                      You now have <strong>${role}</strong> access to the workspace.
-                    </p>
-                    <div style="text-align: center; margin: 40px 0;">
-                      <a href="${siteUrl}/app/library" style="display: inline-block; background: #667eea; color: white; text-decoration: none; padding: 14px 28px; border-radius: 6px; font-weight: 600; font-size: 16px;">
-                        Open Workspace
-                      </a>
-                    </div>
-                  </div>
+                <body style="margin: 0; padding: 0; background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;">
+                  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #ffffff;">
+                    <tr>
+                      <td align="center" style="padding: 0;">
+                        <!-- Main Container -->
+                        <table role="presentation" style="max-width: 600px; width: 100%; border-collapse: collapse; margin: 0 auto;">
+                          <!-- Spacer Top -->
+                          <tr>
+                            <td style="padding: 64px 24px 0 24px;">
+                              <!-- Logo -->
+                              <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                  <td style="padding-bottom: 48px;">
+                                    <table role="presentation" style="border-collapse: collapse;">
+                                      <tr>
+                                        <td style="padding-right: 12px; vertical-align: middle;">
+                                          <img src="${logoUrl}" alt="StoryStack" width="32" height="32" style="display: block; width: 32px; height: 32px;" />
+                                        </td>
+                                        <td style="vertical-align: middle;">
+                                          <div style="font-size: 24px; font-weight: 600; color: #111827; letter-spacing: -0.5px;">StoryStack</div>
+                                        </td>
+                                      </tr>
+                                    </table>
+                                  </td>
+                                </tr>
+                              </table>
+                              
+                              <!-- Main Content -->
+                              <h1 style="margin: 0 0 16px 0; color: #111827; font-size: 32px; font-weight: 600; line-height: 1.2; letter-spacing: -0.8px;">
+                                You've been added to<br>${workspaceName}
+                              </h1>
+                              
+                              <p style="margin: 0 0 32px 0; font-size: 17px; line-height: 1.6; color: #484848; font-weight: 400;">
+                                ${inviterName} added you to this workspace. You can now organize, tag, and collaborate on visual content together.
+                              </p>
+                              
+                              <!-- Role Badge -->
+                              <table role="presentation" style="width: 100%; border-collapse: collapse; margin-bottom: 40px;">
+                                <tr>
+                                  <td>
+                                    <div style="display: inline-block; background-color: #f7f7f7; border-radius: 8px; padding: 8px 16px; font-size: 14px; color: #484848; font-weight: 500;">
+                                      ${role.charAt(0).toUpperCase() + role.slice(1)} access
+                                    </div>
+                                  </td>
+                                </tr>
+                              </table>
+                              
+                              <!-- CTA Button -->
+                              <table role="presentation" style="width: 100%; border-collapse: collapse; margin-bottom: 48px;">
+                                <tr>
+                                  <td>
+                                    <a href="${siteUrl}/app/library" style="display: inline-block; background-color: #b38f5b; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 8px; font-weight: 600; font-size: 16px; letter-spacing: -0.2px; text-align: center; min-width: 200px;">
+                                      Open workspace
+                                    </a>
+                                  </td>
+                                </tr>
+                              </table>
+                              
+                              <!-- Footer Note -->
+                              <p style="margin: 0; font-size: 13px; line-height: 1.6; color: #717171; padding-top: 32px; border-top: 1px solid #ebebeb;">
+                                You can access this workspace anytime from your StoryStack dashboard.
+                              </p>
+                            </td>
+                          </tr>
+                          
+                          <!-- Bottom Spacer -->
+                          <tr>
+                            <td style="padding: 48px 24px 64px 24px;">
+                              <!-- Footer -->
+                              <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                  <td align="center" style="padding-top: 32px; border-top: 1px solid #ebebeb;">
+                                    <p style="margin: 0; font-size: 12px; color: #b0b0b0; line-height: 1.5;">
+                                      © ${new Date().getFullYear()} StoryStack
+                                    </p>
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
                 </body>
               </html>
             `,
-            text: `You've been added to ${workspaceName} on StoryStack!\n\n${inviterName} has added you to ${workspaceName}. You now have ${role} access.\n\nOpen workspace: ${siteUrl}/app/library`,
+            text: `You've been added to ${workspaceName}
+
+${inviterName} added you to this workspace. You can now organize, tag, and collaborate on visual content together.
+
+You have ${role} access.
+
+Open workspace: ${siteUrl}/app/library
+
+You can access this workspace anytime from your StoryStack dashboard.
+
+© ${new Date().getFullYear()} StoryStack`,
           }),
         })
 

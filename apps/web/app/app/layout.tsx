@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { Sidebar } from '@/components/app/Sidebar'
 import { MobileMenuProvider } from '@/components/app/MobileMenuProvider'
+import { Toaster } from '@/components/ui/toaster'
 
 // Force dynamic rendering for all app routes
 export const dynamic = 'force-dynamic'
@@ -40,6 +41,7 @@ export default async function AppLayout({
           <Sidebar />
           <main className="flex-1 overflow-hidden bg-background lg:ml-0" style={{ backgroundColor: '#f9fafb' }}>{children}</main>
         </div>
+        <Toaster />
       </MobileMenuProvider>
     )
   } catch (error) {

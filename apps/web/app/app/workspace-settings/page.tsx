@@ -34,6 +34,7 @@ import {
 } from '@/components/ui/dialog'
 import { MobileMenuButton } from '@/components/app/MobileMenuButton'
 import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
+import { useToast } from '@/components/ui/use-toast'
 
 interface Workspace {
   id: string
@@ -492,10 +493,12 @@ function WorkspaceMembersSection({
 }) {
   const supabase = createClient()
   const queryClient = useQueryClient()
+  const { toast } = useToast()
   const [newMemberEmail, setNewMemberEmail] = useState('')
   const [isAddingMember, setIsAddingMember] = useState(false)
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [memberToRemove, setMemberToRemove] = useState<WorkspaceMember | null>(null)
+  const [isRemovingMember, setIsRemovingMember] = useState(false)
   const [memberToEditRole, setMemberToEditRole] = useState<WorkspaceMember | null>(null)
   const [newRole, setNewRole] = useState<'admin' | 'editor' | 'viewer'>('editor')
 
@@ -621,19 +624,33 @@ function WorkspaceMembersSection({
       setShowAddDialog(false)
       setNewMemberEmail('')
       
-      if (result.invitation) {
-        alert('Invitation sent successfully!')
-      } else if (result.member) {
-        alert('Member added successfully!')
-      }
+      // Always show success toast when request succeeds
+      // Small delay to ensure dialog is closed before showing toast
+      setTimeout(() => {
+        console.log('[WorkspaceSettings] Member added successfully, showing toast', { result })
+        toast({
+          variant: 'success',
+          title: result.invitation ? 'Invitation sent' : 'Member added',
+          description: result.invitation 
+            ? 'The invitation has been sent successfully.' 
+            : 'The member has been added to the workspace.',
+        })
+      }, 100)
     } catch (error: any) {
-      alert(error.message || 'Failed to add member')
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: error.message || 'Failed to add member',
+      })
     } finally {
       setIsAddingMember(false)
     }
   }
 
   const handleRemoveMember = async (member: WorkspaceMember) => {
+    if (!member) return
+    
+    setIsRemovingMember(true)
     try {
       const { error } = await supabase
         .from('workspace_members')
@@ -642,10 +659,30 @@ function WorkspaceMembersSection({
         .eq('user_id', member.user_id)
 
       if (error) throw error
-      queryClient.invalidateQueries({ queryKey: ['workspace-members', workspaceId] })
+      
+      await queryClient.invalidateQueries({ queryKey: ['workspace-members', workspaceId] })
+      
+      const memberEmail = member.email || `User ${member.user_id.substring(0, 8)}...`
       setMemberToRemove(null)
-    } catch (error) {
-      alert('Failed to remove member')
+      
+      // Show success toast
+      console.log('[WorkspaceSettings] Member removed successfully, showing toast for:', memberEmail)
+      setTimeout(() => {
+        toast({
+          variant: 'success',
+          title: 'Member removed',
+          description: `${memberEmail} has been removed from the workspace.`,
+        })
+      }, 100)
+    } catch (error: any) {
+      console.error('[WorkspaceSettings] Error removing member:', error)
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: error.message || 'Failed to remove member',
+      })
+    } finally {
+      setIsRemovingMember(false)
     }
   }
 
@@ -965,21 +1002,48 @@ function WorkspaceMembersSection({
       </Dialog>
 
       {/* Remove Member Dialog */}
-      <AlertDialog open={!!memberToRemove} onOpenChange={() => setMemberToRemove(null)}>
-        <AlertDialogContent>
+      <AlertDialog 
+        open={!!memberToRemove} 
+        onOpenChange={(open) => {
+          if (!open && !isRemovingMember) {
+            setMemberToRemove(null)
+          }
+        }}
+      >
+        <AlertDialogContent className="sm:max-w-md">
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove Team Member?</AlertDialogTitle>
-            <AlertDialogDescription>
+            <div className="flex items-center gap-3 mb-1">
+              <div className="h-10 w-10 rounded-lg bg-red-50 flex items-center justify-center">
+                <Trash2 className="h-5 w-5 text-red-600" />
+              </div>
+              <div>
+                <AlertDialogTitle className="text-lg font-semibold text-gray-900">
+                  Remove Team Member?
+                </AlertDialogTitle>
+              </div>
+            </div>
+            <AlertDialogDescription className="text-sm text-gray-600 mt-2">
               {memberToRemove?.email || `User ${memberToRemove?.user_id.substring(0, 8)}...`} will lose access to all workspace data. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogFooter className="sm:flex-row sm:justify-end gap-2 mt-6">
+            <AlertDialogCancel disabled={isRemovingMember} className="mt-0">Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => memberToRemove && handleRemoveMember(memberToRemove)}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={isRemovingMember}
+              className="bg-red-600 hover:bg-red-700 text-white gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Remove member
+              {isRemovingMember ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Removing...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4" />
+                  Remove member
+                </>
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
