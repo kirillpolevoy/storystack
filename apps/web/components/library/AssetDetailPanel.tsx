@@ -11,6 +11,7 @@ import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
 import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
+import { cn } from '@/lib/utils'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -79,7 +80,9 @@ export function AssetDetailPanel({
   const [imageError, setImageError] = useState(false)
   const [imageSrc, setImageSrc] = useState<string>('')
   const [isAuditTrailExpanded, setIsAuditTrailExpanded] = useState(false)
+  const [showSuccessIndicator, setShowSuccessIndicator] = useState(false)
   const lastAssetIdRef = useRef<string | null>(null)
+  const successTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const { data: availableTags } = useAvailableTags()
   const { data: availableLocations } = useAvailableLocations()
@@ -144,6 +147,12 @@ export function AssetDetailPanel({
       // This prevents race conditions where useEffect resets tags after a successful mutation
       const isDifferentAsset = lastAssetIdRef.current !== assetToUse.id
       if (isDifferentAsset) {
+        // Clear success indicator when switching assets
+        setShowSuccessIndicator(false)
+        if (successTimeoutRef.current) {
+          clearTimeout(successTimeoutRef.current)
+          successTimeoutRef.current = null
+        }
         // Only update state when asset actually changes
         setTags(assetToUse.tags || [])
         setLocation(assetToUse.location || '')
@@ -190,23 +199,65 @@ export function AssetDetailPanel({
         }
       }
     } else {
-      // Reset ref when panel closes
+      // Reset ref and clear success indicator when panel closes
       lastAssetIdRef.current = null
+      setShowSuccessIndicator(false)
+      if (successTimeoutRef.current) {
+        clearTimeout(successTimeoutRef.current)
+        successTimeoutRef.current = null
+      }
     }
   }, [currentAsset.id, currentAsset.tags, currentAsset.location, open, availableTags, queryClient, updateTagsMutation.isPending, updateLocationMutation.isPending, tags, location, isEditingLocation])
 
-  // Update tags when asset completes retagging (parent polling handles status updates)
+  // Update tags and clear retagging state when asset completes retagging
   useEffect(() => {
     if (!open) return
     
-    // When asset completes retagging, update tags from fresh data
-    const isAssetCompleted = completedRetaggingAssetIds.has(currentAsset.id)
-    if (isAssetCompleted && currentAsset.tags) {
-      setTags(currentAsset.tags)
+    // Only show success indicator for assets that JUST completed (in completedRetaggingAssetIds)
+    // This is set by parent polling when it detects completion
+    const isAssetJustCompleted = completedRetaggingAssetIds.has(currentAsset.id)
+    
+    if (isAssetJustCompleted) {
+      // Clear local retagging status
+      if (retagStatus === 'pending') {
+        setRetagStatus('success')
+      }
+      
+      // Show success indicator only for assets that just completed
+      setShowSuccessIndicator(true)
+      
+      // Clear success indicator after 3 seconds
+      if (successTimeoutRef.current) {
+        clearTimeout(successTimeoutRef.current)
+      }
+      successTimeoutRef.current = setTimeout(() => {
+        setShowSuccessIndicator(false)
+      }, 3000)
+      
+      // Update tags from fresh data
+      if (currentAsset.tags) {
+        setTags(currentAsset.tags)
+      }
+      
+      // Invalidate queries to ensure fresh data
       queryClient.invalidateQueries({ queryKey: ['assets'] })
       queryClient.invalidateQueries({ queryKey: ['asset', currentAsset.id] })
     }
-  }, [open, completedRetaggingAssetIds, currentAsset.tags, currentAsset.id, queryClient])
+    
+    // Also check for failed status
+    if (currentAsset.auto_tag_status === 'failed' && retagStatus === 'pending') {
+      setRetagStatus('error')
+      setShowSuccessIndicator(false)
+    }
+    
+    // Cleanup timeout on unmount or asset change
+    return () => {
+      if (successTimeoutRef.current) {
+        clearTimeout(successTimeoutRef.current)
+        successTimeoutRef.current = null
+      }
+    }
+  }, [open, completedRetaggingAssetIds, currentAsset.tags, currentAsset.auto_tag_status, currentAsset.id, queryClient, retagStatus])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -487,8 +538,10 @@ export function AssetDetailPanel({
   const dateToDisplay = currentAsset.date_taken || currentAsset.created_at
   
   // Use same logic as AssetTile: check both database status AND tracked retagging state
+  // Only show success indicator for assets that JUST completed (in completedRetaggingAssetIds)
+  // Don't show it for all assets with auto_tag_status === 'completed' (those were tagged previously)
+  const isAssetJustCompleted = completedRetaggingAssetIds.has(currentAsset.id)
   const isAssetRetagging = retaggingAssetIds.has(currentAsset.id) || currentAsset.auto_tag_status === 'pending' || retagStatus === 'pending'
-  const isAssetCompleted = completedRetaggingAssetIds.has(currentAsset.id)
   const isAutoTaggingPending = isAssetRetagging
 
   const content = (
@@ -515,7 +568,7 @@ export function AssetDetailPanel({
           />
           
           {/* Success Indicator - shows briefly after tagging completes (matches AssetTile) */}
-          {isAssetCompleted && !isAssetRetagging && (
+          {showSuccessIndicator && isAssetJustCompleted && !isAssetRetagging && (
             <div className="absolute inset-0 z-10 bg-green-50/90 flex items-center justify-center backdrop-blur-sm animate-in fade-in duration-200">
               <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-green-200 text-green-700 text-[10px] font-medium rounded-md shadow-sm">
                 <CheckCircle2 className="h-3 w-3" />
@@ -535,7 +588,7 @@ export function AssetDetailPanel({
           )}
           
           {/* Error Overlay - shows when tagging fails */}
-          {!isAssetRetagging && !isAssetCompleted && (currentAsset.auto_tag_status === 'failed' || retagStatus === 'error') && (
+          {!isAssetRetagging && !isAssetJustCompleted && (currentAsset.auto_tag_status === 'failed' || retagStatus === 'error') && (
             <div className="absolute inset-0 z-10 bg-red-50/90 flex items-center justify-center backdrop-blur-sm animate-in fade-in duration-200">
               <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-200 text-red-700 text-[10px] font-medium rounded-md shadow-sm">
                 <AlertCircle className="h-3 w-3" />
@@ -1221,7 +1274,7 @@ export function AssetDetailPanel({
         </Dialog>
 
         <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-          <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogContent className="sm:max-w-md" highZIndex>
             <AlertDialogHeader>
               <AlertDialogTitle className="text-lg font-semibold text-gray-900">
                 Delete this asset?
@@ -1255,10 +1308,23 @@ export function AssetDetailPanel({
 
   return (
     <>
-      <Sheet open={open} onOpenChange={onClose} modal={false}>
+      <Sheet 
+        open={open} 
+        onOpenChange={(isOpen) => {
+          // Prevent closing when delete confirmation is open
+          if (!isOpen && showDeleteConfirm) {
+            return
+          }
+          onClose()
+        }} 
+        modal={false}
+      >
         <SheetContent 
-          className="w-full overflow-y-auto sm:max-w-[420px] p-6" 
-          showOverlay={true}
+          className={cn(
+            "w-full overflow-y-auto sm:max-w-[420px] p-6",
+            showDeleteConfirm && "z-[40]"
+          )}
+          showOverlay={!showDeleteConfirm}
           overlayVariant="subtle"
         >
           <SheetHeader className="mb-4">
@@ -1310,7 +1376,7 @@ export function AssetDetailPanel({
       </Sheet>
 
         <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-          <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogContent className="sm:max-w-md" highZIndex>
             <AlertDialogHeader>
               <AlertDialogTitle className="text-lg font-semibold text-gray-900">
                 Delete this asset?

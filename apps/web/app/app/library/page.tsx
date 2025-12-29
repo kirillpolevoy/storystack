@@ -1103,7 +1103,7 @@ export default function LibraryPage() {
 
       {/* Bulk Retag Confirmation Dialog */}
       <AlertDialog open={showBulkRetagConfirm} onOpenChange={setShowBulkRetagConfirm}>
-        <AlertDialogContent className="sm:max-w-md">
+        <AlertDialogContent className="sm:max-w-md" highZIndex>
           <AlertDialogHeader>
             <div className="flex items-center gap-3 mb-1">
               <div className="h-10 w-10 rounded-lg bg-accent/10 flex items-center justify-center">
