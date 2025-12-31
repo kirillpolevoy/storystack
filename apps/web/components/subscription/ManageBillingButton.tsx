@@ -17,11 +17,11 @@ export function ManageBillingButton({
     createPortalSession.mutate();
   };
 
-  const baseClasses = 'inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium shadow-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
+  const baseClasses = 'inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium shadow-sm transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
 
   const variantClasses = variant === 'default'
-    ? 'bg-gray-900 text-white hover:bg-gray-800 focus-visible:outline-gray-900'
-    : 'bg-white text-gray-900 border border-gray-300 hover:bg-gray-50';
+    ? 'bg-accent text-white hover:bg-accent/90 focus-visible:outline-accent'
+    : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 hover:border-gray-400';
 
   return (
     <div className="flex flex-col gap-2">

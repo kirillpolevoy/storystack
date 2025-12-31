@@ -33,10 +33,10 @@ export function SubscribeButton({
     ? `$${price}/month`
     : `$${price}/year`;
 
-  const baseButtonClasses = 'inline-flex items-center justify-center rounded-md px-6 py-3 text-sm font-semibold shadow-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
+  const baseButtonClasses = 'w-full inline-flex items-center justify-center rounded-lg px-6 py-3 text-sm font-semibold shadow-sm transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
 
   const variantClasses = variant === 'primary'
-    ? 'bg-blue-600 text-white hover:bg-blue-700 focus-visible:outline-blue-600'
+    ? 'bg-accent text-white hover:bg-accent/90 focus-visible:outline-accent'
     : 'bg-white text-gray-900 border border-gray-300 hover:bg-gray-50';
 
   return (

@@ -36,7 +36,7 @@ export default function SubscriptionPage() {
   }, [success, canceled]);
 
   return (
-    <div className="flex h-full flex-col bg-white">
+    <div className="flex h-full flex-col bg-gray-50">
       {/* Header */}
       <div className="border-b border-gray-200 bg-white">
         <div className="px-4 sm:px-6 lg:px-8 pt-4">
@@ -56,8 +56,8 @@ export default function SubscriptionPage() {
         <div className="max-w-4xl mx-auto">
           {/* Success/Error Messages */}
           {success && (
-            <div className="mb-6 rounded-lg bg-green-50 border border-green-200 p-4">
-              <p className="text-sm text-green-800">
+            <div className="mb-6 rounded-lg bg-accent/10 border border-accent/20 p-4">
+              <p className="text-sm text-accent">
                 Successfully subscribed! Your subscription is now active.
               </p>
             </div>
@@ -73,7 +73,7 @@ export default function SubscriptionPage() {
 
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
             </div>
           ) : hasActiveSubscription ? (
             <ActiveSubscriptionView
@@ -149,7 +149,7 @@ function ActiveSubscriptionView({
               {subscription.billingInterval === 'year' ? 'Billed annually' : 'Billed monthly'}
             </p>
           </div>
-          <span className="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-800">
+          <span className="inline-flex items-center rounded-full bg-accent/10 px-3 py-1 text-xs font-medium text-accent">
             {isTrialing ? 'Trial' : 'Active'}
           </span>
         </div>
@@ -181,7 +181,7 @@ function ActiveSubscriptionView({
                   ? 'bg-red-600'
                   : workspaceUsage.percentage >= 80
                   ? 'bg-yellow-600'
-                  : 'bg-green-600'
+                  : 'bg-accent'
               }`}
               style={{ width: `${Math.min(workspaceUsage.percentage, 100)}%` }}
             />
@@ -204,7 +204,7 @@ function ActiveSubscriptionView({
                   ? 'bg-red-600'
                   : memberUsage.percentage >= 80
                   ? 'bg-yellow-600'
-                  : 'bg-green-600'
+                  : 'bg-accent'
               }`}
               style={{ width: `${Math.min(memberUsage.percentage, 100)}%` }}
             />
@@ -218,7 +218,7 @@ function ActiveSubscriptionView({
         <ul className="space-y-3">
           <li className="flex items-start gap-3">
             <svg
-              className="w-5 h-5 text-green-600 mt-0.5"
+              className="w-5 h-5 text-accent mt-0.5"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -236,7 +236,7 @@ function ActiveSubscriptionView({
           </li>
           <li className="flex items-start gap-3">
             <svg
-              className="w-5 h-5 text-green-600 mt-0.5"
+              className="w-5 h-5 text-accent mt-0.5"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -254,7 +254,7 @@ function ActiveSubscriptionView({
           </li>
           <li className="flex items-start gap-3">
             <svg
-              className="w-5 h-5 text-green-600 mt-0.5"
+              className="w-5 h-5 text-accent mt-0.5"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -270,7 +270,7 @@ function ActiveSubscriptionView({
           </li>
           <li className="flex items-start gap-3">
             <svg
-              className="w-5 h-5 text-green-600 mt-0.5"
+              className="w-5 h-5 text-accent mt-0.5"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -316,7 +316,7 @@ function NoSubscriptionView() {
           <ul className="mt-8 space-y-4">
             <li className="flex items-start gap-3">
               <svg
-                className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0"
+                className="w-5 h-5 text-accent mt-0.5 flex-shrink-0"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -332,7 +332,7 @@ function NoSubscriptionView() {
             </li>
             <li className="flex items-start gap-3">
               <svg
-                className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0"
+                className="w-5 h-5 text-accent mt-0.5 flex-shrink-0"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -348,7 +348,7 @@ function NoSubscriptionView() {
             </li>
             <li className="flex items-start gap-3">
               <svg
-                className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0"
+                className="w-5 h-5 text-accent mt-0.5 flex-shrink-0"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -364,7 +364,7 @@ function NoSubscriptionView() {
             </li>
             <li className="flex items-start gap-3">
               <svg
-                className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0"
+                className="w-5 h-5 text-accent mt-0.5 flex-shrink-0"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -380,7 +380,7 @@ function NoSubscriptionView() {
             </li>
             <li className="flex items-start gap-3">
               <svg
-                className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0"
+                className="w-5 h-5 text-accent mt-0.5 flex-shrink-0"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"

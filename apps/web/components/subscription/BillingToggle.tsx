@@ -54,7 +54,7 @@ export function BillingToggle({
       </div>
 
       {showSavings && value === 'year' && (
-        <div className="text-sm text-green-600 font-medium">
+        <div className="text-sm text-accent font-medium">
           Save ${annualSavings.toLocaleString()}/year ({savingsPercentage}% off)
         </div>
       )}
