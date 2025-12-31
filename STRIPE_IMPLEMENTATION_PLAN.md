@@ -7,12 +7,16 @@
 - **Phase 2 (FUTURE):** Tiered pricing with quota enforcement
 
 **Business Model:**
-- Workspace-level subscriptions (workspace owner pays)
-- User can own multiple workspaces → each workspace has its own subscription
+- **User-level subscriptions** (user pays once, gets quota for multiple workspaces)
+- One user → one subscription → multiple workspaces (up to quota)
 - Collaborators/members are free (don't need subscriptions)
 
+**Use Cases:**
+- **Marketing Agency**: Manage multiple client brands (each client = workspace)
+- **SMB Multi-Brand**: Manage multiple brand workspaces under one subscription
+
 **Pricing Strategy:**
-- **Phase 1:** Single price (e.g., $149/mo) - all customers get same plan
+- **Phase 1:** Single price (e.g., $149/mo) - all customers get same generous quota
 - **Phase 2:** Tiered pricing based on workspace count & member limits
   - $149/mo: 1 workspace, 10 members total
   - $250/mo: 2 workspaces, 20 members total
@@ -23,16 +27,28 @@
 ## Architecture Decisions
 
 ### Subscription Scope
-- **One subscription per workspace** (not per user)
-- Workspace owner is responsible for payment
-- Owner can have multiple workspaces → multiple subscriptions
-- Billing tied to workspace, synced to Stripe
+- **One subscription per user** (not per workspace)
+- User pays once, gets quota (workspaces + members)
+- Can create multiple workspaces up to quota limit
+- All owned workspaces share the same subscription quota
+
+### Example Flow
+**Marketing Agency with $400/mo plan:**
+- User: Agency Owner
+- Subscription: $400/mo → 4 workspaces, 40 members total
+- Creates 4 workspaces:
+  1. Nike Brand (10 members)
+  2. Adidas Brand (12 members)
+  3. Puma Brand (8 members)
+  4. Reebok Brand (10 members)
+- Total: 4 workspaces, 40 members ✅ Within quota
 
 ### Data Flow
-1. User creates workspace → workspace starts in "trial" or "unpaid" status
-2. Owner subscribes → Stripe checkout → webhook updates workspace status
-3. Stripe sends billing events → webhooks update subscription status
-4. Frontend checks workspace subscription before allowing certain actions
+1. User subscribes → Stripe checkout → webhook creates user subscription record
+2. User creates workspaces → system checks quota before allowing creation
+3. User invites members → system checks total member count across all workspaces
+4. Stripe sends billing events → webhooks update subscription status and quotas
+5. Frontend displays quota usage: "2 / 4 workspaces, 15 / 40 members"
 
 ---
 
@@ -40,24 +56,24 @@
 
 ### New Tables
 
-#### 1. `workspace_subscriptions`
-Tracks subscription status for each workspace.
+#### 1. `user_subscriptions`
+Tracks subscription for each user (one subscription per user).
 
 ```sql
-CREATE TABLE workspace_subscriptions (
+CREATE TABLE user_subscriptions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
 
   -- Stripe IDs
-  stripe_customer_id TEXT, -- Owner's Stripe customer ID
+  stripe_customer_id TEXT UNIQUE, -- User's Stripe customer ID
   stripe_subscription_id TEXT UNIQUE, -- Stripe subscription ID
   stripe_price_id TEXT, -- Price/plan ID from Stripe
 
   -- Subscription details
   status TEXT NOT NULL DEFAULT 'inactive', -- inactive, active, trialing, past_due, canceled, unpaid
-  plan_name TEXT, -- For display: "Pro", "Enterprise", etc.
+  plan_name TEXT, -- For display: "Starter", "Pro", "Enterprise"
 
-  -- Quota (for Phase 2)
+  -- Quota limits (Phase 2)
   max_workspaces INTEGER DEFAULT 1,
   max_members INTEGER DEFAULT 10,
 
@@ -70,13 +86,13 @@ CREATE TABLE workspace_subscriptions (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
 
-  UNIQUE(workspace_id)
+  UNIQUE(user_id)
 );
 
--- Index for faster lookups
-CREATE INDEX idx_workspace_subscriptions_workspace_id ON workspace_subscriptions(workspace_id);
-CREATE INDEX idx_workspace_subscriptions_stripe_customer_id ON workspace_subscriptions(stripe_customer_id);
-CREATE INDEX idx_workspace_subscriptions_status ON workspace_subscriptions(status);
+-- Indexes for faster lookups
+CREATE INDEX idx_user_subscriptions_user_id ON user_subscriptions(user_id);
+CREATE INDEX idx_user_subscriptions_stripe_customer_id ON user_subscriptions(stripe_customer_id);
+CREATE INDEX idx_user_subscriptions_status ON user_subscriptions(status);
 ```
 
 #### 2. `stripe_events`
@@ -104,32 +120,108 @@ CREATE INDEX idx_stripe_events_event_type ON stripe_events(event_type);
 CREATE INDEX idx_stripe_events_processed ON stripe_events(processed);
 ```
 
-### Modified Tables
+### Database Functions for Quota Checking
 
-#### `workspaces` - Add subscription status
+#### Function: Get User's Workspace Count
 ```sql
-ALTER TABLE workspaces
-ADD COLUMN subscription_status TEXT DEFAULT 'inactive';
--- Values: inactive, active, trialing, past_due, canceled
+CREATE OR REPLACE FUNCTION get_user_workspace_count(p_user_id UUID)
+RETURNS INTEGER AS $$
+  SELECT COUNT(*)::INTEGER
+  FROM workspaces
+  WHERE created_by = p_user_id
+    AND status != 'deleted';
+$$ LANGUAGE SQL STABLE;
+```
 
--- Index for filtering by subscription status
-CREATE INDEX idx_workspaces_subscription_status ON workspaces(subscription_status);
+#### Function: Get User's Total Member Count
+```sql
+CREATE OR REPLACE FUNCTION get_user_total_member_count(p_user_id UUID)
+RETURNS INTEGER AS $$
+  SELECT COUNT(DISTINCT wm.user_id)::INTEGER
+  FROM workspace_members wm
+  JOIN workspaces w ON wm.workspace_id = w.id
+  WHERE w.created_by = p_user_id
+    AND w.status != 'deleted';
+$$ LANGUAGE SQL STABLE;
+```
+
+#### Function: Check if User Can Create Workspace
+```sql
+CREATE OR REPLACE FUNCTION can_user_create_workspace(p_user_id UUID)
+RETURNS BOOLEAN AS $$
+DECLARE
+  v_current_count INTEGER;
+  v_max_workspaces INTEGER;
+  v_subscription_status TEXT;
+BEGIN
+  -- Get subscription details
+  SELECT max_workspaces, status
+  INTO v_max_workspaces, v_subscription_status
+  FROM user_subscriptions
+  WHERE user_id = p_user_id;
+
+  -- If no subscription, allow 1 free workspace (or return false for strict enforcement)
+  IF NOT FOUND THEN
+    RETURN get_user_workspace_count(p_user_id) < 1;
+  END IF;
+
+  -- Check subscription is active
+  IF v_subscription_status NOT IN ('active', 'trialing') THEN
+    RETURN FALSE;
+  END IF;
+
+  -- Check quota
+  v_current_count := get_user_workspace_count(p_user_id);
+  RETURN v_current_count < v_max_workspaces;
+END;
+$$ LANGUAGE plpgsql STABLE;
+```
+
+#### Function: Check if User Can Add Member
+```sql
+CREATE OR REPLACE FUNCTION can_user_add_member(p_user_id UUID)
+RETURNS BOOLEAN AS $$
+DECLARE
+  v_current_count INTEGER;
+  v_max_members INTEGER;
+  v_subscription_status TEXT;
+BEGIN
+  -- Get subscription details
+  SELECT max_members, status
+  INTO v_max_members, v_subscription_status
+  FROM user_subscriptions
+  WHERE user_id = p_user_id;
+
+  -- If no subscription, allow limited members
+  IF NOT FOUND THEN
+    RETURN get_user_total_member_count(p_user_id) < 3; -- 3 free members
+  END IF;
+
+  -- Check subscription is active
+  IF v_subscription_status NOT IN ('active', 'trialing') THEN
+    RETURN FALSE;
+  END IF;
+
+  -- Check quota
+  v_current_count := get_user_total_member_count(p_user_id);
+  RETURN v_current_count < v_max_members;
+END;
+$$ LANGUAGE plpgsql STABLE;
 ```
 
 ### Row Level Security (RLS) Policies
 
 ```sql
--- workspace_subscriptions: Only workspace owner can view
-CREATE POLICY "Workspace owners can view subscription"
-  ON workspace_subscriptions FOR SELECT
-  USING (
-    workspace_id IN (
-      SELECT id FROM workspaces
-      WHERE created_by = auth.uid()
-    )
-  );
+-- Enable RLS
+ALTER TABLE user_subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stripe_events ENABLE ROW LEVEL SECURITY;
 
--- workspace_subscriptions: Only system can insert/update (via service role)
+-- user_subscriptions: Users can view their own subscription
+CREATE POLICY "Users can view own subscription"
+  ON user_subscriptions FOR SELECT
+  USING (user_id = auth.uid());
+
+-- user_subscriptions: Only system can insert/update (via service role)
 -- No public INSERT/UPDATE policies - only webhook API can modify
 
 -- stripe_events: No public access (service role only)
@@ -140,24 +232,24 @@ CREATE POLICY "Workspace owners can view subscription"
 ## API Routes
 
 ### 1. `POST /api/stripe/create-checkout-session`
-Creates a Stripe Checkout session for workspace subscription.
+Creates a Stripe Checkout session for user subscription.
 
 **Request Body:**
 ```typescript
 {
-  workspaceId: string; // UUID of workspace to subscribe
-  priceId?: string;    // Optional for Phase 2 (tier selection)
+  priceId?: string; // Optional for Phase 2 (tier selection)
 }
 ```
 
 **Flow:**
-1. Verify user is workspace owner
-2. Check if workspace already has active subscription
-3. Get/create Stripe customer ID for user
+1. Get authenticated user ID from Supabase session
+2. Check if user already has active subscription (prevent duplicate subscriptions)
+3. Get or create Stripe customer ID for user
 4. Create Checkout session with:
-   - Success URL: `/app/workspace/{id}?success=true`
+   - Success URL: `/app/subscription?success=true`
    - Cancel URL: `/app/subscription?canceled=true`
-   - Metadata: `{ workspace_id, user_id }`
+   - Metadata: `{ user_id }`
+   - Customer email pre-filled from Supabase user
 5. Return checkout session URL
 
 **Response:**
@@ -166,6 +258,11 @@ Creates a Stripe Checkout session for workspace subscription.
   url: string; // Redirect user to this Stripe Checkout URL
 }
 ```
+
+**Implementation Notes:**
+- Store Stripe customer ID in `user_subscriptions` table or user metadata
+- For Phase 1: Use hardcoded default price ID from env var
+- For Phase 2: Accept `priceId` parameter for tier selection
 
 ---
 
@@ -176,24 +273,28 @@ Handles Stripe webhook events.
 
 | Event | Action |
 |-------|--------|
-| `checkout.session.completed` | Create subscription record, activate workspace |
-| `customer.subscription.updated` | Update subscription status, period dates |
-| `customer.subscription.deleted` | Mark subscription as canceled, deactivate workspace |
+| `checkout.session.completed` | Create/update user subscription record |
+| `customer.subscription.created` | Create user subscription record |
+| `customer.subscription.updated` | Update subscription status, quotas, period dates |
+| `customer.subscription.deleted` | Mark subscription as canceled |
 | `invoice.payment_succeeded` | Update payment status, extend period |
-| `invoice.payment_failed` | Mark as past_due, send notification |
+| `invoice.payment_failed` | Mark as past_due, notify user |
 
 **Flow:**
 1. Verify webhook signature (security)
 2. Check if event already processed (idempotency)
 3. Log event to `stripe_events` table
-4. Handle event based on type
-5. Update `workspace_subscriptions` and `workspaces` tables
-6. Mark event as processed
+4. Handle event based on type:
+   - Extract user_id from metadata or customer mapping
+   - Update `user_subscriptions` table
+   - Update quotas from price metadata if changed
+5. Mark event as processed
 
 **Important:**
 - Use Supabase service role client (bypass RLS)
 - Implement idempotency (check `stripe_event_id` before processing)
 - Return 200 quickly (Stripe times out at 30s)
+- Extract quotas from Stripe price metadata (Phase 2)
 
 ---
 
@@ -202,15 +303,13 @@ Creates a Stripe Customer Portal session for managing subscription.
 
 **Request Body:**
 ```typescript
-{
-  workspaceId: string;
-}
+{} // No parameters needed - uses authenticated user
 ```
 
 **Flow:**
-1. Verify user is workspace owner
-2. Get Stripe customer ID from workspace subscription
-3. Create portal session
+1. Get authenticated user ID
+2. Get Stripe customer ID from user subscription
+3. Create portal session with return URL: `/app/subscription`
 4. Return portal URL
 
 **Response:**
@@ -228,23 +327,52 @@ Creates a Stripe Customer Portal session for managing subscription.
 
 ---
 
-### 4. `GET /api/subscriptions/workspace/[workspaceId]`
-Gets subscription details for a workspace.
+### 4. `GET /api/subscriptions/status`
+Gets subscription details and quota usage for authenticated user.
 
 **Response:**
 ```typescript
 {
-  workspaceId: string;
-  status: 'inactive' | 'active' | 'trialing' | 'past_due' | 'canceled';
-  planName?: string;
-  currentPeriodEnd?: string;
-  cancelAtPeriodEnd: boolean;
+  subscription: {
+    status: 'inactive' | 'active' | 'trialing' | 'past_due' | 'canceled';
+    planName?: string;
+    currentPeriodEnd?: string;
+    cancelAtPeriodEnd: boolean;
+    maxWorkspaces: number;
+    maxMembers: number;
+  } | null;
 
-  // Phase 2
-  maxWorkspaces?: number;
-  maxMembers?: number;
-  currentWorkspaceCount?: number;
-  currentMemberCount?: number;
+  usage: {
+    workspaceCount: number;
+    memberCount: number;
+  };
+
+  canCreateWorkspace: boolean;
+  canAddMember: boolean;
+}
+```
+
+**Flow:**
+1. Get authenticated user ID
+2. Query `user_subscriptions` for subscription details
+3. Call quota functions to get current usage
+4. Return combined data
+
+---
+
+### 5. `GET /api/subscriptions/check-quota`
+Quick endpoint to check if user can perform an action.
+
+**Query Parameters:**
+- `action`: "create_workspace" | "add_member"
+
+**Response:**
+```typescript
+{
+  allowed: boolean;
+  reason?: string; // If not allowed: "quota_exceeded", "no_subscription", "subscription_inactive"
+  current: number;
+  limit: number;
 }
 ```
 
@@ -254,12 +382,20 @@ Gets subscription details for a workspace.
 
 ### 1. Stripe Dashboard Configuration
 
-**Products:**
-- **Phase 1:** Create 1 product: "StoryStack Pro"
-  - Price: $149/month recurring
-  - Note the `price_id` (e.g., `price_xxx`)
+**Products & Prices:**
 
-**Phase 2:** Add more prices to same product or create separate products
+**Phase 1:** Create 1 product with 1 price
+- Product: "StoryStack Pro"
+- Price: $149/month recurring
+- Metadata:
+  - `max_workspaces`: "10" (generous for Phase 1)
+  - `max_members`: "50"
+- Note the `price_id` (e.g., `price_xxx`)
+
+**Phase 2:** Add more prices to same product
+- Price 1: $149/mo → metadata: `max_workspaces=1, max_members=10`
+- Price 2: $250/mo → metadata: `max_workspaces=2, max_members=20`
+- Price 3: $400/mo → metadata: `max_workspaces=4, max_members=40`
 
 **Webhooks:**
 - Endpoint: `https://yourdomain.com/api/stripe/webhook`
@@ -297,79 +433,103 @@ STRIPE_DEFAULT_PRICE_ID=price_xxx           # Your $149/mo price
 ## Frontend Components
 
 ### 1. Subscription Page (`/app/subscription/page.tsx`)
-Replace placeholder with actual subscription UI.
+Replace placeholder with user subscription UI.
 
 **Features:**
-- Show current subscription status
-- List all owned workspaces with their subscription status
-- "Subscribe" button per workspace → opens checkout
-- "Manage Billing" button → opens Customer Portal
+- Show user's subscription status
+- Display quota usage (workspaces & members)
+- List all owned workspaces
+- "Subscribe" button (if no subscription)
+- "Manage Billing" button (if has subscription)
+- Plan upgrade prompts (Phase 2)
 
 **Phase 1 UI:**
 ```
-┌─────────────────────────────────────┐
-│ StoryStack Pro - $149/month         │
-│                                     │
-│ Your Workspaces:                    │
-│                                     │
-│ • Brand Team Alpha [Active ✓]      │
-│   └─ Manage Billing                │
-│                                     │
-│ • Marketing Assets [Not Subscribed] │
-│   └─ Subscribe Now                 │
-└─────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│ Your Subscription                           │
+│                                             │
+│ StoryStack Pro - $149/month                 │
+│ Status: Active ✓                            │
+│ Next billing: Jan 15, 2025                  │
+│                                             │
+│ Usage:                                      │
+│ • Workspaces: 2 / 10                        │
+│ • Team Members: 15 / 50                     │
+│                                             │
+│ [Manage Billing]                            │
+│                                             │
+│ Your Workspaces:                            │
+│ • Brand Team Alpha (8 members)             │
+│ • Marketing Assets (7 members)             │
+│                                             │
+└─────────────────────────────────────────────┘
 ```
 
-**Phase 2 UI:** Add plan cards with features, tier selection
+**Phase 2 UI:** Add plan comparison cards, upgrade buttons
 
 ---
 
-### 2. Workspace Subscription Banner
-Show banner in workspace if subscription is inactive or past_due.
+### 2. Workspace Creation Flow
+Before creating workspace, check quota.
 
-**Location:** `/app/workspace/[id]` layout
+**Location:** Workspace creation dialog/page
 
-**Banner Examples:**
-- Inactive: "⚠️ This workspace needs a subscription. [Subscribe Now]"
-- Past Due: "⚠️ Payment failed. Please update billing. [Manage Billing]"
-- Trial: "🎉 Trial active until {date}. [Subscribe]"
-
----
-
-### 3. Subscription Status Badge
-Show subscription status in workspace switcher/header.
-
-**UI:**
-```
-Brand Team Alpha [PRO ✓]
-Marketing Assets [TRIAL]
-Content Library [INACTIVE]
-```
+**Flow:**
+1. User clicks "Create Workspace"
+2. Check `can_user_create_workspace()` or call `/api/subscriptions/check-quota?action=create_workspace`
+3. If quota exceeded:
+   - Show modal: "You've reached your workspace limit (2 / 2). Upgrade to create more workspaces."
+   - Show upgrade button → subscription page
+4. If allowed: Proceed with creation
 
 ---
 
-### 4. Checkout Flow Component
-Reusable component to trigger Stripe Checkout.
+### 3. Member Invitation Flow
+Before adding member, check quota.
+
+**Location:** Member invitation dialog
+
+**Flow:**
+1. User enters member email
+2. Before sending invite, check `/api/subscriptions/check-quota?action=add_member`
+3. If quota exceeded:
+   - Show error: "You've reached your member limit (40 / 40). Upgrade to add more team members."
+   - Show upgrade button
+4. If allowed: Send invite
+
+---
+
+### 4. Quota Usage Indicator Component
+Shows quota usage in header or sidebar.
 
 **Props:**
 ```typescript
-interface CheckoutButtonProps {
-  workspaceId: string;
-  priceId?: string; // Optional for Phase 2
-  onSuccess?: () => void;
+interface QuotaIndicatorProps {
+  type: 'workspaces' | 'members';
+  current: number;
+  limit: number;
 }
 ```
 
-**Implementation:**
-```typescript
-const handleCheckout = async () => {
-  const { url } = await fetch('/api/stripe/create-checkout-session', {
-    method: 'POST',
-    body: JSON.stringify({ workspaceId, priceId })
-  }).then(r => r.json());
+**UI Examples:**
+- `2 / 10 workspaces` (green if < 80%)
+- `9 / 10 workspaces` (yellow if 80-99%)
+- `10 / 10 workspaces` (red if 100%)
 
-  window.location.href = url; // Redirect to Stripe
-};
+---
+
+### 5. Subscription Status Hook
+React hook for accessing subscription data.
+
+**Usage:**
+```typescript
+const { subscription, usage, canCreateWorkspace, isLoading } = useSubscription();
+
+// In workspace creation handler:
+if (!canCreateWorkspace) {
+  showUpgradeModal();
+  return;
+}
 ```
 
 ---
@@ -381,20 +541,23 @@ const handleCheckout = async () => {
 #### Step 1: Stripe Account Setup
 - [ ] Create/configure Stripe account
 - [ ] Create product: "StoryStack Pro" @ $149/mo
+- [ ] Add metadata to price: `max_workspaces=10, max_members=50`
 - [ ] Get API keys (test mode)
-- [ ] Set up webhook endpoint
+- [ ] Set up webhook endpoint configuration (after deploying API route)
 - [ ] Add environment variables
 
 #### Step 2: Database Migration
-- [ ] Create migration file: `supabase/migrations/[timestamp]_add_subscriptions.sql`
-- [ ] Add `workspace_subscriptions` table
+- [ ] Create migration file: `supabase/migrations/[timestamp]_add_user_subscriptions.sql`
+- [ ] Add `user_subscriptions` table
 - [ ] Add `stripe_events` table
-- [ ] Add `subscription_status` column to `workspaces`
+- [ ] Add quota helper functions
 - [ ] Add RLS policies
-- [ ] Run migration
+- [ ] Test migration locally
+- [ ] Deploy to production
 
 #### Step 3: Install Dependencies
 ```bash
+cd apps/web
 npm install stripe @stripe/stripe-js
 ```
 
@@ -402,97 +565,142 @@ npm install stripe @stripe/stripe-js
 - [ ] `/apps/web/lib/stripe/server.ts` - Server-side Stripe client
 - [ ] `/apps/web/lib/stripe/client.ts` - Client-side Stripe loader
 - [ ] `/apps/web/lib/stripe/config.ts` - Shared config/types
+- [ ] `/apps/web/types/subscription.ts` - TypeScript types
 
 #### Step 5: API Routes
 - [ ] `/apps/web/app/api/stripe/create-checkout-session/route.ts`
 - [ ] `/apps/web/app/api/stripe/webhook/route.ts`
 - [ ] `/apps/web/app/api/stripe/create-portal-session/route.ts`
-- [ ] `/apps/web/app/api/subscriptions/workspace/[workspaceId]/route.ts`
+- [ ] `/apps/web/app/api/subscriptions/status/route.ts`
+- [ ] `/apps/web/app/api/subscriptions/check-quota/route.ts`
 
-#### Step 6: Frontend Components
+#### Step 6: React Hooks & Context
+- [ ] `/apps/web/hooks/useSubscription.ts` - Subscription data hook
+- [ ] Add subscription to React Query setup
+- [ ] Cache subscription status for performance
+
+#### Step 7: Frontend Components
 - [ ] Update `/apps/web/app/app/subscription/page.tsx`
-- [ ] Create `SubscriptionButton` component
+- [ ] Create `SubscribeButton` component
 - [ ] Create `ManageBillingButton` component
-- [ ] Add subscription status to workspace context/hooks
+- [ ] Create `QuotaIndicator` component
+- [ ] Add quota checks to workspace creation flow
+- [ ] Add quota checks to member invitation flow
 
-#### Step 7: Testing
-- [ ] Test checkout flow (test mode)
-- [ ] Test webhook handling (Stripe CLI)
+#### Step 8: Testing
+- [ ] Test checkout flow with test card (4242 4242 4242 4242)
+- [ ] Test webhook handling with Stripe CLI:
+  ```bash
+  stripe listen --forward-to localhost:3000/api/stripe/webhook
+  stripe trigger checkout.session.completed
+  ```
 - [ ] Test portal access
-- [ ] Verify subscription status updates
+- [ ] Verify subscription status updates in database
+- [ ] Test quota functions
+- [ ] Test with multiple workspaces and members
 
-#### Step 8: Production Deployment
+#### Step 9: Production Deployment
+- [ ] Deploy Next.js app with webhook route
+- [ ] Configure Stripe webhook in dashboard with production URL
 - [ ] Switch to live Stripe keys
-- [ ] Deploy webhook endpoint
-- [ ] Test with real payment (refund after)
+- [ ] Test with real payment (use small amount, refund after)
+- [ ] Monitor webhook logs
 
 **Phase 1 Deliverables:**
-✅ Working checkout flow
-✅ Subscription status tracking
-✅ Customer portal access
-✅ Basic subscription page
+✅ User can subscribe via Stripe Checkout
+✅ Subscription status tracked in database
+✅ Customer portal access for billing management
+✅ Subscription page shows status and quota usage
+✅ Generous quotas (no hard enforcement yet)
 
 ---
 
-### Phase 2: Tiered Pricing & Quota Enforcement
+### Phase 2: Tiered Pricing & Strict Quota Enforcement
 
 #### Step 1: Stripe Configuration
 - [ ] Create additional price tiers ($250, $400)
+- [ ] Add metadata to each price (max_workspaces, max_members)
 - [ ] Enable plan switching in Customer Portal
-- [ ] Configure proration settings
+- [ ] Configure proration settings (recommended: always_invoice)
 
 #### Step 2: Database Updates
-- [ ] Add quota tracking queries
-- [ ] Create view for user's total workspace/member counts
-- [ ] Add quota validation functions
+- [ ] Migration to update default quotas if needed
+- [ ] Add indexes for performance if needed
 
 #### Step 3: Quota Enforcement Logic
-- [ ] Before creating workspace: Check quota
-- [ ] Before adding member: Check quota
-- [ ] Show quota usage in UI
-- [ ] Block actions when quota exceeded
+- [ ] Add database trigger/constraint to prevent workspace creation over quota (optional)
+- [ ] Update workspace creation API to strictly check quota
+- [ ] Update member invitation API to strictly check quota
+- [ ] Add background job to check and alert users near limits (optional)
 
 #### Step 4: UI Enhancements
-- [ ] Plan selection cards on subscription page
-- [ ] Quota indicators (e.g., "2 / 10 members used")
-- [ ] Upgrade prompts when approaching limits
+- [ ] Plan selection page with tier comparison
+- [ ] Quota usage meters/progress bars
+- [ ] Upgrade prompts when approaching limits (e.g., 80% usage)
+- [ ] Blocked state UI when quota exceeded
 - [ ] Plan comparison table
 
 #### Step 5: Upgrade/Downgrade Flows
-- [ ] API route for plan changes
-- [ ] Handle proration
-- [ ] Update webhook to handle plan changes
-- [ ] UI for switching plans
+- [ ] API route for plan changes: `/api/stripe/update-subscription`
+- [ ] Handle proration in webhook
+- [ ] UI for switching plans from subscription page
+- [ ] Confirmation modals for downgrades (warn about losing access)
+- [ ] Handle edge cases (downgrade when over new quota)
+
+#### Step 6: Analytics & Monitoring
+- [ ] Track subscription conversion rate
+- [ ] Monitor failed payments
+- [ ] Alert on webhook processing errors
+- [ ] Dashboard for subscription metrics
 
 ---
 
 ## Key Technical Considerations
 
 ### Security
-1. **Webhook Signature Verification:** Always verify `stripe-signature` header
-2. **RLS Policies:** Only workspace owners can view subscription data
-3. **API Authentication:** Verify Supabase session before checkout
-4. **Customer ID Validation:** Ensure customer belongs to authenticated user
+1. **Webhook Signature Verification:** Always verify `stripe-signature` header to prevent fake webhooks
+2. **RLS Policies:** Users can only view their own subscription
+3. **API Authentication:** All API routes verify Supabase session
+4. **Quota Bypass Prevention:** Use database functions, not just frontend checks
 
 ### Idempotency
 - Store `stripe_event_id` before processing webhook
-- Skip if already processed (prevents duplicate charges)
+- Check if event already processed (prevents duplicate subscription updates)
+- Use database transactions for webhook handlers
 
 ### Error Handling
-- Graceful failures on checkout errors
-- Retry logic for webhook processing
-- User-friendly error messages
-- Admin notifications for failed payments
+- Graceful failures on checkout errors (network issues, card declined)
+- Retry logic for webhook processing (Stripe auto-retries, log failures)
+- User-friendly error messages (avoid technical jargon)
+- Admin notifications for failed payments via email/Slack
 
 ### Performance
-- Index `workspace_id`, `stripe_customer_id` for fast lookups
-- Cache subscription status in workspace context
-- React Query for subscription data fetching
+- Index `user_id`, `stripe_customer_id` for fast lookups
+- Cache subscription status in React Query (5-minute stale time)
+- Use database functions for quota checks (single query)
+- Optimize member count query for large workspaces
 
 ### Testing Strategy
-- **Local:** Stripe CLI for webhook testing (`stripe listen --forward-to`)
-- **Test Mode:** Use Stripe test cards (4242 4242 4242 4242)
-- **Production:** Small test transaction before going live
+- **Local Development:**
+  - Stripe CLI: `stripe listen --forward-to localhost:3000/api/stripe/webhook`
+  - Test cards: 4242 4242 4242 4242 (success), 4000 0000 0000 0002 (decline)
+- **Staging:** Test full flow with Stripe test mode
+- **Production:** Small real transaction before launch, immediate refund
+
+### Edge Cases to Handle
+1. **User downgrades but over new quota:**
+   - Allow existing resources to remain (grandfather)
+   - Block new creation until under quota
+2. **Subscription canceled but not expired:**
+   - Allow access until end of billing period
+   - Show banner: "Subscription ends on {date}"
+3. **Payment failed:**
+   - Grace period (e.g., 7 days)
+   - Send reminder emails (Stripe handles this)
+   - Soft-lock features (read-only mode)
+4. **User creates workspace then subscription fails:**
+   - Allow workspace to remain in "unpaid" state
+   - Require subscription to activate
 
 ---
 
@@ -502,17 +710,20 @@ npm install stripe @stripe/stripe-js
 apps/web/
 ├── app/
 │   ├── api/
-│   │   └── stripe/
-│   │       ├── create-checkout-session/
-│   │       │   └── route.ts
-│   │       ├── create-portal-session/
-│   │       │   └── route.ts
-│   │       └── webhook/
-│   │           └── route.ts
+│   │   ├── stripe/
+│   │   │   ├── create-checkout-session/
+│   │   │   │   └── route.ts
+│   │   │   ├── create-portal-session/
+│   │   │   │   └── route.ts
+│   │   │   ├── webhook/
+│   │   │   │   └── route.ts
+│   │   │   └── update-subscription/      (Phase 2)
+│   │   │       └── route.ts
 │   │   └── subscriptions/
-│   │       └── workspace/
-│   │           └── [workspaceId]/
-│   │               └── route.ts
+│   │       ├── status/
+│   │       │   └── route.ts
+│   │       └── check-quota/
+│   │           └── route.ts
 │   └── app/
 │       └── subscription/
 │           └── page.tsx (update existing)
@@ -522,21 +733,26 @@ apps/web/
 │       ├── server.ts       # Server-side Stripe client
 │       ├── client.ts       # Client-side Stripe loader
 │       ├── config.ts       # Shared types/config
-│       └── webhooks.ts     # Webhook handlers
+│       └── webhooks.ts     # Webhook event handlers
+│
+├── hooks/
+│   ├── useSubscription.ts  # Main subscription hook
+│   └── useQuotaCheck.ts    # Quota checking hook (Phase 2)
 │
 ├── components/
 │   └── subscription/
-│       ├── SubscriptionButton.tsx
+│       ├── SubscribeButton.tsx
 │       ├── ManageBillingButton.tsx
-│       ├── SubscriptionBanner.tsx
-│       └── SubscriptionStatusBadge.tsx
+│       ├── QuotaIndicator.tsx
+│       ├── UpgradePrompt.tsx
+│       └── PlanComparisonTable.tsx (Phase 2)
 │
 └── types/
-    └── subscription.ts     # TypeScript types
+    └── subscription.ts     # TypeScript interfaces
 
 supabase/
 └── migrations/
-    └── [timestamp]_add_subscriptions.sql
+    └── [timestamp]_add_user_subscriptions.sql
 ```
 
 ---
@@ -544,60 +760,90 @@ supabase/
 ## Success Criteria
 
 ### Phase 1
-- [ ] User can subscribe to workspace via Stripe Checkout
-- [ ] Subscription status updates via webhooks
+- [ ] User can subscribe via Stripe Checkout
+- [ ] Subscription status updates automatically via webhooks
 - [ ] User can manage billing via Customer Portal
-- [ ] Subscription page shows status for all owned workspaces
-- [ ] Basic subscription enforcement (show banners for inactive workspaces)
+- [ ] Subscription page displays status and quota usage
+- [ ] Quota displayed but not strictly enforced (soft limits)
+- [ ] All owned workspaces listed on subscription page
 
 ### Phase 2
-- [ ] Multiple pricing tiers available
-- [ ] Quota enforcement (workspace count, member limits)
-- [ ] Upgrade/downgrade between plans
-- [ ] Quota usage displayed in UI
-- [ ] Blocking when quota exceeded
+- [ ] Multiple pricing tiers available for selection
+- [ ] Strict quota enforcement (cannot exceed limits)
+- [ ] Upgrade/downgrade between plans with proration
+- [ ] Quota usage displayed throughout app
+- [ ] Blocking UI when quota exceeded with upgrade prompts
+- [ ] Email notifications for quota warnings
 
 ---
 
 ## Timeline Estimate
 
 **Phase 1 (Demo-Ready):**
-- Setup & Configuration: 1-2 hours
-- Database Schema: 1 hour
-- API Routes: 3-4 hours
-- Frontend Components: 2-3 hours
-- Testing: 2-3 hours
-- **Total: 1-2 days**
+- Stripe Setup: 1 hour
+- Database Schema: 2 hours (includes functions)
+- API Routes: 4-5 hours
+- Frontend Components: 3-4 hours
+- React hooks/integration: 2 hours
+- Testing: 3-4 hours
+- **Total: 1.5-2 days**
 
 **Phase 2 (Full Tiered System):**
 - Stripe Configuration: 1 hour
-- Quota Logic: 3-4 hours
-- UI Enhancements: 3-4 hours
-- Testing: 2-3 hours
-- **Total: 1-2 days**
+- Strict Quota Enforcement: 3-4 hours
+- UI Enhancements: 4-5 hours
+- Plan switching: 2-3 hours
+- Testing & Edge Cases: 3-4 hours
+- **Total: 1.5-2 days**
 
 ---
 
-## Next Steps
+## Migration Path for Existing Users
 
-1. Review this plan
-2. Set up Stripe account and get API keys
-3. Begin Phase 1 implementation
-4. Test with demo customers
-5. Launch Phase 1 for revenue
-6. Gather feedback
-7. Implement Phase 2 when ready to scale pricing
+**Scenario:** You have users with workspaces before subscriptions exist.
+
+**Options:**
+
+1. **Grandfather Existing Users (Recommended for MVP):**
+   - Give all existing users free Pro plan (or trial)
+   - Set generous quotas
+   - Announce subscription launch with grace period
+
+2. **Require Subscription:**
+   - Give 14-day trial on first login after launch
+   - Send email announcement before enforcement
+   - Soft-lock workspaces after trial (read-only)
+
+3. **Freemium Model:**
+   - Allow 1 free workspace, 3 members forever
+   - Require subscription for additional workspaces
 
 ---
 
 ## Questions to Resolve
 
-1. **Trial Period:** Should new workspaces get a free trial? (e.g., 14 days)
-2. **Grandfathering:** What happens to existing workspaces when Phase 2 launches?
-3. **Failed Payments:** How many retry attempts? When to disable workspace access?
-4. **Cancellation Policy:** Immediate or end of period?
+1. **Free Tier:** Should there be a free tier? (e.g., 1 workspace, 3 members)
+2. **Trial Period:** Should new users get a free trial? (e.g., 14 days)
+3. **Grace Period:** How long after payment failure before locking access?
+4. **Downgrade Handling:** What happens if user downgrades below current usage?
 5. **Refund Policy:** Prorated refunds on cancellation?
 6. **Tax Handling:** Enable Stripe Tax for automatic tax calculation?
+7. **Existing Users:** How to handle users who already have workspaces?
+
+---
+
+## Next Steps
+
+1. ✅ Review and approve this plan
+2. Set up Stripe account and get API keys
+3. Decide on free tier / trial policy
+4. Begin Phase 1 implementation
+5. Test thoroughly with test mode
+6. Soft launch to beta users
+7. Gather feedback
+8. Launch Phase 1 for general availability
+9. Monitor metrics (conversion, churn)
+10. Implement Phase 2 when ready to scale pricing
 
 ---
 
@@ -606,5 +852,8 @@ supabase/
 - [Stripe Subscriptions Docs](https://stripe.com/docs/billing/subscriptions/overview)
 - [Stripe Webhooks Guide](https://stripe.com/docs/webhooks)
 - [Stripe Testing](https://stripe.com/docs/testing)
+- [Stripe Customer Portal](https://stripe.com/docs/billing/subscriptions/integrating-customer-portal)
+- [Stripe Price Metadata](https://stripe.com/docs/api/prices/object#price_object-metadata)
 - [Next.js API Routes](https://nextjs.org/docs/app/building-your-application/routing/route-handlers)
+- [Supabase RLS](https://supabase.com/docs/guides/auth/row-level-security)
 - [Supabase Service Role](https://supabase.com/docs/guides/auth/service-role-key)
