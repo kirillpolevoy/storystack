@@ -163,13 +163,14 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
 }
 
 async function handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
-  if (!invoice.subscription) return;
+  const subscriptionId = invoice.parent?.subscription_details?.subscription;
+  if (!subscriptionId) return;
 
-  const subscriptionId = typeof invoice.subscription === 'string'
-    ? invoice.subscription
-    : invoice.subscription.id;
+  const subId = typeof subscriptionId === 'string'
+    ? subscriptionId
+    : subscriptionId.id;
 
-  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+  const subscription = await stripe.subscriptions.retrieve(subId);
   const userId = subscription.metadata?.user_id;
 
   if (userId) {
@@ -178,11 +179,12 @@ async function handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
 }
 
 async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
-  if (!invoice.subscription) return;
+  const subscriptionId = invoice.parent?.subscription_details?.subscription;
+  if (!subscriptionId) return;
 
-  const subscriptionId = typeof invoice.subscription === 'string'
-    ? invoice.subscription
-    : invoice.subscription.id;
+  const subId = typeof subscriptionId === 'string'
+    ? subscriptionId
+    : subscriptionId.id;
 
   const { error } = await supabaseAdmin
     .from('user_subscriptions')
@@ -190,7 +192,7 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
       status: 'past_due',
       updated_at: new Date().toISOString(),
     })
-    .eq('stripe_subscription_id', subscriptionId);
+    .eq('stripe_subscription_id', subId);
 
   if (error) {
     console.error('Error updating subscription status to past_due:', error);
@@ -207,6 +209,11 @@ async function upsertUserSubscription(userId: string, subscription: Stripe.Subsc
   const maxWorkspaces = parseInt(metadata.max_workspaces || '10', 10);
   const maxMembers = parseInt(metadata.max_members || '50', 10);
 
+  // Get period from subscription item (API v2025+)
+  const subscriptionItem = subscription.items.data[0];
+  const periodStart = subscriptionItem?.current_period_start;
+  const periodEnd = subscriptionItem?.current_period_end;
+
   const subscriptionData = {
     user_id: userId,
     stripe_customer_id: subscription.customer as string,
@@ -217,8 +224,8 @@ async function upsertUserSubscription(userId: string, subscription: Stripe.Subsc
     billing_interval: billingInterval,
     max_workspaces: maxWorkspaces,
     max_members: maxMembers,
-    current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-    current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+    current_period_start: periodStart ? new Date(periodStart * 1000).toISOString() : new Date().toISOString(),
+    current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : new Date().toISOString(),
     cancel_at_period_end: subscription.cancel_at_period_end,
     updated_at: new Date().toISOString(),
   };
