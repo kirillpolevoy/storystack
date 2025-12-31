@@ -5,8 +5,9 @@ import { Asset } from '@/types'
  * Downloads story assets as a ZIP file
  * @param assets Array of assets in the story (ordered by order_index)
  * @param storyName Name of the story (used as zip filename)
+ * @param postText Optional post text content to include as a text file
  */
-export async function downloadStoryAsZip(assets: Asset[], storyName: string): Promise<void> {
+export async function downloadStoryAsZip(assets: Asset[], storyName: string, postText?: string | null): Promise<void> {
   if (!assets || assets.length === 0) {
     throw new Error('No assets to download')
   }
@@ -67,6 +68,19 @@ export async function downloadStoryAsZip(assets: Asset[], storyName: string): Pr
       console.error(`[DownloadStory] Failed to download asset ${asset.id}:`, errorMsg)
       errors.push(`Asset ${i + 1}: ${errorMsg}`)
     }
+  }
+
+  // Add post text file if provided
+  if (postText && postText.trim()) {
+    // Sanitize story name for filename (same logic as zip filename)
+    const sanitizedName = storyName
+      .replace(/[^a-z0-9]/gi, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '')
+      .substring(0, 50) || 'story'
+    
+    const textFileName = `${sanitizedName}_copy.txt`
+    zip.file(textFileName, postText.trim())
   }
 
   // Generate zip file

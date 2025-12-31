@@ -47,6 +47,7 @@ export type Story = {
   user_id: string;
   name: string;
   description?: string | null;
+  post_text?: string | null;
   cover_asset_id?: string | null;
   created_at: string;
   updated_at: string;

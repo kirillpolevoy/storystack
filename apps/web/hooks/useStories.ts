@@ -148,7 +148,7 @@ export function useUpdateStory() {
   const activeWorkspaceId = useActiveWorkspace()
 
   return useMutation({
-    mutationFn: async ({ storyId, name, description }: { storyId: string; name?: string; description?: string | null }) => {
+    mutationFn: async ({ storyId, name, description, post_text }: { storyId: string; name?: string; description?: string | null; post_text?: string | null }) => {
       const {
         data: { user },
       } = await supabase.auth.getUser()
@@ -157,9 +157,10 @@ export function useUpdateStory() {
         throw new Error('Not authenticated')
       }
 
-      const updates: { name?: string; description?: string | null; updated_at?: string } = {}
+      const updates: { name?: string; description?: string | null; post_text?: string | null; updated_at?: string } = {}
       if (name !== undefined) updates.name = name
       if (description !== undefined) updates.description = description
+      if (post_text !== undefined) updates.post_text = post_text
       updates.updated_at = new Date().toISOString()
 
       const { data, error } = await supabase
@@ -173,8 +174,9 @@ export function useUpdateStory() {
       if (error) throw error
       return data as Story
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['stories', activeWorkspaceId] })
+      queryClient.invalidateQueries({ queryKey: ['story', data.id] })
     },
   })
 }
