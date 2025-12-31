@@ -16,11 +16,19 @@
 - **SMB Multi-Brand**: Manage multiple brand workspaces under one subscription
 
 **Pricing Strategy:**
-- **Phase 1:** Single price (e.g., $149/mo) - all customers get same generous quota
-- **Phase 2:** Tiered pricing based on workspace count & member limits
-  - $149/mo: 1 workspace, 10 members total
-  - $250/mo: 2 workspaces, 20 members total
-  - $400/mo: 4 workspaces, 40 members total
+- **Phase 1:** Single price tier with both monthly and annual options
+  - Monthly: $149/mo - all customers get same generous quota
+  - Annual: $1,490/yr (save $298/year, ~17% off)
+- **Phase 2:** Tiered pricing with monthly + annual for each tier
+  - Tier 1: $149/mo or $1,490/yr → 1 workspace, 10 members
+  - Tier 2: $250/mo or $2,500/yr → 2 workspaces, 20 members
+  - Tier 3: $400/mo or $4,000/yr → 4 workspaces, 40 members
+
+**Annual Billing Benefits:**
+- **Revenue:** Improves cash flow with upfront payment
+- **Retention:** Reduces churn (users committed for full year)
+- **Pricing Power:** 17% discount is attractive but still profitable
+- **Customer Psychology:** Annual saves "2 months free" - easy to communicate
 
 ---
 
@@ -72,6 +80,7 @@ CREATE TABLE user_subscriptions (
   -- Subscription details
   status TEXT NOT NULL DEFAULT 'inactive', -- inactive, active, trialing, past_due, canceled, unpaid
   plan_name TEXT, -- For display: "Starter", "Pro", "Enterprise"
+  billing_interval TEXT, -- 'month' or 'year'
 
   -- Quota limits (Phase 2)
   max_workspaces INTEGER DEFAULT 1,
@@ -237,7 +246,8 @@ Creates a Stripe Checkout session for user subscription.
 **Request Body:**
 ```typescript
 {
-  priceId?: string; // Optional for Phase 2 (tier selection)
+  interval: 'month' | 'year';  // Billing interval (monthly or annual)
+  priceId?: string;            // Optional for Phase 2 (tier selection)
 }
 ```
 
@@ -245,12 +255,16 @@ Creates a Stripe Checkout session for user subscription.
 1. Get authenticated user ID from Supabase session
 2. Check if user already has active subscription (prevent duplicate subscriptions)
 3. Get or create Stripe customer ID for user
-4. Create Checkout session with:
+4. Determine price ID based on interval:
+   - Phase 1: Use `STRIPE_MONTHLY_PRICE_ID` or `STRIPE_ANNUAL_PRICE_ID` from env
+   - Phase 2: Use provided `priceId` parameter
+5. Create Checkout session with:
    - Success URL: `/app/subscription?success=true`
    - Cancel URL: `/app/subscription?canceled=true`
-   - Metadata: `{ user_id }`
+   - Metadata: `{ user_id, billing_interval }`
    - Customer email pre-filled from Supabase user
-5. Return checkout session URL
+   - Allow promotion codes (for custom discounts)
+6. Return checkout session URL
 
 **Response:**
 ```typescript
@@ -260,9 +274,10 @@ Creates a Stripe Checkout session for user subscription.
 ```
 
 **Implementation Notes:**
-- Store Stripe customer ID in `user_subscriptions` table or user metadata
-- For Phase 1: Use hardcoded default price ID from env var
-- For Phase 2: Accept `priceId` parameter for tier selection
+- Store Stripe customer ID in `user_subscriptions` table
+- Extract `billing_interval` from Stripe price object in webhook
+- For Phase 1: Accept `interval` param, use corresponding env var price ID
+- For Phase 2: Accept `priceId` directly (for tier + interval combo)
 
 ---
 
@@ -286,7 +301,8 @@ Handles Stripe webhook events.
 3. Log event to `stripe_events` table
 4. Handle event based on type:
    - Extract user_id from metadata or customer mapping
-   - Update `user_subscriptions` table
+   - Extract billing_interval from `subscription.items.data[0].price.recurring.interval`
+   - Update `user_subscriptions` table with status, billing_interval, quotas
    - Update quotas from price metadata if changed
 5. Mark event as processed
 
@@ -294,6 +310,7 @@ Handles Stripe webhook events.
 - Use Supabase service role client (bypass RLS)
 - Implement idempotency (check `stripe_event_id` before processing)
 - Return 200 quickly (Stripe times out at 30s)
+- Extract billing_interval from Stripe subscription object (month or year)
 - Extract quotas from Stripe price metadata (Phase 2)
 
 ---
@@ -336,6 +353,7 @@ Gets subscription details and quota usage for authenticated user.
   subscription: {
     status: 'inactive' | 'active' | 'trialing' | 'past_due' | 'canceled';
     planName?: string;
+    billingInterval?: 'month' | 'year';
     currentPeriodEnd?: string;
     cancelAtPeriodEnd: boolean;
     maxWorkspaces: number;
@@ -384,18 +402,31 @@ Quick endpoint to check if user can perform an action.
 
 **Products & Prices:**
 
-**Phase 1:** Create 1 product with 1 price
+**Phase 1:** Create 1 product with 2 prices (monthly + annual)
 - Product: "StoryStack Pro"
-- Price: $149/month recurring
-- Metadata:
-  - `max_workspaces`: "10" (generous for Phase 1)
-  - `max_members`: "50"
-- Note the `price_id` (e.g., `price_xxx`)
+- **Monthly Price:** $149/month recurring
+  - Billing period: Monthly
+  - Metadata: `max_workspaces=10, max_members=50`
+  - Note the `price_id` (e.g., `price_monthly_xxx`)
+- **Annual Price:** $1,490/year recurring (~17% off, 2 months free)
+  - Billing period: Yearly
+  - Metadata: `max_workspaces=10, max_members=50`
+  - Note the `price_id` (e.g., `price_annual_xxx`)
+  - Savings: $298/year vs monthly ($149 × 12 = $1,788)
 
-**Phase 2:** Add more prices to same product
-- Price 1: $149/mo → metadata: `max_workspaces=1, max_members=10`
-- Price 2: $250/mo → metadata: `max_workspaces=2, max_members=20`
-- Price 3: $400/mo → metadata: `max_workspaces=4, max_members=40`
+**Phase 2:** Add more pricing tiers (each with monthly + annual)
+- **Tier 1 - Starter:**
+  - Monthly: $149/mo → Annual: $1,490/yr (save $298)
+  - Metadata: `max_workspaces=1, max_members=10`
+- **Tier 2 - Pro:**
+  - Monthly: $250/mo → Annual: $2,500/yr (save $500)
+  - Metadata: `max_workspaces=2, max_members=20`
+- **Tier 3 - Enterprise:**
+  - Monthly: $400/mo → Annual: $4,000/yr (save $800)
+  - Metadata: `max_workspaces=4, max_members=40`
+
+**Discount Structure:** Annual plans include 2 months free (~17% discount)
+- Formula: `annual_price = monthly_price × 10`
 
 **Webhooks:**
 - Endpoint: `https://yourdomain.com/api/stripe/webhook`
@@ -424,8 +455,13 @@ STRIPE_SECRET_KEY=sk_test_xxx               # Server-side only
 NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_xxx  # Client-side safe
 STRIPE_WEBHOOK_SECRET=whsec_xxx             # Webhook signature verification
 
-# Default price ID (Phase 1)
-STRIPE_DEFAULT_PRICE_ID=price_xxx           # Your $149/mo price
+# Default price IDs (Phase 1)
+STRIPE_MONTHLY_PRICE_ID=price_monthly_xxx   # $149/month
+STRIPE_ANNUAL_PRICE_ID=price_annual_xxx     # $1,490/year
+
+# Expose to client for plan selection (Phase 2)
+NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_ID=price_monthly_xxx
+NEXT_PUBLIC_STRIPE_ANNUAL_PRICE_ID=price_annual_xxx
 ```
 
 ---
@@ -443,7 +479,7 @@ Replace placeholder with user subscription UI.
 - "Manage Billing" button (if has subscription)
 - Plan upgrade prompts (Phase 2)
 
-**Phase 1 UI:**
+**Phase 1 UI (Active Subscription):**
 ```
 ┌─────────────────────────────────────────────┐
 │ Your Subscription                           │
@@ -465,11 +501,68 @@ Replace placeholder with user subscription UI.
 └─────────────────────────────────────────────┘
 ```
 
-**Phase 2 UI:** Add plan comparison cards, upgrade buttons
+**Phase 1 UI (No Subscription - Signup):**
+```
+┌─────────────────────────────────────────────────────┐
+│ Choose Your Plan                                    │
+│                                                     │
+│ StoryStack Pro                                      │
+│                                                     │
+│ [Monthly]  [Annual - Save $298/year]  ← Toggle     │
+│                                                     │
+│ ┌─────────────────────┐  ┌─────────────────────┐   │
+│ │   Monthly           │  │   Annual            │   │
+│ │   $149/month        │  │   $1,490/year       │   │
+│ │                     │  │   ($124/month)      │   │
+│ │   Billed monthly    │  │   Save 17%          │   │
+│ │                     │  │   Billed yearly     │   │
+│ │   [Subscribe]       │  │   [Subscribe]       │   │
+│ └─────────────────────┘  └─────────────────────┘   │
+│                                                     │
+│ Includes:                                           │
+│ • 10 Workspaces                                     │
+│ • 50 Team Members                                   │
+│ • AI-powered organization                           │
+│ • Unlimited assets                                  │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
+
+**Phase 2 UI:** Add tier selection + billing interval toggle
 
 ---
 
-### 2. Workspace Creation Flow
+### 2. Billing Interval Toggle Component
+Component for switching between monthly/annual billing.
+
+**Props:**
+```typescript
+interface BillingToggleProps {
+  value: 'month' | 'year';
+  onChange: (interval: 'month' | 'year') => void;
+  monthlyPrice: number;
+  annualPrice: number;
+  showSavings?: boolean; // Default: true
+}
+```
+
+**UI Example:**
+```
+┌──────────────────────────────────┐
+│  ( ) Monthly  (•) Annual         │
+│              Save $298/year!     │
+└──────────────────────────────────┘
+```
+
+**Implementation:**
+- Use Radix UI Radio Group or Tabs
+- Highlight annual savings
+- Default to monthly (lower barrier to entry)
+- Store selection in component state before checkout
+
+---
+
+### 3. Workspace Creation Flow
 Before creating workspace, check quota.
 
 **Location:** Workspace creation dialog/page
@@ -540,11 +633,16 @@ if (!canCreateWorkspace) {
 
 #### Step 1: Stripe Account Setup
 - [ ] Create/configure Stripe account
-- [ ] Create product: "StoryStack Pro" @ $149/mo
-- [ ] Add metadata to price: `max_workspaces=10, max_members=50`
+- [ ] Create product: "StoryStack Pro"
+- [ ] Create monthly price: $149/month
+  - Add metadata: `max_workspaces=10, max_members=50`
+  - Note the price_id
+- [ ] Create annual price: $1,490/year
+  - Add metadata: `max_workspaces=10, max_members=50`
+  - Note the price_id
 - [ ] Get API keys (test mode)
 - [ ] Set up webhook endpoint configuration (after deploying API route)
-- [ ] Add environment variables
+- [ ] Add environment variables (both monthly and annual price IDs)
 
 #### Step 2: Database Migration
 - [ ] Create migration file: `supabase/migrations/[timestamp]_add_user_subscriptions.sql`
@@ -581,20 +679,23 @@ npm install stripe @stripe/stripe-js
 
 #### Step 7: Frontend Components
 - [ ] Update `/apps/web/app/app/subscription/page.tsx`
-- [ ] Create `SubscribeButton` component
+- [ ] Create `BillingToggle` component (monthly/annual selection)
+- [ ] Create `SubscribeButton` component (accepts billing interval)
 - [ ] Create `ManageBillingButton` component
 - [ ] Create `QuotaIndicator` component
 - [ ] Add quota checks to workspace creation flow
 - [ ] Add quota checks to member invitation flow
 
 #### Step 8: Testing
-- [ ] Test checkout flow with test card (4242 4242 4242 4242)
+- [ ] Test monthly checkout flow with test card (4242 4242 4242 4242)
+- [ ] Test annual checkout flow with test card
+- [ ] Verify billing_interval stored correctly in database
 - [ ] Test webhook handling with Stripe CLI:
   ```bash
   stripe listen --forward-to localhost:3000/api/stripe/webhook
   stripe trigger checkout.session.completed
   ```
-- [ ] Test portal access
+- [ ] Test portal access (verify plan switching between monthly/annual)
 - [ ] Verify subscription status updates in database
 - [ ] Test quota functions
 - [ ] Test with multiple workspaces and members
@@ -741,6 +842,7 @@ apps/web/
 │
 ├── components/
 │   └── subscription/
+│       ├── BillingToggle.tsx       # Monthly/Annual toggle
 │       ├── SubscribeButton.tsx
 │       ├── ManageBillingButton.tsx
 │       ├── QuotaIndicator.tsx
@@ -760,10 +862,13 @@ supabase/
 ## Success Criteria
 
 ### Phase 1
-- [ ] User can subscribe via Stripe Checkout
+- [ ] User can choose between monthly and annual billing
+- [ ] User can subscribe via Stripe Checkout (both intervals work)
+- [ ] Billing interval stored and displayed correctly
+- [ ] Annual discount clearly communicated ("Save $298/year")
 - [ ] Subscription status updates automatically via webhooks
-- [ ] User can manage billing via Customer Portal
-- [ ] Subscription page displays status and quota usage
+- [ ] User can manage billing via Customer Portal (can switch between monthly/annual)
+- [ ] Subscription page displays status, billing interval, and quota usage
 - [ ] Quota displayed but not strictly enforced (soft limits)
 - [ ] All owned workspaces listed on subscription page
 
