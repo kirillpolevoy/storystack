@@ -28,7 +28,23 @@ import { useUpdateStory } from '@/hooks/useStories'
 import { AddAssetsModal } from './AddAssetsModal'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { GripVertical, Plus, X, Loader2 } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { GripVertical, Plus, X, Loader2, Smile } from 'lucide-react'
+import dynamic from 'next/dynamic'
+
+const EmojiPicker = dynamic(
+  () => import('emoji-picker-react'),
+  { 
+    ssr: false,
+    loading: () => <div className="w-[350px] h-[400px] flex items-center justify-center text-gray-400">Loading emojis...</div>
+  }
+)
+
+type EmojiClickData = {
+  emoji: string
+  unified: string
+  activeSkinTone: string
+}
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { Story } from '@/types'
@@ -154,6 +170,8 @@ export function StoryBuilder({ storyId }: StoryBuilderProps) {
 
   const [postText, setPostText] = useState('')
   const [isSavingPostText, setIsSavingPostText] = useState(false)
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const lastSavedTextRef = useRef<string>('')
 
@@ -393,12 +411,66 @@ export function StoryBuilder({ storyId }: StoryBuilderProps) {
             <p className="text-xs text-gray-500">Write the copy for your social post</p>
           </div>
           <div className="flex-1 flex flex-col">
-            <Textarea
-              value={postText}
-              onChange={(e) => setPostText(e.target.value)}
-              placeholder="Write your post copy here..."
-              className="flex-1 min-h-[300px] text-sm border-gray-300 focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none bg-white rounded-lg shadow-sm transition-all"
-            />
+            <div className="relative flex-1 min-h-0">
+              <Textarea
+                ref={textAreaRef}
+                value={postText}
+                onChange={(e) => setPostText(e.target.value)}
+                placeholder="Write your post copy here..."
+                className="w-full h-full min-h-[300px] text-sm border-gray-300 focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none bg-white rounded-lg shadow-sm transition-all pr-12"
+              />
+              <Popover open={showEmojiPicker} onOpenChange={setShowEmojiPicker}>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute top-3 right-3 h-8 w-8 rounded-lg hover:bg-gray-100 transition-colors z-10"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      setShowEmojiPicker(!showEmojiPicker)
+                    }}
+                  >
+                    <Smile className="h-4 w-4 text-gray-500" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent 
+                  className="w-auto p-0 border-gray-200 shadow-xl rounded-xl overflow-hidden"
+                  align="end"
+                  side="top"
+                >
+                  <div className="[&_.EmojiPickerReact]:!border-0 [&_.EmojiPickerReact]:!shadow-none">
+                    <EmojiPicker
+                      onEmojiClick={(emojiData: EmojiClickData) => {
+                        const emoji = emojiData.emoji
+                        if (textAreaRef.current) {
+                          const start = textAreaRef.current.selectionStart || 0
+                          const end = textAreaRef.current.selectionEnd || 0
+                          const newText = postText.substring(0, start) + emoji + postText.substring(end)
+                          setPostText(newText)
+                          // Set cursor position after the inserted emoji
+                          setTimeout(() => {
+                            if (textAreaRef.current) {
+                              textAreaRef.current.focus()
+                              textAreaRef.current.setSelectionRange(start + emoji.length, start + emoji.length)
+                            }
+                          }, 0)
+                        } else {
+                          setPostText(postText + emoji)
+                        }
+                        setShowEmojiPicker(false)
+                      }}
+                      width={350}
+                      height={400}
+                      previewConfig={{ showPreview: false }}
+                      skinTonesDisabled
+                      searchDisabled={false}
+                      lazyLoadEmojis={true}
+                    />
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </div>
             <div className="mt-4 flex items-center justify-between pt-4 border-t border-gray-200">
               <div className="flex items-center gap-2">
                 <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse"></div>
