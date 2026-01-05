@@ -13,6 +13,7 @@ const supabaseAdmin = createClient(
 
 // Email types for subscription notifications
 type SubscriptionEmailType =
+  | 'trial_started'
   | 'subscription_activated'
   | 'subscription_canceled'
   | 'subscription_reactivated'
@@ -165,6 +166,8 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     throw new Error('Missing user_id in session metadata');
   }
 
+  console.log('[Webhook] Checkout completed for user:', userId);
+
   // Get subscription details
   if (!session.subscription) {
     throw new Error('No subscription in checkout session');
@@ -175,21 +178,53 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     : session.subscription.id;
 
   const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+  console.log('[Webhook] Subscription status:', subscription.status, 'ID:', subscription.id);
 
   await upsertUserSubscription(userId, subscription);
+  console.log('[Webhook] Upserted subscription for user:', userId);
 
-  // Send welcome email for new subscription
+  // Send appropriate welcome email based on subscription status
   const billingInterval = subscription.items.data[0]?.price?.recurring?.interval as 'month' | 'year';
-  await sendSubscriptionEmail(userId, 'subscription_activated', {
-    plan_name: 'StoryStack Pro',
-    billing_interval: billingInterval,
-  });
+  const isTrialing = subscription.status === 'trialing';
+
+  if (isTrialing) {
+    // Send trial started email
+    const trialEndDate = subscription.trial_end
+      ? new Date(subscription.trial_end * 1000).toLocaleDateString('en-US', {
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric',
+        })
+      : null;
+
+    await sendSubscriptionEmail(userId, 'trial_started', {
+      plan_name: 'StoryStack Pro',
+      billing_interval: billingInterval,
+      trial_end_date: trialEndDate,
+    });
+    console.log('[Webhook] Sent trial_started email to user:', userId);
+  } else {
+    // Send subscription activated email (for returning users without trial)
+    await sendSubscriptionEmail(userId, 'subscription_activated', {
+      plan_name: 'StoryStack Pro',
+      billing_interval: billingInterval,
+    });
+    console.log('[Webhook] Sent subscription_activated email to user:', userId);
+  }
 }
 
 async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
+  console.log('[Webhook] Subscription updated/created:', {
+    id: subscription.id,
+    status: subscription.status,
+    customerId: subscription.customer,
+    metadataUserId: subscription.metadata?.user_id,
+  });
+
   let resolvedUserId = subscription.metadata?.user_id;
 
   if (!resolvedUserId) {
+    console.log('[Webhook] No user_id in metadata, looking up by customer ID');
     // Try to find user by customer ID
     const { data: existingSub } = await supabaseAdmin
       .from('user_subscriptions')
@@ -368,12 +403,20 @@ async function upsertUserSubscription(userId: string, subscription: Stripe.Subsc
   const periodStart = subscriptionItem?.current_period_start;
   const periodEnd = subscriptionItem?.current_period_end;
 
+  const mappedStatus = mapStripeStatus(subscription.status);
+  console.log('[Webhook] Upserting subscription:', {
+    userId,
+    stripeStatus: subscription.status,
+    mappedStatus,
+    subscriptionId: subscription.id,
+  });
+
   const subscriptionData = {
     user_id: userId,
     stripe_customer_id: subscription.customer as string,
     stripe_subscription_id: subscription.id,
     stripe_price_id: priceId,
-    status: mapStripeStatus(subscription.status),
+    status: mappedStatus,
     plan_name: price?.nickname || 'StoryStack Pro',
     billing_interval: billingInterval,
     max_workspaces: maxWorkspaces,
@@ -391,6 +434,9 @@ async function upsertUserSubscription(userId: string, subscription: Stripe.Subsc
     });
 
   if (error) {
+    console.error('[Webhook] Error upserting subscription:', error);
     throw error;
   }
+
+  console.log('[Webhook] Successfully upserted subscription for user:', userId);
 }

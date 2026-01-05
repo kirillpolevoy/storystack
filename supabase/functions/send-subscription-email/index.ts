@@ -7,6 +7,7 @@ const corsHeaders = {
 }
 
 type EmailType =
+  | 'trial_started'
   | 'subscription_activated'
   | 'subscription_canceled'
   | 'subscription_reactivated'
@@ -24,6 +25,7 @@ interface EmailRequest {
     previous_interval?: 'month' | 'year'
     end_date?: string
     amount?: number
+    trial_end_date?: string
   }
 }
 
@@ -167,6 +169,19 @@ function getEmailContent(
   const amountDisplay = metadata?.amount ? `$${(metadata.amount / 100).toFixed(0)}` : ''
 
   switch (type) {
+    case 'trial_started':
+      const trialEndDisplay = metadata?.trial_end_date || '14 days'
+      return {
+        subject: 'Your 14-day StoryStack Pro trial has started!',
+        heading: `Welcome to your free trial, ${userName}!`,
+        message: `Your 14-day StoryStack Pro trial is now active. You have full access to all Pro features including up to 10 workspaces, 50 team members, AI-powered organization, and priority support. ${metadata?.trial_end_date ? `Your trial ends on ${metadata.trial_end_date}.` : ''} You won't be charged until your trial ends.`,
+        ctaText: 'Start Exploring',
+        ctaUrl: '/app/library',
+        footerNote: 'Enjoy your trial! You can cancel anytime before it ends. If you have any questions, our support team is here to help.',
+        iconType: 'success',
+        textBody: `Welcome to your free trial, ${userName}!\n\nYour 14-day StoryStack Pro trial is now active. You have full access to all Pro features including up to 10 workspaces, 50 team members, AI-powered organization, and priority support.\n\n${metadata?.trial_end_date ? `Your trial ends on ${metadata.trial_end_date}. ` : ''}You won't be charged until your trial ends.\n\nEnjoy your trial!`,
+      }
+
     case 'subscription_activated':
       return {
         subject: 'Welcome to StoryStack Pro!',

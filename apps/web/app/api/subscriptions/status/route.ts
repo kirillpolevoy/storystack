@@ -20,11 +20,13 @@ export async function GET(request: NextRequest) {
     }
 
     // Get user's subscription
-    const { data: subscription } = await supabase
+    const { data: subscription, error: subError } = await supabase
       .from('user_subscriptions')
       .select('*')
       .eq('user_id', user.id)
       .single();
+
+    console.log('[Status API] User:', user.id, 'Subscription:', subscription?.status || 'none', 'Error:', subError?.message || 'none');
 
     // Get workspace count using database function
     const { data: workspaceCountData } = await supabase
