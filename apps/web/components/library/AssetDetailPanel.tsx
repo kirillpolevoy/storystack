@@ -22,6 +22,7 @@ import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
 import { useAssetAuditLog } from '@/hooks/useAssetAuditLog'
+import { useTrialGate } from '@/components/subscription/TrialGateProvider'
 
 // Configure dayjs plugins
 dayjs.extend(utc)
@@ -118,6 +119,7 @@ export function AssetDetailPanel({
   const deleteAssetMutation = useDeleteAsset()
   const queryClient = useQueryClient()
   const supabase = createClient()
+  const { withEditAccess, canEdit } = useTrialGate()
 
   // Auto-refresh: Poll for asset updates when panel is open
   useEffect(() => {
@@ -298,121 +300,130 @@ export function AssetDetailPanel({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [open, canNavigatePrevious, canNavigateNext, onNavigatePrevious, onNavigateNext, onClose])
 
-  const handleAddTag = (tagToAdd?: string) => {
+  const handleAddTag = async (tagToAdd?: string) => {
     // Use provided tag or current input value
     const tagToUse = tagToAdd || newTag.trim()
     const trimmedTag = tagToUse.trim()
-    
+
     if (trimmedTag && !tags.includes(trimmedTag)) {
-      const updatedTags = [...tags, trimmedTag]
-      setTags(updatedTags)
-      updateTagsMutation.mutate({
-        assetId: currentAsset.id,
-        tags: updatedTags,
-      }, {
-        onSuccess: () => {
-          // Refresh asset data after successful tag update
-          refetchAsset()
-          // Refresh audit log to show new entry
-          setTimeout(() => {
-            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
-            refetchAuditLog()
-          }, 500) // Small delay to ensure audit log entry is created
+      // Check edit access before proceeding
+      await withEditAccess(async () => {
+        const updatedTags = [...tags, trimmedTag]
+        setTags(updatedTags)
+        updateTagsMutation.mutate({
+          assetId: currentAsset.id,
+          tags: updatedTags,
+        }, {
+          onSuccess: () => {
+            // Refresh asset data after successful tag update
+            refetchAsset()
+            // Refresh audit log to show new entry
+            setTimeout(() => {
+              queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
+              refetchAuditLog()
+            }, 500) // Small delay to ensure audit log entry is created
+          }
+        })
+
+        // If this tag doesn't exist in available tags, add it to local list and update query cache
+        if (!allAvailableTags.includes(trimmedTag)) {
+          setLocalAvailableTags((prev) => {
+            const updated = [...prev, trimmedTag]
+            return [...new Set(updated)].sort()
+          })
+
+          // Update the query cache to persist the new tag
+          queryClient.setQueryData(['availableTags'], (oldData: string[] | undefined) => {
+            if (!oldData) return [trimmedTag]
+            if (oldData.includes(trimmedTag)) return oldData
+            return [...oldData, trimmedTag].sort()
+          })
+
+          // Also invalidate to refetch from server (ensures persistence across sessions)
+          queryClient.invalidateQueries({ queryKey: ['availableTags'] })
+          // Invalidate tags query so Tag Management page shows the new tag
+          queryClient.invalidateQueries({ queryKey: ['tags'] })
         }
+
+        setNewTag('')
+        setShowTagSuggestions(false)
       })
-      
-      // If this tag doesn't exist in available tags, add it to local list and update query cache
-      if (!allAvailableTags.includes(trimmedTag)) {
-        setLocalAvailableTags((prev) => {
-          const updated = [...prev, trimmedTag]
-          return [...new Set(updated)].sort()
-        })
-        
-        // Update the query cache to persist the new tag
-        queryClient.setQueryData(['availableTags'], (oldData: string[] | undefined) => {
-          if (!oldData) return [trimmedTag]
-          if (oldData.includes(trimmedTag)) return oldData
-          return [...oldData, trimmedTag].sort()
-        })
-        
-        // Also invalidate to refetch from server (ensures persistence across sessions)
-        queryClient.invalidateQueries({ queryKey: ['availableTags'] })
-        // Invalidate tags query so Tag Management page shows the new tag
-        queryClient.invalidateQueries({ queryKey: ['tags'] })
-      }
-      
-      setNewTag('')
-      setShowTagSuggestions(false)
     }
   }
 
-  const handleRemoveTag = (tagToRemove: string) => {
+  const handleRemoveTag = async (tagToRemove: string) => {
     console.log('[AssetDetailPanel] Removing tag:', tagToRemove)
     console.log('[AssetDetailPanel] Current tags:', tags)
-    
+
     // Use exact match (case-sensitive) to remove the tag
     const updatedTags = tags.filter((tag) => tag !== tagToRemove)
     console.log('[AssetDetailPanel] Updated tags:', updatedTags)
-    
+
     if (updatedTags.length === tags.length) {
       console.warn('[AssetDetailPanel] Tag not found in list:', tagToRemove, 'Available tags:', tags)
       return
     }
-    
-    setTags(updatedTags)
-    updateTagsMutation.mutate(
-      {
-        assetId: currentAsset.id,
-        tags: updatedTags,
-      },
-      {
-        onSuccess: (data) => {
-          console.log('[AssetDetailPanel] Tag removal successful:', data)
-          // Update local state with the response from server to ensure consistency
-          if (data?.tags) {
-            setTags(data.tags)
-          }
-          // Refresh asset data after successful tag update
-          refetchAsset()
-          // Invalidate queries to update Tag Management usage counts
-          queryClient.invalidateQueries({ queryKey: ['tags'] })
-          queryClient.invalidateQueries({ queryKey: ['availableTags'] })
-          queryClient.invalidateQueries({ queryKey: ['assets'] })
-          queryClient.invalidateQueries({ queryKey: ['asset', currentAsset.id] })
-          // Refresh audit log to show new entry
-          setTimeout(() => {
-            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
-            refetchAuditLog()
-          }, 500) // Small delay to ensure audit log entry is created
+
+    // Check edit access before proceeding
+    await withEditAccess(async () => {
+      setTags(updatedTags)
+      updateTagsMutation.mutate(
+        {
+          assetId: currentAsset.id,
+          tags: updatedTags,
         },
-        onError: (error) => {
-          console.error('[AssetDetailPanel] Tag removal failed:', error)
-          // Revert to original tags on error
-          setTags(currentAsset.tags || [])
-        },
-      }
-    )
+        {
+          onSuccess: (data) => {
+            console.log('[AssetDetailPanel] Tag removal successful:', data)
+            // Update local state with the response from server to ensure consistency
+            if (data?.tags) {
+              setTags(data.tags)
+            }
+            // Refresh asset data after successful tag update
+            refetchAsset()
+            // Invalidate queries to update Tag Management usage counts
+            queryClient.invalidateQueries({ queryKey: ['tags'] })
+            queryClient.invalidateQueries({ queryKey: ['availableTags'] })
+            queryClient.invalidateQueries({ queryKey: ['assets'] })
+            queryClient.invalidateQueries({ queryKey: ['asset', currentAsset.id] })
+            // Refresh audit log to show new entry
+            setTimeout(() => {
+              queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
+              refetchAuditLog()
+            }, 500) // Small delay to ensure audit log entry is created
+          },
+          onError: (error) => {
+            console.error('[AssetDetailPanel] Tag removal failed:', error)
+            // Revert to original tags on error
+            setTags(currentAsset.tags || [])
+          },
+        }
+      )
+    })
   }
 
-  const handleUpdateLocation = () => {
-    updateLocationMutation.mutate(
-      {
-        assetId: currentAsset.id,
-        location: location.trim() || null,
-      },
-      {
-        onSuccess: () => {
-          setIsEditingLocation(false)
-          // Refresh asset data after successful location update
-          refetchAsset()
-          // Refresh audit log to show new entry
-          setTimeout(() => {
-            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
-            refetchAuditLog()
-          }, 500) // Small delay to ensure audit log entry is created
+  const handleUpdateLocation = async () => {
+    // Check edit access before proceeding
+    await withEditAccess(async () => {
+      updateLocationMutation.mutate(
+        {
+          assetId: currentAsset.id,
+          location: location.trim() || null,
         },
-      }
-    )
+        {
+          onSuccess: () => {
+            setIsEditingLocation(false)
+            // Refresh asset data after successful location update
+            refetchAsset()
+            // Refresh audit log to show new entry
+            setTimeout(() => {
+              queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
+              refetchAuditLog()
+            }, 500) // Small delay to ensure audit log entry is created
+          },
+        }
+      )
+    })
   }
 
   const handleRetag = async () => {
@@ -422,105 +433,111 @@ export function AssetDetailPanel({
       return
     }
 
-    setIsRetagging(true)
-    try {
-      console.log('[AssetDetailPanel] Starting retag for asset:', currentAsset.id)
-      
-      // Set status to pending first
-      const { error: updateError } = await supabase
-        .from('assets')
-        .update({ auto_tag_status: 'pending' })
-        .eq('id', currentAsset.id)
+    // Check edit access before proceeding
+    await withEditAccess(async () => {
+      setIsRetagging(true)
+      try {
+        console.log('[AssetDetailPanel] Starting retag for asset:', currentAsset.id)
 
-      if (updateError) {
-        console.error('[AssetDetailPanel] Failed to set pending status:', updateError)
-        throw new Error(`Failed to update status: ${updateError.message}`)
-      }
+        // Set status to pending first
+        const { error: updateError } = await supabase
+          .from('assets')
+          .update({ auto_tag_status: 'pending' })
+          .eq('id', currentAsset.id)
 
-      console.log('[AssetDetailPanel] Status set to pending, calling edge function...')
-
-      // Get session to verify authentication
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) {
-        throw new Error('Not authenticated')
-      }
-
-      console.log('[AssetDetailPanel] Invoking auto_tag_asset:', {
-        assetId: currentAsset.id,
-        imageUrl: currentAsset.publicUrl?.substring(0, 100),
-      })
-
-      // Use Supabase client's built-in function invocation
-      // This handles CORS and authentication automatically
-      const { data, error } = await supabase.functions.invoke('auto_tag_asset', {
-        body: {
-          assetId: currentAsset.id,
-          imageUrl: currentAsset.publicUrl,
-        },
-      })
-
-      if (error) {
-        console.error('[AssetDetailPanel] Edge function error:', error)
-        
-        // Provide more helpful error messages
-        if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
-          throw new Error(
-            `Network error: Unable to reach edge function. ` +
-            `Please verify:\n` +
-            `1. The edge function "auto_tag_asset" is deployed in your Supabase project\n` +
-            `2. Your Supabase project URL is correct: ${process.env.NEXT_PUBLIC_SUPABASE_URL}\n` +
-            `3. Check Supabase Dashboard → Edge Functions to confirm deployment`
-          )
+        if (updateError) {
+          console.error('[AssetDetailPanel] Failed to set pending status:', updateError)
+          throw new Error(`Failed to update status: ${updateError.message}`)
         }
-        
-        throw new Error(`Edge function failed: ${error.message || JSON.stringify(error)}`)
+
+        console.log('[AssetDetailPanel] Status set to pending, calling edge function...')
+
+        // Get session to verify authentication
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session) {
+          throw new Error('Not authenticated')
+        }
+
+        console.log('[AssetDetailPanel] Invoking auto_tag_asset:', {
+          assetId: currentAsset.id,
+          imageUrl: currentAsset.publicUrl?.substring(0, 100),
+        })
+
+        // Use Supabase client's built-in function invocation
+        // This handles CORS and authentication automatically
+        const { data, error } = await supabase.functions.invoke('auto_tag_asset', {
+          body: {
+            assetId: currentAsset.id,
+            imageUrl: currentAsset.publicUrl,
+          },
+        })
+
+        if (error) {
+          console.error('[AssetDetailPanel] Edge function error:', error)
+
+          // Provide more helpful error messages
+          if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
+            throw new Error(
+              `Network error: Unable to reach edge function. ` +
+              `Please verify:\n` +
+              `1. The edge function "auto_tag_asset" is deployed in your Supabase project\n` +
+              `2. Your Supabase project URL is correct: ${process.env.NEXT_PUBLIC_SUPABASE_URL}\n` +
+              `3. Check Supabase Dashboard → Edge Functions to confirm deployment`
+            )
+          }
+
+          throw new Error(`Edge function failed: ${error.message || JSON.stringify(error)}`)
+        }
+
+        console.log('[AssetDetailPanel] Edge function response:', data)
+
+        // Notify parent to track this asset (same as bulk retagging)
+        onRetagStart?.(currentAsset.id)
+
+        // Set pending state - polling will handle completion
+        setIsRetagging(false)
+        setRetagStatus('pending')
+
+        // Refresh asset data immediately to show pending status
+        refetchAsset()
+
+        // Polling useEffect will handle status updates and query invalidation
+      } catch (error) {
+        console.error('[AssetDetailPanel] Failed to retag asset:', error)
+        setIsRetagging(false)
+        setRetagStatus('error')
       }
-
-      console.log('[AssetDetailPanel] Edge function response:', data)
-
-      // Notify parent to track this asset (same as bulk retagging)
-      onRetagStart?.(currentAsset.id)
-
-      // Set pending state - polling will handle completion
-      setIsRetagging(false)
-      setRetagStatus('pending')
-      
-      // Refresh asset data immediately to show pending status
-      refetchAsset()
-      
-      // Polling useEffect will handle status updates and query invalidation
-    } catch (error) {
-      console.error('[AssetDetailPanel] Failed to retag asset:', error)
-      setIsRetagging(false)
-      setRetagStatus('error')
-    }
+    })
   }
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!currentAsset?.id) {
       console.error('[AssetDetailPanel] Cannot delete: no asset ID')
       alert('Error: Cannot delete asset - missing asset ID')
       return
     }
-    
-    console.log('[AssetDetailPanel] Delete confirmed, deleting asset ID:', currentAsset.id)
-    deleteAssetMutation.mutate(currentAsset.id, {
-      onSuccess: () => {
-        console.log('[AssetDetailPanel] Asset deleted successfully')
-        setShowDeleteConfirm(false)
-        onClose()
-        // Invalidate queries to refresh the asset list
-        queryClient.invalidateQueries({ queryKey: ['assets'] })
-        queryClient.invalidateQueries({ queryKey: ['availableTags'] })
-        queryClient.invalidateQueries({ queryKey: ['availableLocations'] })
-        queryClient.invalidateQueries({ queryKey: ['asset', currentAsset.id] })
-      },
-      onError: (error) => {
-        console.error('[AssetDetailPanel] Failed to delete asset:', error)
-        const errorMessage = error instanceof Error ? error.message : String(error)
-        alert(`Failed to delete asset: ${errorMessage}`)
-        // Keep dialog open on error so user can retry
-      },
+
+    // Check edit access before proceeding
+    await withEditAccess(async () => {
+      console.log('[AssetDetailPanel] Delete confirmed, deleting asset ID:', currentAsset.id)
+      deleteAssetMutation.mutate(currentAsset.id, {
+        onSuccess: () => {
+          console.log('[AssetDetailPanel] Asset deleted successfully')
+          setShowDeleteConfirm(false)
+          onClose()
+          // Invalidate queries to refresh the asset list
+          queryClient.invalidateQueries({ queryKey: ['assets'] })
+          queryClient.invalidateQueries({ queryKey: ['availableTags'] })
+          queryClient.invalidateQueries({ queryKey: ['availableLocations'] })
+          queryClient.invalidateQueries({ queryKey: ['asset', currentAsset.id] })
+        },
+        onError: (error) => {
+          console.error('[AssetDetailPanel] Failed to delete asset:', error)
+          const errorMessage = error instanceof Error ? error.message : String(error)
+          alert(`Failed to delete asset: ${errorMessage}`)
+          // Keep dialog open on error so user can retry
+        },
+      })
     })
   }
 

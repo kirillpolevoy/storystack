@@ -48,6 +48,7 @@ type EmojiClickData = {
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { Story } from '@/types'
+import { useTrialGate } from '@/components/subscription/TrialGateProvider'
 
 interface StoryBuilderProps {
   storyId: string
@@ -151,6 +152,7 @@ export function StoryBuilder({ storyId }: StoryBuilderProps) {
   const [showAddAssetsModal, setShowAddAssetsModal] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
   const supabase = createClient()
+  const { withEditAccess, canEdit } = useTrialGate()
 
   // Fetch story data to get post_text
   const { data: story } = useQuery({
@@ -206,39 +208,42 @@ export function StoryBuilder({ storyId }: StoryBuilderProps) {
     setActiveId(event.active.id as string)
   }
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event
     setActiveId(null)
 
     if (over && active.id !== over.id && assets) {
-      const oldIndex = assets.findIndex((asset) => asset.id === active.id)
-      const newIndex = assets.findIndex((asset) => asset.id === over.id)
+      // Check edit access before allowing reorder
+      await withEditAccess(async () => {
+        const oldIndex = assets.findIndex((asset) => asset.id === active.id)
+        const newIndex = assets.findIndex((asset) => asset.id === over.id)
 
-      const newOrder = arrayMove(assets, oldIndex, newIndex)
-      const assetIds = newOrder.map((asset) => asset.id)
+        const newOrder = arrayMove(assets, oldIndex, newIndex)
+        const assetIds = newOrder.map((asset) => asset.id)
 
-      // Optimistically update the UI immediately - this prevents the "snap back" effect
-      queryClient.setQueryData(['storyAssets', storyId], newOrder)
+        // Optimistically update the UI immediately - this prevents the "snap back" effect
+        queryClient.setQueryData(['storyAssets', storyId], newOrder)
 
-      // Then perform the mutation in the background
-      updateOrder.mutate(
-        {
-          storyId,
-          assetIds,
-        },
-        {
-          onError: (error) => {
-            // Rollback on error - restore original order
-            queryClient.setQueryData(['storyAssets', storyId], assets)
-            console.error('Failed to update story order:', error)
+        // Then perform the mutation in the background
+        updateOrder.mutate(
+          {
+            storyId,
+            assetIds,
           },
-          onSettled: () => {
-            // Only refetch after mutation completes to sync with server
-            // This ensures the optimistic update stays until the mutation is done
-            queryClient.invalidateQueries({ queryKey: ['storyAssets', storyId] })
-          },
-        }
-      )
+          {
+            onError: (error) => {
+              // Rollback on error - restore original order
+              queryClient.setQueryData(['storyAssets', storyId], assets)
+              console.error('Failed to update story order:', error)
+            },
+            onSettled: () => {
+              // Only refetch after mutation completes to sync with server
+              // This ensures the optimistic update stays until the mutation is done
+              queryClient.invalidateQueries({ queryKey: ['storyAssets', storyId] })
+            },
+          }
+        )
+      })
     }
   }
 
@@ -247,7 +252,8 @@ export function StoryBuilder({ storyId }: StoryBuilderProps) {
   // Auto-save with debounce (500ms delay)
   useEffect(() => {
     // Don't save if story isn't loaded yet or if we haven't initialized
-    if (!story || !hasInitializedRef.current) {
+    // Also don't save if user doesn't have edit access (subscription ended)
+    if (!story || !hasInitializedRef.current || !canEdit) {
       return
     }
 
@@ -301,7 +307,7 @@ export function StoryBuilder({ storyId }: StoryBuilderProps) {
         saveTimeoutRef.current = null
       }
     }
-  }, [postText, story, storyId, updateStory])
+  }, [postText, story, storyId, updateStory, canEdit])
 
   if (isLoading) {
     return (
@@ -375,7 +381,11 @@ export function StoryBuilder({ storyId }: StoryBuilderProps) {
                       key={asset.id}
                       asset={asset}
                       index={index}
-                      onRemove={() => removeAsset.mutate(asset.storyAssetId)}
+                      onRemove={async () => {
+                        await withEditAccess(async () => {
+                          removeAsset.mutate(asset.storyAssetId)
+                        })
+                      }}
                     />
                   ))}
                 </div>

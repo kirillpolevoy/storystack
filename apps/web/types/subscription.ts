@@ -22,6 +22,16 @@ export interface UserSubscription {
 }
 
 /**
+ * Payment method info from Stripe
+ */
+export interface PaymentMethodInfo {
+  brand: string;
+  last4: string;
+  expMonth: number;
+  expYear: number;
+}
+
+/**
  * Subscription status response from API
  */
 export interface SubscriptionStatusResponse {
@@ -33,7 +43,9 @@ export interface SubscriptionStatusResponse {
     cancelAtPeriodEnd: boolean;
     maxWorkspaces: number;
     maxMembers: number;
+    trialEnd: string | null;
   } | null;
+  paymentMethod: PaymentMethodInfo | null;
   usage: {
     workspaceCount: number;
     memberCount: number;
@@ -58,6 +70,7 @@ export interface QuotaCheckResponse {
 export interface CreateCheckoutSessionRequest {
   interval: BillingInterval;
   priceId?: string; // Optional for Phase 2
+  skipTrial?: boolean; // Skip trial for returning users who already had a subscription
 }
 
 /**

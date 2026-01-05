@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useQueryClient } from '@tanstack/react-query'
 import { MobileMenuButton } from '@/components/app/MobileMenuButton'
+import { useTrialGate } from '@/components/subscription'
 
 dayjs.extend(relativeTime)
 
@@ -40,6 +41,7 @@ export default function StoriesPage() {
   const router = useRouter()
   const queryClient = useQueryClient()
   const { data: stories, isLoading, refetch } = useStories()
+  const { withEditAccess } = useTrialGate()
   
   // Log when stories data changes
   useEffect(() => {
@@ -89,14 +91,16 @@ export default function StoriesPage() {
   const handleCreateStory = async () => {
     if (!newStoryName.trim()) return
 
-    try {
-      const story = await createStory.mutateAsync(newStoryName.trim())
-      setNewStoryName('')
-      setShowCreateModal(false)
-      router.push(`/app/stories/${story.id}`)
-    } catch (error) {
-      console.error('Failed to create story:', error)
-    }
+    await withEditAccess(async () => {
+      try {
+        const story = await createStory.mutateAsync(newStoryName.trim())
+        setNewStoryName('')
+        setShowCreateModal(false)
+        router.push(`/app/stories/${story.id}`)
+      } catch (error) {
+        console.error('Failed to create story:', error)
+      }
+    })
   }
 
   const handleDeleteStory = useCallback(async () => {
@@ -105,49 +109,51 @@ export default function StoriesPage() {
     const storyToDelete = stories?.find(s => s.id === deleteStoryId)
     if (!storyToDelete) return
 
-    setIsDeleting(true)
-    setDeleteProgress({ current: 0, total: 1 })
+    await withEditAccess(async () => {
+      setIsDeleting(true)
+      setDeleteProgress({ current: 0, total: 1 })
 
-    try {
-      // Optimistic update - remove from UI immediately
-      queryClient.setQueryData(['stories'], (oldData: any) => {
-        if (!oldData) return oldData
-        return oldData.filter((story: any) => story.id !== deleteStoryId)
-      })
+      try {
+        // Optimistic update - remove from UI immediately
+        queryClient.setQueryData(['stories'], (oldData: any) => {
+          if (!oldData) return oldData
+          return oldData.filter((story: any) => story.id !== deleteStoryId)
+        })
 
-      // Store for undo
-      setDeletedStoryForUndo(storyToDelete)
-      setDeletedStoryName(storyToDelete.name)
+        // Store for undo
+        setDeletedStoryForUndo(storyToDelete)
+        setDeletedStoryName(storyToDelete.name)
 
-      // Delete story
-      await deleteStory.mutateAsync(deleteStoryId)
-      setDeleteProgress({ current: 1, total: 1 })
+        // Delete story
+        await deleteStory.mutateAsync(deleteStoryId)
+        setDeleteProgress({ current: 1, total: 1 })
 
-      // Show success notification
-      setShowDeleteSuccess(true)
+        // Show success notification
+        setShowDeleteSuccess(true)
 
-      // Auto-dismiss success notification after 5 seconds
-      setTimeout(() => {
-        setShowDeleteSuccess(false)
-        setDeletedStoryForUndo(null)
-      }, 5000)
+        // Auto-dismiss success notification after 5 seconds
+        setTimeout(() => {
+          setShowDeleteSuccess(false)
+          setDeletedStoryForUndo(null)
+        }, 5000)
 
-      // Invalidate queries to refresh data
-      queryClient.invalidateQueries({ queryKey: ['stories'] })
+        // Invalidate queries to refresh data
+        queryClient.invalidateQueries({ queryKey: ['stories'] })
 
-    } catch (error) {
-      console.error('[StoriesPage] Delete failed:', error)
+      } catch (error) {
+        console.error('[StoriesPage] Delete failed:', error)
 
-      // Rollback optimistic update on error
-      queryClient.invalidateQueries({ queryKey: ['stories'] })
+        // Rollback optimistic update on error
+        queryClient.invalidateQueries({ queryKey: ['stories'] })
 
-      alert('Failed to delete story. Please try again.')
-    } finally {
-      setIsDeleting(false)
-      setDeleteProgress({ current: 0, total: 0 })
-      setDeleteStoryId(null)
-    }
-  }, [deleteStoryId, stories, deleteStory, queryClient])
+        alert('Failed to delete story. Please try again.')
+      } finally {
+        setIsDeleting(false)
+        setDeleteProgress({ current: 0, total: 0 })
+        setDeleteStoryId(null)
+      }
+    })
+  }, [deleteStoryId, stories, deleteStory, queryClient, withEditAccess])
 
   const handleUndoDelete = useCallback(async () => {
     if (!deletedStoryForUndo) return

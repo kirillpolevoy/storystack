@@ -11,6 +11,57 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+// Email types for subscription notifications
+type SubscriptionEmailType =
+  | 'subscription_activated'
+  | 'subscription_canceled'
+  | 'subscription_reactivated'
+  | 'payment_method_updated'
+  | 'plan_changed'
+  | 'payment_failed'
+  | 'subscription_renewed';
+
+// Send subscription notification email
+async function sendSubscriptionEmail(
+  userId: string,
+  emailType: SubscriptionEmailType,
+  metadata?: {
+    plan_name?: string;
+    billing_interval?: 'month' | 'year';
+    previous_interval?: 'month' | 'year';
+    end_date?: string;
+    amount?: number;
+  }
+) {
+  try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+    const response = await fetch(`${supabaseUrl}/functions/v1/send-subscription-email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseAnonKey}`,
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        email_type: emailType,
+        metadata,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.error('[Webhook] Failed to send subscription email:', error);
+    } else {
+      console.log(`[Webhook] Subscription email sent: ${emailType} for user ${userId}`);
+    }
+  } catch (error) {
+    console.error('[Webhook] Error sending subscription email:', error);
+    // Don't throw - email failure shouldn't fail the webhook
+  }
+}
+
 export async function POST(request: NextRequest) {
   const body = await request.text();
   const signature = headers().get('stripe-signature');
@@ -126,15 +177,23 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
   const subscription = await stripe.subscriptions.retrieve(subscriptionId);
 
   await upsertUserSubscription(userId, subscription);
+
+  // Send welcome email for new subscription
+  const billingInterval = subscription.items.data[0]?.price?.recurring?.interval as 'month' | 'year';
+  await sendSubscriptionEmail(userId, 'subscription_activated', {
+    plan_name: 'StoryStack Pro',
+    billing_interval: billingInterval,
+  });
 }
 
 async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
-  const userId = subscription.metadata?.user_id;
-  if (!userId) {
+  let resolvedUserId = subscription.metadata?.user_id;
+
+  if (!resolvedUserId) {
     // Try to find user by customer ID
     const { data: existingSub } = await supabaseAdmin
       .from('user_subscriptions')
-      .select('user_id')
+      .select('user_id, billing_interval, status')
       .eq('stripe_customer_id', subscription.customer as string)
       .single();
 
@@ -142,13 +201,61 @@ async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
       throw new Error('Could not find user for subscription');
     }
 
-    await upsertUserSubscription(existingSub.user_id, subscription);
+    resolvedUserId = existingSub.user_id;
+
+    // Check for plan change (billing interval change)
+    const newInterval = subscription.items.data[0]?.price?.recurring?.interval as 'month' | 'year';
+    const previousInterval = existingSub.billing_interval as 'month' | 'year';
+
+    if (previousInterval && newInterval && previousInterval !== newInterval) {
+      await sendSubscriptionEmail(resolvedUserId, 'plan_changed', {
+        billing_interval: newInterval,
+        previous_interval: previousInterval,
+      });
+    }
+
+    // Check for reactivation (was canceled, now active)
+    const newStatus = mapStripeStatus(subscription.status);
+    if (existingSub.status === 'canceled' && newStatus === 'active') {
+      await sendSubscriptionEmail(resolvedUserId, 'subscription_reactivated');
+    }
+
+    await upsertUserSubscription(resolvedUserId, subscription);
   } else {
-    await upsertUserSubscription(userId, subscription);
+    // Get existing subscription to check for changes
+    const { data: existingSub } = await supabaseAdmin
+      .from('user_subscriptions')
+      .select('billing_interval, status')
+      .eq('user_id', resolvedUserId)
+      .single();
+
+    // Check for plan change
+    const newInterval = subscription.items.data[0]?.price?.recurring?.interval as 'month' | 'year';
+    if (existingSub?.billing_interval && newInterval && existingSub.billing_interval !== newInterval) {
+      await sendSubscriptionEmail(resolvedUserId, 'plan_changed', {
+        billing_interval: newInterval,
+        previous_interval: existingSub.billing_interval as 'month' | 'year',
+      });
+    }
+
+    // Check for reactivation
+    const newStatus = mapStripeStatus(subscription.status);
+    if (existingSub?.status === 'canceled' && newStatus === 'active') {
+      await sendSubscriptionEmail(resolvedUserId, 'subscription_reactivated');
+    }
+
+    await upsertUserSubscription(resolvedUserId, subscription);
   }
 }
 
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
+  // Get user ID before updating
+  const { data: existingSub } = await supabaseAdmin
+    .from('user_subscriptions')
+    .select('user_id, current_period_end')
+    .eq('stripe_subscription_id', subscription.id)
+    .single();
+
   const { error } = await supabaseAdmin
     .from('user_subscriptions')
     .update({
@@ -159,6 +266,21 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
 
   if (error) {
     throw error;
+  }
+
+  // Send cancellation email
+  if (existingSub?.user_id) {
+    const endDate = existingSub.current_period_end
+      ? new Date(existingSub.current_period_end).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        })
+      : undefined;
+
+    await sendSubscriptionEmail(existingSub.user_id, 'subscription_canceled', {
+      end_date: endDate,
+    });
   }
 }
 
@@ -171,10 +293,30 @@ async function handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
     : subscriptionId.id;
 
   const subscription = await stripe.subscriptions.retrieve(subId);
-  const userId = subscription.metadata?.user_id;
+  let userId = subscription.metadata?.user_id;
+
+  // If no user ID in metadata, try to find by customer
+  if (!userId) {
+    const { data: existingSub } = await supabaseAdmin
+      .from('user_subscriptions')
+      .select('user_id')
+      .eq('stripe_subscription_id', subId)
+      .single();
+
+    userId = existingSub?.user_id;
+  }
 
   if (userId) {
     await upsertUserSubscription(userId, subscription);
+
+    // Send renewal email only for recurring payments (not the first one)
+    // Check if this is a recurring payment by looking at billing_reason
+    if (invoice.billing_reason === 'subscription_cycle') {
+      await sendSubscriptionEmail(userId, 'subscription_renewed', {
+        amount: invoice.amount_paid,
+        billing_interval: subscription.items.data[0]?.price?.recurring?.interval as 'month' | 'year',
+      });
+    }
   }
 }
 
@@ -186,6 +328,13 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
     ? subscriptionId
     : subscriptionId.id;
 
+  // Get user ID before updating
+  const { data: existingSub } = await supabaseAdmin
+    .from('user_subscriptions')
+    .select('user_id')
+    .eq('stripe_subscription_id', subId)
+    .single();
+
   const { error } = await supabaseAdmin
     .from('user_subscriptions')
     .update({
@@ -196,6 +345,11 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
 
   if (error) {
     console.error('Error updating subscription status to past_due:', error);
+  }
+
+  // Send payment failed email
+  if (existingSub?.user_id) {
+    await sendSubscriptionEmail(existingSub.user_id, 'payment_failed');
   }
 }
 

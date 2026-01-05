@@ -7,7 +7,7 @@ export async function POST(request: NextRequest) {
   try {
     // Parse request body
     const body: CreateCheckoutSessionRequest = await request.json();
-    const { interval, priceId } = body;
+    const { interval, priceId, skipTrial } = body;
 
     // Validate interval
     if (!interval || (interval !== 'month' && interval !== 'year')) {
@@ -63,6 +63,19 @@ export async function POST(request: NextRequest) {
     const cancelUrl = `${origin}/app/subscription?canceled=true`;
 
     // Create Stripe Checkout session
+    // Only include trial for new users (skipTrial=false or undefined)
+    const subscriptionData: Record<string, any> = {
+      metadata: {
+        user_id: user.id,
+        billing_interval: interval,
+      },
+    };
+
+    // Only add trial for new users who haven't had a subscription before
+    if (!skipTrial) {
+      subscriptionData.trial_period_days = 14; // 14-day free trial with card upfront
+    }
+
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: 'subscription',
@@ -81,12 +94,7 @@ export async function POST(request: NextRequest) {
         user_id: user.id,
         billing_interval: interval,
       },
-      subscription_data: {
-        metadata: {
-          user_id: user.id,
-          billing_interval: interval,
-        },
-      },
+      subscription_data: subscriptionData,
     });
 
     // Return checkout session URL

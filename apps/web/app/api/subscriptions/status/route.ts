@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { SubscriptionStatusResponse } from '@/types/subscription';
+import { stripe } from '@/lib/stripe/server';
+import { SubscriptionStatusResponse, PaymentMethodInfo } from '@/types/subscription';
 
 export async function GET(request: NextRequest) {
   try {
@@ -43,6 +44,56 @@ export async function GET(request: NextRequest) {
     const workspaceCount = workspaceCountData || 0;
     const memberCount = memberCountData || 0;
 
+    // Fetch payment method from Stripe if subscription exists
+    let paymentMethod: PaymentMethodInfo | null = null;
+    let trialEnd: string | null = null;
+
+    if (subscription?.stripe_subscription_id) {
+      try {
+        // First, try to get payment method from the subscription itself
+        // (Checkout sessions attach payment method to subscription, not customer)
+        const stripeSubscription = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id);
+
+        // Get trial end date if in trial
+        if (stripeSubscription.trial_end) {
+          trialEnd = new Date(stripeSubscription.trial_end * 1000).toISOString();
+        }
+
+        let paymentMethodId: string | null = null;
+
+        // Check subscription's default payment method first
+        if (stripeSubscription.default_payment_method) {
+          paymentMethodId = typeof stripeSubscription.default_payment_method === 'string'
+            ? stripeSubscription.default_payment_method
+            : stripeSubscription.default_payment_method.id;
+        }
+
+        // Fallback to customer's default payment method
+        if (!paymentMethodId && subscription.stripe_customer_id) {
+          const customer = await stripe.customers.retrieve(subscription.stripe_customer_id);
+          if (customer && !customer.deleted && customer.invoice_settings?.default_payment_method) {
+            paymentMethodId = customer.invoice_settings.default_payment_method as string;
+          }
+        }
+
+        // Retrieve the payment method details
+        if (paymentMethodId) {
+          const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+          if (pm.card) {
+            paymentMethod = {
+              brand: pm.card.brand,
+              last4: pm.card.last4,
+              expMonth: pm.card.exp_month,
+              expYear: pm.card.exp_year,
+            };
+          }
+        }
+      } catch (stripeError) {
+        console.error('Error fetching payment method from Stripe:', stripeError);
+        // Don't fail the request if we can't get payment method
+      }
+    }
+
     const response: SubscriptionStatusResponse = {
       subscription: subscription
         ? {
@@ -53,8 +104,10 @@ export async function GET(request: NextRequest) {
             cancelAtPeriodEnd: subscription.cancel_at_period_end,
             maxWorkspaces: subscription.max_workspaces,
             maxMembers: subscription.max_members,
+            trialEnd,
           }
         : null,
+      paymentMethod,
       usage: {
         workspaceCount,
         memberCount,

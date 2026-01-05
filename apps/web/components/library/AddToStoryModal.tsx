@@ -10,6 +10,7 @@ import { useStories, useCreateStory } from '@/hooks/useStories'
 import { useAddStoryAssets } from '@/hooks/useStoryAssets'
 import { Asset, Story } from '@/types'
 import { Plus, Check, Image as ImageIcon, Sparkles } from 'lucide-react'
+import { useTrialGate } from '@/components/subscription'
 
 type StoryWithThumbnail = Story & {
   thumbnailUrl: string | null
@@ -37,45 +38,50 @@ export function AddToStoryModal({
   const { data: stories, isLoading } = useStories()
   const createStory = useCreateStory()
   const addAssets = useAddStoryAssets()
+  const { withEditAccess } = useTrialGate()
 
   const handleAddToStory = async () => {
     if (!selectedStoryId) return
 
-    await addAssets.mutateAsync({
-      storyId: selectedStoryId,
-      assetIds: selectedAssetIds,
-    })
+    await withEditAccess(async () => {
+      await addAssets.mutateAsync({
+        storyId: selectedStoryId,
+        assetIds: selectedAssetIds,
+      })
 
-    onSuccess?.(selectedStoryId, selectedAssetIds.length)
-    onClose()
-    setSelectedStoryId(null)
-    
-    // Redirect to story page after a brief delay to show toast
-    setTimeout(() => {
-      router.push(`/app/stories/${selectedStoryId}`)
-    }, 500)
+      onSuccess?.(selectedStoryId, selectedAssetIds.length)
+      onClose()
+      setSelectedStoryId(null)
+
+      // Redirect to story page after a brief delay to show toast
+      setTimeout(() => {
+        router.push(`/app/stories/${selectedStoryId}`)
+      }, 500)
+    })
   }
 
   const handleCreateAndAdd = async () => {
     if (!newStoryName.trim()) return
 
-    const newStory = await createStory.mutateAsync(newStoryName.trim())
+    await withEditAccess(async () => {
+      const newStory = await createStory.mutateAsync(newStoryName.trim())
 
-    await addAssets.mutateAsync({
-      storyId: newStory.id,
-      assetIds: selectedAssetIds,
+      await addAssets.mutateAsync({
+        storyId: newStory.id,
+        assetIds: selectedAssetIds,
+      })
+
+      onSuccess?.(newStory.id, selectedAssetIds.length)
+      onClose()
+      setNewStoryName('')
+      setShowCreateStory(false)
+      setSelectedStoryId(null)
+
+      // Redirect to story page after a brief delay to show toast
+      setTimeout(() => {
+        router.push(`/app/stories/${newStory.id}`)
+      }, 500)
     })
-
-    onSuccess?.(newStory.id, selectedAssetIds.length)
-    onClose()
-    setNewStoryName('')
-    setShowCreateStory(false)
-    setSelectedStoryId(null)
-    
-    // Redirect to story page after a brief delay to show toast
-    setTimeout(() => {
-      router.push(`/app/stories/${newStory.id}`)
-    }, 500)
   }
 
   const handleClose = () => {
