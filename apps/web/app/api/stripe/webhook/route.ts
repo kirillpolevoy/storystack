@@ -32,6 +32,7 @@ async function sendSubscriptionEmail(
     previous_interval?: 'month' | 'year';
     end_date?: string;
     amount?: number;
+    trial_end_date?: string | null;
   }
 ) {
   try {
