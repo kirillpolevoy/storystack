@@ -40,6 +40,7 @@ import {
 } from '@/components/ui/popover'
 import { MobileMenuButton } from '@/components/app/MobileMenuButton'
 import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
+import { useTrialGate } from '@/components/subscription'
 
 type TagConfig = {
   name: string
@@ -83,6 +84,9 @@ export default function TagsPage() {
 
   // Use reactive workspace hook instead of reading localStorage directly
   const activeWorkspaceId = useActiveWorkspace()
+
+  // Edit gating - blocks edits when subscription has ended
+  const { withEditAccess } = useTrialGate()
 
   // Fetch all tags with usage counts
   const { data: tags, isLoading, refetch } = useQuery({
@@ -647,16 +651,18 @@ export default function TagsPage() {
     },
   })
 
-  const handleCreateTag = () => {
+  const handleCreateTag = async () => {
     if (!newTagName.trim()) return
     if (tags?.some((t) => t.name.toLowerCase() === newTagName.trim().toLowerCase())) {
       alert('This tag already exists')
       return
     }
-    createTagMutation.mutate(newTagName.trim())
+    await withEditAccess(async () => {
+      createTagMutation.mutate(newTagName.trim())
+    })
   }
 
-  const handleUpdateTag = () => {
+  const handleUpdateTag = async () => {
     if (!editingTag || !editTagName.trim()) return
     if (
       editTagName.trim() !== editingTag &&
@@ -665,7 +671,9 @@ export default function TagsPage() {
       alert('This tag already exists')
       return
     }
-    updateTagMutation.mutate({ oldName: editingTag, newName: editTagName.trim() })
+    await withEditAccess(async () => {
+      updateTagMutation.mutate({ oldName: editingTag, newName: editTagName.trim() })
+    })
   }
 
   const handleDeleteTag = async () => {
@@ -674,42 +682,44 @@ export default function TagsPage() {
     const tagToDelete = tags?.find(t => t.name === deleteTagName)
     if (!tagToDelete) return
 
-    setIsDeleting(true)
-    setDeleteProgress({ current: 0, total: 1 })
+    await withEditAccess(async () => {
+      setIsDeleting(true)
+      setDeleteProgress({ current: 0, total: 1 })
 
-    try {
-      // Store for undo (if needed)
-      setDeletedTagForUndo(tagToDelete)
-      setDeletedTagName(tagToDelete.name)
+      try {
+        // Store for undo (if needed)
+        setDeletedTagForUndo(tagToDelete)
+        setDeletedTagName(tagToDelete.name)
 
-      // Delete the tag - mutation handles query invalidation on success
-      await deleteTagMutation.mutateAsync(deleteTagName)
-      setDeleteProgress({ current: 1, total: 1 })
+        // Delete the tag - mutation handles query invalidation on success
+        await deleteTagMutation.mutateAsync(deleteTagName)
+        setDeleteProgress({ current: 1, total: 1 })
 
-      // Close delete dialog immediately
-      setDeleteTagName(null)
-      setIsDeleting(false)
+        // Close delete dialog immediately
+        setDeleteTagName(null)
+        setIsDeleting(false)
 
-      // Show success toast (matches library/stories delete pattern)
-      setShowDeleteSuccess(true)
-      
-      // Auto-dismiss success notification after 3 seconds (matches library pattern)
-      setTimeout(() => {
-        setShowDeleteSuccess(false)
-        setDeletedTagForUndo(null)
-      }, 3000)
+        // Show success toast (matches library/stories delete pattern)
+        setShowDeleteSuccess(true)
 
-    } catch (error) {
-      console.error('[TagsPage] Delete failed:', error)
-      setIsDeleting(false)
-      setToast({
-        message: 'Failed to delete tag. Please try again.',
-        type: 'error',
-      })
-      setTimeout(() => setToast(null), 4000)
-    } finally {
-      setDeleteProgress({ current: 0, total: 0 })
-    }
+        // Auto-dismiss success notification after 3 seconds (matches library pattern)
+        setTimeout(() => {
+          setShowDeleteSuccess(false)
+          setDeletedTagForUndo(null)
+        }, 3000)
+
+      } catch (error) {
+        console.error('[TagsPage] Delete failed:', error)
+        setIsDeleting(false)
+        setToast({
+          message: 'Failed to delete tag. Please try again.',
+          type: 'error',
+        })
+        setTimeout(() => setToast(null), 4000)
+      } finally {
+        setDeleteProgress({ current: 0, total: 0 })
+      }
+    })
   }
 
   const handleUndoDelete = async () => {
@@ -882,30 +892,32 @@ export default function TagsPage() {
     },
   })
 
-  const handleToggleAI = (tagName: string, enabled: boolean) => {
-    setTogglingTag(tagName)
-    
-    toggleAIMutation.mutate(
-      { tagName, enabled },
-      {
-        onSuccess: () => {
-          setTogglingTag(null)
-          setToast({
-            message: `AI tagging ${enabled ? 'enabled' : 'disabled'} for "${tagName}"`,
-            type: 'success',
-          })
-          setTimeout(() => setToast(null), 3000)
-        },
-        onError: () => {
-          setTogglingTag(null)
-          setToast({
-            message: `Failed to ${enabled ? 'enable' : 'disable'} AI tagging for "${tagName}"`,
-            type: 'error',
-          })
-          setTimeout(() => setToast(null), 4000)
-        },
-      }
-    )
+  const handleToggleAI = async (tagName: string, enabled: boolean) => {
+    await withEditAccess(async () => {
+      setTogglingTag(tagName)
+
+      toggleAIMutation.mutate(
+        { tagName, enabled },
+        {
+          onSuccess: () => {
+            setTogglingTag(null)
+            setToast({
+              message: `AI tagging ${enabled ? 'enabled' : 'disabled'} for "${tagName}"`,
+              type: 'success',
+            })
+            setTimeout(() => setToast(null), 3000)
+          },
+          onError: () => {
+            setTogglingTag(null)
+            setToast({
+              message: `Failed to ${enabled ? 'enable' : 'disable'} AI tagging for "${tagName}"`,
+              type: 'error',
+            })
+            setTimeout(() => setToast(null), 4000)
+          },
+        }
+      )
+    })
   }
 
   // Keyboard shortcuts
@@ -959,26 +971,28 @@ export default function TagsPage() {
   const handleBulkToggleAI = useCallback(async (enabled: boolean) => {
     if (selectedTags.size === 0) return
 
-    const tagsToUpdate = Array.from(selectedTags)
-    let successCount = 0
-    let errorCount = 0
+    await withEditAccess(async () => {
+      const tagsToUpdate = Array.from(selectedTags)
+      let successCount = 0
+      let errorCount = 0
 
-    for (const tagName of tagsToUpdate) {
-      try {
-        await toggleAIMutation.mutateAsync({ tagName, enabled })
-        successCount++
-      } catch (error) {
-        errorCount++
+      for (const tagName of tagsToUpdate) {
+        try {
+          await toggleAIMutation.mutateAsync({ tagName, enabled })
+          successCount++
+        } catch (error) {
+          errorCount++
+        }
       }
-    }
 
-    setSelectedTags(new Set())
-    setToast({
-      message: `${successCount} tag${successCount !== 1 ? 's' : ''} updated${errorCount > 0 ? `, ${errorCount} failed` : ''}`,
-      type: errorCount > 0 ? 'error' : 'success',
+      setSelectedTags(new Set())
+      setToast({
+        message: `${successCount} tag${successCount !== 1 ? 's' : ''} updated${errorCount > 0 ? `, ${errorCount} failed` : ''}`,
+        type: errorCount > 0 ? 'error' : 'success',
+      })
+      setTimeout(() => setToast(null), 4000)
     })
-    setTimeout(() => setToast(null), 4000)
-  }, [selectedTags, toggleAIMutation])
+  }, [selectedTags, toggleAIMutation, withEditAccess])
 
   const handleBulkDelete = useCallback(() => {
     if (selectedTags.size === 0) return
@@ -989,62 +1003,64 @@ export default function TagsPage() {
   const confirmBulkDelete = useCallback(async () => {
     if (bulkDeleteTags.size === 0) return
 
-    const tagsToDelete = Array.from(bulkDeleteTags)
-    setIsDeleting(true)
-    setDeleteProgress({ current: 0, total: tagsToDelete.length })
+    await withEditAccess(async () => {
+      const tagsToDelete = Array.from(bulkDeleteTags)
+      setIsDeleting(true)
+      setDeleteProgress({ current: 0, total: tagsToDelete.length })
 
-    try {
-      let successCount = 0
-      let errorCount = 0
+      try {
+        let successCount = 0
+        let errorCount = 0
 
-      // Delete each tag sequentially
-      for (let i = 0; i < tagsToDelete.length; i++) {
-        try {
-          await deleteTagMutation.mutateAsync(tagsToDelete[i])
-          successCount++
-        } catch (error) {
-          console.error(`[TagsPage] Failed to delete tag ${tagsToDelete[i]}:`, error)
-          errorCount++
+        // Delete each tag sequentially
+        for (let i = 0; i < tagsToDelete.length; i++) {
+          try {
+            await deleteTagMutation.mutateAsync(tagsToDelete[i])
+            successCount++
+          } catch (error) {
+            console.error(`[TagsPage] Failed to delete tag ${tagsToDelete[i]}:`, error)
+            errorCount++
+          }
+          setDeleteProgress({ current: i + 1, total: tagsToDelete.length })
         }
-        setDeleteProgress({ current: i + 1, total: tagsToDelete.length })
-      }
 
-      // Close dialog and clear selection
-      setBulkDeleteTags(new Set())
-      setSelectedTags(new Set())
-      setIsDeleting(false)
+        // Close dialog and clear selection
+        setBulkDeleteTags(new Set())
+        setSelectedTags(new Set())
+        setIsDeleting(false)
 
-      // Show success toast
-      if (successCount > 0) {
-        setDeletedTagName(`${successCount} tag${successCount !== 1 ? 's' : ''}`)
-        setShowDeleteSuccess(true)
-        setTimeout(() => {
-          setShowDeleteSuccess(false)
-          setDeletedTagName('')
-        }, 3000)
-      }
+        // Show success toast
+        if (successCount > 0) {
+          setDeletedTagName(`${successCount} tag${successCount !== 1 ? 's' : ''}`)
+          setShowDeleteSuccess(true)
+          setTimeout(() => {
+            setShowDeleteSuccess(false)
+            setDeletedTagName('')
+          }, 3000)
+        }
 
-      // Show error toast if any failed
-      if (errorCount > 0) {
+        // Show error toast if any failed
+        if (errorCount > 0) {
+          setToast({
+            message: `Failed to delete ${errorCount} tag${errorCount !== 1 ? 's' : ''}. Please try again.`,
+            type: 'error',
+          })
+          setTimeout(() => setToast(null), 4000)
+        }
+
+      } catch (error) {
+        console.error('[TagsPage] Bulk delete failed:', error)
+        setIsDeleting(false)
         setToast({
-          message: `Failed to delete ${errorCount} tag${errorCount !== 1 ? 's' : ''}. Please try again.`,
+          message: 'Failed to delete tags. Please try again.',
           type: 'error',
         })
         setTimeout(() => setToast(null), 4000)
+      } finally {
+        setDeleteProgress({ current: 0, total: 0 })
       }
-
-    } catch (error) {
-      console.error('[TagsPage] Bulk delete failed:', error)
-      setIsDeleting(false)
-      setToast({
-        message: 'Failed to delete tags. Please try again.',
-        type: 'error',
-      })
-      setTimeout(() => setToast(null), 4000)
-    } finally {
-      setDeleteProgress({ current: 0, total: 0 })
-    }
-  }, [bulkDeleteTags, deleteTagMutation])
+    })
+  }, [bulkDeleteTags, deleteTagMutation, withEditAccess])
 
   const handleToggleTagSelection = useCallback((tagName: string) => {
     setSelectedTags(prev => {

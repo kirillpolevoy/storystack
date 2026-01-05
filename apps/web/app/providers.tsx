@@ -6,6 +6,7 @@ import { WorkspaceProvider } from '@/contexts/WorkspaceContext'
 import { WorkspaceErrorBoundary } from '@/components/errors/WorkspaceErrorBoundary'
 import { WorkspaceSwitchLoader } from '@/components/app/WorkspaceSwitchLoader'
 import { initializeWorkspaceQueryPlugin } from '@/plugins/workspaceQueryPlugin'
+import { TrialGateProvider } from '@/components/subscription/TrialGateProvider'
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(() => {
@@ -29,8 +30,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <QueryClientProvider client={queryClient}>
         <WorkspaceErrorBoundary>
           <WorkspaceProvider>
-            <WorkspaceSwitchLoader />
-            {children}
+            <TrialGateProvider>
+              <WorkspaceSwitchLoader />
+              {children}
+            </TrialGateProvider>
           </WorkspaceProvider>
         </WorkspaceErrorBoundary>
       </QueryClientProvider>

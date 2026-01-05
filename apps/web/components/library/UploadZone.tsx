@@ -14,6 +14,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { addBatchToPoll, startBatchPolling } from '@/utils/pollBatchStatus'
 import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
+import { useTrialGate } from '@/components/subscription/TrialGateProvider'
 
 interface UploadZoneProps {
   open: boolean
@@ -35,6 +36,7 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
   const supabase = createClient()
   const queryClient = useQueryClient()
   const activeWorkspaceId = useActiveWorkspace()
+  const { withUploadAccess } = useTrialGate()
 
   // Batch trigger auto-tagging for all uploaded assets
   // This is more efficient than individual calls, especially for 20+ assets
@@ -409,66 +411,74 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
     async (acceptedFiles: File[]) => {
       if (acceptedFiles.length === 0) return
 
-      const supabase = createClient()
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
+      // Check upload access before proceeding (requires active subscription)
+      const canProceed = await withUploadAccess(async () => {
+        const supabase = createClient()
+        const {
+          data: { user },
+        } = await supabase.auth.getUser()
 
-      if (!user) {
-        console.error('[UploadZone] User not authenticated')
-        return
-      }
-
-      // Compute hashes for all files
-      try {
-        const hashes = await Promise.all(
-          acceptedFiles.map((file) => computeImageHash(file).catch(() => ''))
-        )
-
-        // Filter out empty hashes (failed computations)
-        const validHashes = hashes.filter((hash) => hash !== '')
-
-        if (validHashes.length > 0) {
-          // Use reactive workspace ID from hook
-
-          // Check for duplicates (scope to workspace if available)
-          const duplicateIndicesResult = await checkForDuplicates(
-            user.id, 
-            validHashes,
-            activeWorkspaceId || undefined
-          )
-
-          if (duplicateIndicesResult.length > 0) {
-            // Map back to original file indices (accounting for failed hash computations)
-            const mappedDuplicateIndices: number[] = []
-            let validHashIndex = 0
-            hashes.forEach((hash, fileIndex) => {
-              if (hash !== '') {
-                if (duplicateIndicesResult.includes(validHashIndex)) {
-                  mappedDuplicateIndices.push(fileIndex)
-                }
-                validHashIndex++
-              }
-            })
-
-            // Store state for duplicate dialog
-            setPendingFiles(acceptedFiles)
-            setDuplicateIndices(mappedDuplicateIndices)
-            setFileHashes(hashes)
-            setShowDuplicateDialog(true)
-            return
-          }
+        if (!user) {
+          console.error('[UploadZone] User not authenticated')
+          return
         }
 
-        // No duplicates found, proceed with upload
-        await processFiles(acceptedFiles, false)
-      } catch (error) {
-        console.error('[UploadZone] Error checking duplicates:', error)
-        // On error, proceed with upload (fail open)
-        await processFiles(acceptedFiles, false)
+        // Compute hashes for all files
+        try {
+          const hashes = await Promise.all(
+            acceptedFiles.map((file) => computeImageHash(file).catch(() => ''))
+          )
+
+          // Filter out empty hashes (failed computations)
+          const validHashes = hashes.filter((hash) => hash !== '')
+
+          if (validHashes.length > 0) {
+            // Use reactive workspace ID from hook
+
+            // Check for duplicates (scope to workspace if available)
+            const duplicateIndicesResult = await checkForDuplicates(
+              user.id,
+              validHashes,
+              activeWorkspaceId || undefined
+            )
+
+            if (duplicateIndicesResult.length > 0) {
+              // Map back to original file indices (accounting for failed hash computations)
+              const mappedDuplicateIndices: number[] = []
+              let validHashIndex = 0
+              hashes.forEach((hash, fileIndex) => {
+                if (hash !== '') {
+                  if (duplicateIndicesResult.includes(validHashIndex)) {
+                    mappedDuplicateIndices.push(fileIndex)
+                  }
+                  validHashIndex++
+                }
+              })
+
+              // Store state for duplicate dialog
+              setPendingFiles(acceptedFiles)
+              setDuplicateIndices(mappedDuplicateIndices)
+              setFileHashes(hashes)
+              setShowDuplicateDialog(true)
+              return
+            }
+          }
+
+          // No duplicates found, proceed with upload
+          await processFiles(acceptedFiles, false)
+        } catch (error) {
+          console.error('[UploadZone] Error checking duplicates:', error)
+          // On error, proceed with upload (fail open)
+          await processFiles(acceptedFiles, false)
+        }
+      })
+
+      // If write access was denied, the trial modal will be shown
+      if (!canProceed) {
+        console.log('[UploadZone] Write access denied - trial modal shown')
       }
     },
-    [processFiles]
+    [processFiles, withUploadAccess, activeWorkspaceId]
   )
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -673,6 +683,7 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
 
   const handleImportAll = async () => {
     setShowDuplicateDialog(false)
+    // Write access was already checked in onDrop before showing duplicate dialog
     await processFiles(pendingFiles, false)
     setPendingFiles([])
     setDuplicateIndices([])
@@ -681,6 +692,7 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
 
   const handleSkipDuplicates = async () => {
     setShowDuplicateDialog(false)
+    // Write access was already checked in onDrop before showing duplicate dialog
     await processFiles(pendingFiles, true)
     setPendingFiles([])
     setDuplicateIndices([])

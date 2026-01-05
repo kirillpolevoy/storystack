@@ -1,98 +1,818 @@
-'use client'
+'use client';
 
-import { MobileMenuButton } from '@/components/app/MobileMenuButton'
+import { useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { MobileMenuButton } from '@/components/app/MobileMenuButton';
+import {
+  useSubscriptionInfo,
+  useCreateCheckoutSession,
+  useChangePlan,
+  useCancelSubscription,
+  useReactivateSubscription,
+  useCreateSetupIntent,
+  useUpdatePaymentMethod,
+} from '@/hooks/useSubscription';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { BillingInterval } from '@/lib/stripe/config';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  ArrowRight,
+  Check,
+  ChevronRight,
+  Loader2,
+  Layers,
+  Users,
+  Sparkles,
+  FolderOpen,
+} from 'lucide-react';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
+
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
+
+const PRICING = {
+  monthly: 149,
+  annual: 1490,
+};
 
 export default function SubscriptionPage() {
+  const searchParams = useSearchParams();
+  const success = searchParams.get('success');
+
+  const {
+    subscription,
+    paymentMethod,
+    hasActiveSubscription,
+    isTrialing,
+    isCanceled,
+    workspaceUsage,
+    memberUsage,
+    isLoading,
+    refetch,
+  } = useSubscriptionInfo();
+
   return (
-    <div className="flex h-full flex-col bg-white">
-      {/* Header - Matching app structure */}
+    <div className="flex h-screen flex-col bg-white">
+      {/* Header */}
       <div className="border-b border-gray-200 bg-white">
         <div className="px-4 sm:px-6 lg:px-8 pt-4">
-          {/* Row 1: Title */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-2 pb-4">
-            <div className="flex items-center gap-3">
-              <MobileMenuButton />
+          <div className="flex items-center gap-3 pb-4">
+            <MobileMenuButton />
+            <div>
               <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 tracking-tight">
-                Subscriptions
+                Billing
               </h1>
+              <p className="text-xs sm:text-sm text-gray-500 mt-1">
+                Manage your plan and payment details
+              </p>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Main Content */}
-      <div className="flex-1 overflow-y-auto p-6 sm:p-8 lg:p-12">
-        <div className="max-w-3xl mx-auto">
-          {/* Primary Heading Section - Premium spacing */}
-          <div className="mb-12 sm:mb-16">
-            <h2 className="text-3xl sm:text-4xl font-semibold text-gray-900 tracking-[-0.02em] mb-5 sm:mb-6 leading-[1.1]">
-              Subscriptions coming soon
-            </h2>
-            
-            {/* Supporting Description - Refined typography */}
-            <div className="space-y-3 sm:space-y-4">
-              <p className="text-base sm:text-lg text-gray-700 leading-[1.6] max-w-2xl">
-                StoryStack will offer paid plans for teams that want to collaborate, manage larger libraries, and stage more social content in one shared workspace.
-              </p>
-              <p className="text-base sm:text-lg text-gray-600 leading-[1.6] max-w-2xl">
-                You're early — and we'll notify you as soon as subscriptions are available.
-              </p>
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto bg-gray-50">
+        <div className="max-w-3xl mx-auto px-4 sm:px-8 py-8">
+          {/* Success message - subtle */}
+          {success && (
+            <div className="mb-6 text-sm text-gray-600">
+              Payment confirmed. Welcome to StoryStack Pro.
             </div>
-          </div>
+          )}
 
-          {/* Value Bullets - Premium card-like treatment */}
-          <div className="space-y-5 sm:space-y-6">
-            <div className="group flex items-start gap-5 sm:gap-6 p-5 sm:p-6 rounded-2xl bg-white border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all duration-200">
-              <div className="flex-shrink-0 w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-accent/10 to-accent/5 rounded-2xl flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow duration-200">
-                <svg className="w-6 h-6 sm:w-7 sm:h-7 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
-                </svg>
-              </div>
-              <div className="flex-1 min-w-0 pt-0.5">
-                <h3 className="text-lg sm:text-xl font-semibold text-gray-900 mb-2 tracking-tight">
-                  Shared Workspaces
-                </h3>
-                <p className="text-sm sm:text-base text-gray-700 leading-[1.6]">
-                  Collaborate with your team in a single place to stage social content.
-                </p>
-              </div>
-            </div>
-
-            <div className="group flex items-start gap-5 sm:gap-6 p-5 sm:p-6 rounded-2xl bg-white border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all duration-200">
-              <div className="flex-shrink-0 w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-accent/10 to-accent/5 rounded-2xl flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow duration-200">
-                <svg className="w-6 h-6 sm:w-7 sm:h-7 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
-                </svg>
-              </div>
-              <div className="flex-1 min-w-0 pt-0.5">
-                <h3 className="text-lg sm:text-xl font-semibold text-gray-900 mb-2 tracking-tight">
-                  Stories & Reuse
-                </h3>
-                <p className="text-sm sm:text-base text-gray-700 leading-[1.6]">
-                  Group assets into reusable stories for campaigns and launches.
-                </p>
-              </div>
-            </div>
-
-            <div className="group flex items-start gap-5 sm:gap-6 p-5 sm:p-6 rounded-2xl bg-white border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all duration-200">
-              <div className="flex-shrink-0 w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-accent/10 to-accent/5 rounded-2xl flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow duration-200">
-                <svg className="w-6 h-6 sm:w-7 sm:h-7 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
-                </svg>
-              </div>
-              <div className="flex-1 min-w-0 pt-0.5">
-                <h3 className="text-lg sm:text-xl font-semibold text-gray-900 mb-2 tracking-tight">
-                  Growing Libraries
-                </h3>
-                <p className="text-sm sm:text-base text-gray-700 leading-[1.6]">
-                  Support larger asset collections as your content needs grow.
-                </p>
-              </div>
-            </div>
-          </div>
+          {isLoading ? (
+            <LoadingState />
+          ) : hasActiveSubscription ? (
+            <ActiveSubscriptionView
+              subscription={subscription!}
+              paymentMethod={paymentMethod}
+              workspaceUsage={workspaceUsage}
+              memberUsage={memberUsage}
+              isTrialing={isTrialing}
+              isCanceled={isCanceled}
+              onRefresh={refetch}
+            />
+          ) : (
+            <NoSubscriptionView
+              hadPreviousSubscription={subscription?.status === 'canceled' || subscription?.status === 'unpaid' || subscription?.status === 'inactive'}
+            />
+          )}
         </div>
       </div>
     </div>
-  )
+  );
 }
 
+function LoadingState() {
+  return (
+    <div className="flex flex-col items-center justify-center py-24">
+      <Loader2 className="h-6 w-6 text-gray-400 animate-spin" />
+      <p className="text-sm text-gray-500 mt-3">Loading billing details...</p>
+    </div>
+  );
+}
+
+// ============================================
+// ACTIVE SUBSCRIPTION VIEW
+// ============================================
+function ActiveSubscriptionView({
+  subscription,
+  paymentMethod,
+  workspaceUsage,
+  memberUsage,
+  isTrialing,
+  isCanceled,
+  onRefresh,
+}: any) {
+  const [showCancelView, setShowCancelView] = useState(false);
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const changePlan = useChangePlan();
+  const cancelSubscription = useCancelSubscription();
+  const reactivateSubscription = useReactivateSubscription();
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+
+  const showSuccess = (message: string) => {
+    setSuccessMessage(message);
+    setTimeout(() => setSuccessMessage(null), 3000);
+  };
+
+  const handleChangePlan = async (newInterval: BillingInterval) => {
+    try {
+      await changePlan.mutateAsync(newInterval);
+      showSuccess('Plan updated');
+      setTimeout(() => onRefresh(), 1500);
+    } catch (error) {}
+  };
+
+  const handleCancelSubscription = async () => {
+    try {
+      await cancelSubscription.mutateAsync();
+      setShowCancelView(false);
+      showSuccess('Subscription canceled');
+      setTimeout(() => onRefresh(), 1500);
+    } catch (error) {}
+  };
+
+  const handleReactivate = async () => {
+    try {
+      await reactivateSubscription.mutateAsync();
+      showSuccess('Subscription reactivated');
+      setTimeout(() => onRefresh(), 1500);
+    } catch (error) {}
+  };
+
+  const handlePaymentUpdated = () => {
+    setShowPaymentForm(false);
+    showSuccess('Payment method updated');
+    onRefresh();
+  };
+
+  const currentInterval = subscription.billingInterval as BillingInterval;
+  const isAnnual = currentInterval === 'year';
+  const newInterval: BillingInterval = isAnnual ? 'month' : 'year';
+
+  // Render cancellation view
+  if (showCancelView) {
+    return (
+      <CancellationView
+        subscription={subscription}
+        formatDate={formatDate}
+        onBack={() => setShowCancelView(false)}
+        onConfirmCancel={handleCancelSubscription}
+        isCanceling={cancelSubscription.isPending}
+      />
+    );
+  }
+
+  // Default: Overview
+  return (
+    <div className="space-y-8">
+      {/* Success Toast */}
+      {successMessage && (
+        <div className="fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 bg-accent text-white text-sm rounded-lg shadow-elevated">
+          <Check className="w-4 h-4" />
+          {successMessage}
+        </div>
+      )}
+
+      {/* Cancellation Notice */}
+      {isCanceled && subscription.currentPeriodEnd && (
+        <div className="bg-white rounded-2xl border border-accent/20 shadow-sm overflow-hidden">
+          <div className="px-8 py-6 bg-accent/5">
+            <p className="text-gray-900 font-medium">
+              Your plan ends {formatDate(subscription.currentPeriodEnd)}
+            </p>
+            <p className="text-sm text-gray-500 mt-1">
+              Reactivate to keep your workspaces and team access.
+            </p>
+            <Button
+              className="mt-4 h-11 px-6 bg-accent hover:bg-accent/90"
+              onClick={handleReactivate}
+              disabled={reactivateSubscription.isPending}
+            >
+              {reactivateSubscription.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Reactivating...
+                </>
+              ) : (
+                'Reactivate plan'
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================ */}
+      {/* SECTION 1: Your Plan */}
+      {/* ============================================ */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-8 py-6 border-b border-gray-100">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
+              <Layers className="w-5 h-5 text-accent" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-semibold text-gray-900">StoryStack Pro</h2>
+                {isTrialing && (
+                  <span className="text-xs font-medium text-accent bg-accent/10 px-2 py-0.5 rounded-full">
+                    Trial
+                  </span>
+                )}
+              </div>
+              <p className="text-sm text-gray-500">
+                {isAnnual ? 'Annual plan' : 'Monthly plan'}
+                {isTrialing && subscription.trialEnd ? (
+                  <span> · First charge {formatDate(subscription.trialEnd)}</span>
+                ) : subscription.currentPeriodEnd && !isCanceled ? (
+                  <span> · Renews {formatDate(subscription.currentPeriodEnd)}</span>
+                ) : null}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Payment method row */}
+        <button
+          onClick={() => setShowPaymentForm(true)}
+          className="w-full px-8 py-5 flex items-center justify-between text-left group hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-4">
+            {paymentMethod ? (
+              <>
+                <div className="w-12 h-8 bg-gradient-to-br from-accent to-amber-700 rounded flex items-center justify-center">
+                  <span className="text-white text-xs font-medium uppercase">
+                    {paymentMethod.brand.slice(0, 4)}
+                  </span>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-900">
+                    •••• {paymentMethod.last4}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Expires {paymentMethod.expMonth}/{paymentMethod.expYear}
+                  </p>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-gray-500">Add payment method</p>
+            )}
+          </div>
+          <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-accent transition-colors" />
+        </button>
+      </div>
+
+      {/* ============================================ */}
+      {/* SECTION 1b: Billing Cycle */}
+      {/* ============================================ */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-8 py-6 border-b border-gray-100">
+          <h2 className="text-xl font-semibold text-gray-900">Billing cycle</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Currently on {isAnnual ? 'annual' : 'monthly'} billing
+          </p>
+        </div>
+        <div className="px-8 py-6">
+          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
+            <div>
+              <p className="text-sm font-medium text-gray-900">
+                {isAnnual ? '$1,490/year' : '$149/month'}
+              </p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {isAnnual
+                  ? 'Equivalent to $124/month'
+                  : 'Switch to annual and save 17%'}
+              </p>
+            </div>
+            {!isCanceled && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleChangePlan(newInterval)}
+                disabled={changePlan.isPending}
+              >
+                {changePlan.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  `Switch to ${newInterval === 'year' ? 'annual' : 'monthly'}`
+                )}
+              </Button>
+            )}
+          </div>
+          {/* Annual upgrade incentive - only show for monthly users */}
+          {!isAnnual && !isCanceled && (
+            <p className="mt-3 text-xs text-accent">
+              Save $298/year — that's 2 months free
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* ============================================ */}
+      {/* SECTION 2: Capacity */}
+      {/* ============================================ */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-8 py-6 border-b border-gray-100">
+          <h2 className="text-xl font-semibold text-gray-900">Capacity</h2>
+          <p className="text-sm text-gray-500 mt-1">Resources across workspaces you own</p>
+        </div>
+        <div className="divide-y divide-gray-100">
+          {/* Workspaces */}
+          <div className="px-8 py-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
+                  <FolderOpen className="w-5 h-5 text-accent" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Workspaces</p>
+                  <p className="text-xs text-gray-500">
+                    {workspaceUsage.limit - workspaceUsage.current} available
+                  </p>
+                </div>
+              </div>
+              <span className="text-sm text-gray-500">
+                {workspaceUsage.current} of {workspaceUsage.limit}
+              </span>
+            </div>
+            <div className="mt-3 h-1.5 bg-accent/10 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-accent rounded-full transition-all duration-500"
+                style={{ width: `${Math.max(workspaceUsage.percentage, 2)}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Team members */}
+          <div className="px-8 py-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
+                  <Users className="w-5 h-5 text-accent" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Team members</p>
+                  <p className="text-xs text-gray-500">
+                    {memberUsage.limit - memberUsage.current} seats available
+                  </p>
+                </div>
+              </div>
+              <span className="text-sm text-gray-500">
+                {memberUsage.current} of {memberUsage.limit}
+              </span>
+            </div>
+            <div className="mt-3 h-1.5 bg-accent/10 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-accent rounded-full transition-all duration-500"
+                style={{ width: `${Math.max(memberUsage.percentage, 2)}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ============================================ */}
+      {/* SECTION 3: Pro Features */}
+      {/* ============================================ */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-8 py-6 border-b border-gray-100">
+          <h2 className="text-xl font-semibold text-gray-900">What's included</h2>
+          <p className="text-sm text-gray-500 mt-1">Your Pro plan features</p>
+        </div>
+        <div className="px-8 py-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <FeatureItem
+              icon={<FolderOpen className="w-5 h-5" />}
+              title="Organize stories"
+              description="Up to 10 workspaces with unlimited assets"
+            />
+            <FeatureItem
+              icon={<Users className="w-5 h-5" />}
+              title="Collaborate visually"
+              description="Invite up to 50 team members"
+            />
+            <FeatureItem
+              icon={<Sparkles className="w-5 h-5" />}
+              title="AI-powered tagging"
+              description="Smart organization and search"
+            />
+            <FeatureItem
+              icon={<Layers className="w-5 h-5" />}
+              title="Scale your library"
+              description="No storage limits on assets"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* ============================================ */}
+      {/* SECTION 4: Cancel (collapsed) */}
+      {/* ============================================ */}
+      {!isCanceled && (
+        <div className="pt-4">
+          <button
+            onClick={() => setShowCancelView(true)}
+            className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            Cancel subscription
+          </button>
+        </div>
+      )}
+
+      {/* ============================================ */}
+      {/* Payment Method Dialog */}
+      {/* ============================================ */}
+      {showPaymentForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-elevated">
+            <div className="mb-6">
+              <h2 className="text-xl font-semibold text-gray-900">Update payment method</h2>
+              <p className="text-sm text-gray-500 mt-1">Enter your new card details</p>
+            </div>
+            <Elements stripe={stripePromise}>
+              <PaymentMethodForm
+                onSuccess={handlePaymentUpdated}
+                onCancel={() => setShowPaymentForm(false)}
+              />
+            </Elements>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FeatureItem({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center text-accent flex-shrink-0">
+        {icon}
+      </div>
+      <div>
+        <p className="text-sm font-medium text-gray-900">{title}</p>
+        <p className="text-xs text-gray-500 mt-0.5">{description}</p>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// PAYMENT METHOD FORM
+// ============================================
+function PaymentMethodForm({ onSuccess, onCancel }: { onSuccess: () => void; onCancel: () => void }) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const createSetupIntent = useCreateSetupIntent();
+  const updatePaymentMethod = useUpdatePaymentMethod();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!stripe || !elements) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const { clientSecret } = await createSetupIntent.mutateAsync();
+      const cardElement = elements.getElement(CardElement);
+
+      if (!cardElement) throw new Error('Card element not found');
+
+      const { setupIntent, error: stripeError } = await stripe.confirmCardSetup(clientSecret, {
+        payment_method: { card: cardElement },
+      });
+
+      if (stripeError) throw new Error(stripeError.message);
+      if (!setupIntent?.payment_method) throw new Error('Failed to set up payment method');
+
+      await updatePaymentMethod.mutateAsync(setupIntent.payment_method as string);
+      onSuccess();
+    } catch (err: any) {
+      setError(err.message || 'Failed to update payment method');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="rounded-xl border border-gray-200 p-4 bg-gray-50">
+        <CardElement
+          options={{
+            style: {
+              base: {
+                fontSize: '16px',
+                color: '#111827',
+                '::placeholder': { color: '#9ca3af' },
+              },
+            },
+          }}
+        />
+      </div>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <div className="flex gap-3">
+        <Button type="button" variant="outline" onClick={onCancel} className="h-11">
+          Cancel
+        </Button>
+        <Button type="submit" disabled={!stripe || isLoading} className="h-11">
+          {isLoading ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Saving...
+            </>
+          ) : (
+            'Save card'
+          )}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+// ============================================
+// CANCELLATION VIEW
+// ============================================
+function CancellationView({
+  subscription,
+  formatDate,
+  onBack,
+  onConfirmCancel,
+  isCanceling,
+}: any) {
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+
+  const canConfirm = confirmText.toLowerCase() === 'cancel';
+
+  return (
+    <div className="space-y-8">
+      {/* Back button */}
+      <button
+        onClick={onBack}
+        className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+      >
+        <ChevronRight className="w-4 h-4 rotate-180" />
+        Back to overview
+      </button>
+
+      {/* Cancel Info */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-8 py-6 border-b border-gray-100">
+          <h2 className="text-xl font-semibold text-gray-900">Cancel subscription</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            We're sorry to see you go
+          </p>
+        </div>
+        <div className="px-8 py-6 space-y-6">
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">
+              If you cancel, your subscription will remain active until{' '}
+              <span className="font-medium text-gray-900">
+                {subscription.currentPeriodEnd && formatDate(subscription.currentPeriodEnd)}
+              </span>
+              . After that date:
+            </p>
+            <ul className="space-y-2 text-sm text-gray-600">
+              <li className="flex items-start gap-2">
+                <span className="text-gray-400 mt-1">·</span>
+                All your workspaces will become read-only
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-gray-400 mt-1">·</span>
+                You can still view and download your assets
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-gray-400 mt-1">·</span>
+                Uploads, edits, and invites will be disabled until you resubscribe
+              </li>
+            </ul>
+          </div>
+
+          <div className="pt-4 border-t border-gray-100">
+            <Button
+              variant="outline"
+              className="text-gray-600 hover:text-red-600 hover:border-red-200"
+              onClick={() => setShowConfirmDialog(true)}
+            >
+              Continue to cancel
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Confirm Dialog */}
+      <AlertDialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
+        <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm cancellation</AlertDialogTitle>
+            <AlertDialogDescription>
+              Type "cancel" to confirm. You can reactivate anytime before your billing period ends.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="py-4">
+            <Input
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder="Type 'cancel' to confirm"
+              className="h-11"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep my plan</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={onConfirmCancel}
+              disabled={!canConfirm || isCanceling}
+              className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+            >
+              {isCanceling ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Canceling...
+                </>
+              ) : (
+                'Cancel subscription'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+// ============================================
+// NO SUBSCRIPTION VIEW (Upgrade)
+// ============================================
+function NoSubscriptionView({ hadPreviousSubscription }: { hadPreviousSubscription?: boolean }) {
+  const [billingInterval, setBillingInterval] = useState<BillingInterval>('year');
+  const createCheckoutSession = useCreateCheckoutSession();
+
+  const handleSubscribe = () => {
+    // Skip trial for returning users who already had a subscription
+    createCheckoutSession.mutate({
+      interval: billingInterval,
+      skipTrial: hadPreviousSubscription,
+    });
+  };
+
+  const monthlyEquivalent = billingInterval === 'year' ? Math.round(PRICING.annual / 12) : PRICING.monthly;
+  const savings = PRICING.monthly * 12 - PRICING.annual;
+
+  return (
+    <div className="space-y-8">
+      {/* Header */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-8 py-6 border-b border-gray-100">
+          <h2 className="text-xl font-semibold text-gray-900">
+            {hadPreviousSubscription ? 'Subscribe to StoryStack Pro' : 'Start your 14-day free trial'}
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            {hadPreviousSubscription
+              ? 'Restore full access to your workspaces.'
+              : 'Full access to all Pro features. Cancel anytime.'}
+          </p>
+        </div>
+        <div className="px-8 py-8">
+          {/* Toggle */}
+          <div className="flex items-center justify-center gap-1 p-1 bg-gray-100 rounded-lg w-fit mx-auto mb-8">
+            <button
+              onClick={() => setBillingInterval('month')}
+              className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
+                billingInterval === 'month'
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Monthly
+            </button>
+            <button
+              onClick={() => setBillingInterval('year')}
+              className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
+                billingInterval === 'year'
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Annual
+              <span className="ml-1.5 text-accent">-17%</span>
+            </button>
+          </div>
+
+          {/* Price */}
+          <div className="text-center mb-8">
+            <div className="flex items-baseline justify-center gap-1">
+              <span className="text-4xl font-semibold text-gray-900">${monthlyEquivalent}</span>
+              <span className="text-gray-500">/month</span>
+            </div>
+            {billingInterval === 'year' ? (
+              <p className="mt-2 text-sm text-gray-500">
+                ${PRICING.annual} billed annually · Save ${savings}
+              </p>
+            ) : (
+              <p className="mt-2 text-sm text-gray-500">
+                {hadPreviousSubscription ? 'Billed monthly' : 'Billed monthly after trial'}
+              </p>
+            )}
+          </div>
+
+          {/* Features */}
+          <ul className="space-y-3 mb-8 max-w-sm mx-auto">
+            {[
+              '10 workspaces',
+              '50 team members',
+              'AI-powered organization',
+              'Unlimited assets',
+              'Priority support',
+            ].map((feature) => (
+              <li key={feature} className="flex items-center gap-3 text-sm text-gray-700">
+                <Check className="w-4 h-4 text-accent flex-shrink-0" />
+                {feature}
+              </li>
+            ))}
+          </ul>
+
+          {/* CTA */}
+          <Button
+            size="lg"
+            className="w-full h-12 text-base bg-accent hover:bg-accent/90"
+            onClick={handleSubscribe}
+            disabled={createCheckoutSession.isPending}
+          >
+            {createCheckoutSession.isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                {hadPreviousSubscription ? 'Subscribing...' : 'Starting trial...'}
+              </>
+            ) : hadPreviousSubscription ? (
+              'Subscribe now'
+            ) : (
+              'Start free trial'
+            )}
+          </Button>
+
+          {/* Trial note - only show for new users */}
+          {!hadPreviousSubscription && (
+            <p className="mt-4 text-center text-xs text-gray-500">
+              Add a card to start. You won't be charged until day 15.
+            </p>
+          )}
+
+          {createCheckoutSession.isError && (
+            <p className="mt-3 text-sm text-red-600 text-center">
+              {createCheckoutSession.error?.message || 'Something went wrong'}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Current status note */}
+      <p className="text-center text-sm text-gray-400">
+        A subscription is required to upload and edit assets
+      </p>
+    </div>
+  );
+}
