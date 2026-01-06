@@ -36,14 +36,30 @@ async function sendSubscriptionEmail(
   }
 ) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    // Use service role key for server-to-server edge function calls
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-    const response = await fetch(`${supabaseUrl}/functions/v1/send-subscription-email`, {
+    console.log('[Webhook] Attempting to send email:', {
+      emailType,
+      userId,
+      hasSupabaseUrl: !!supabaseUrl,
+      hasServiceKey: !!supabaseServiceKey,
+    });
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+      console.error('[Webhook] Missing Supabase URL or service key for email');
+      return;
+    }
+
+    const edgeFunctionUrl = `${supabaseUrl}/functions/v1/send-subscription-email`;
+    console.log('[Webhook] Calling edge function:', edgeFunctionUrl);
+
+    const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${supabaseAnonKey}`,
+        'Authorization': `Bearer ${supabaseServiceKey}`,
       },
       body: JSON.stringify({
         user_id: userId,
@@ -52,11 +68,17 @@ async function sendSubscriptionEmail(
       }),
     });
 
+    const responseText = await response.text();
+    console.log('[Webhook] Edge function response:', {
+      status: response.status,
+      statusText: response.statusText,
+      body: responseText,
+    });
+
     if (!response.ok) {
-      const error = await response.json();
-      console.error('[Webhook] Failed to send subscription email:', error);
+      console.error('[Webhook] Failed to send subscription email:', responseText);
     } else {
-      console.log(`[Webhook] Subscription email sent: ${emailType} for user ${userId}`);
+      console.log(`[Webhook] Subscription email sent successfully: ${emailType} for user ${userId}`);
     }
   } catch (error) {
     console.error('[Webhook] Error sending subscription email:', error);
