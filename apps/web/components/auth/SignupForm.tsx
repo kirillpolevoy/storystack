@@ -37,9 +37,17 @@ function SignupFormContent() {
     setLoading(true)
 
     try {
+      console.log('[SignupForm] Starting signup process for:', email.toLowerCase(), 'inviteId:', inviteId)
+      
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
+      })
+
+      console.log('[SignupForm] Signup response:', { 
+        hasSession: !!data.session, 
+        hasUser: !!data.user, 
+        error: error?.message 
       })
 
       if (error) {
@@ -57,6 +65,7 @@ function SignupFormContent() {
       }
 
       if (data.session && data.user) {
+        console.log('[SignupForm] Session and user available, processing invitations...')
         // Process workspace invitations for the new user
         let workspaceId: string | null = null
         try {
@@ -98,13 +107,6 @@ function SignupFormContent() {
             // Don't throw - continue with signup, but log the error
           } else {
             console.log('[SignupForm] RPC call successful, rpcData:', rpcData)
-            if (rpcData && rpcData.length > 0) {
-              const result = rpcData[0]
-              console.log('[SignupForm] Processed invitations:', result.processed_count)
-              if (result.errors && result.errors.length > 0) {
-                console.error('[SignupForm] Errors during processing:', result.errors)
-              }
-            }
             
             // Verify invitation was marked as accepted
             if (inviteId) {
@@ -207,7 +209,25 @@ function SignupFormContent() {
           window.location.href = '/app/library'
         }, 1500)
       } else {
-        // Email confirmation required
+        // Email confirmation required - still process invitations in case they confirm later
+        console.log('[SignupForm] No session yet (email confirmation required), but processing invitations anyway...')
+        if (data.user) {
+          try {
+            console.log('[SignupForm] Processing invitations for user without session:', data.user.id)
+            const { data: rpcData, error: rpcError } = await supabase.rpc('process_workspace_invitations_for_user', {
+              user_id: data.user.id,
+              user_email: email.toLowerCase(),
+            })
+            
+            if (rpcError) {
+              console.error('[SignupForm] RPC error (no session):', rpcError)
+            } else {
+              console.log('[SignupForm] RPC call successful (no session):', rpcData)
+            }
+          } catch (inviteError: any) {
+            console.error('[SignupForm] Error processing invitations (no session):', inviteError)
+          }
+        }
         setSuccess(true)
         setError(null)
       }
