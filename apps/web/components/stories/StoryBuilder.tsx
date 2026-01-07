@@ -168,13 +168,16 @@ export function StoryBuilder({ storyId }: StoryBuilderProps) {
       return data as Story
     },
     enabled: !!storyId,
+    refetchInterval: 5000, // Refetch every 5 seconds for cross-device sync
+    refetchOnWindowFocus: true, // Refetch when window regains focus
+    refetchOnMount: true, // Always refetch on mount
   })
 
   const [postText, setPostText] = useState('')
   const [isSavingPostText, setIsSavingPostText] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedTextRef = useRef<string>('')
 
   // Initialize post_text from story data (only on initial load)
@@ -188,10 +191,22 @@ export function StoryBuilder({ storyId }: StoryBuilderProps) {
       setPostText(initialText)
       lastSavedTextRef.current = initialText.trim() || ''
       hasInitializedRef.current = true
+    } else if (story && hasInitializedRef.current && !isSavingRef.current) {
+      // Sync from server if user isn't typing and text matches last saved
+      // This enables cross-device sync without overwriting unsaved changes
+      const trimmedCurrentText = postText.trim() || ''
+      const trimmedServerText = (story.post_text || '').trim()
+      const trimmedLastSaved = lastSavedTextRef.current || ''
+      
+      // Only sync if:
+      // 1. Current text matches last saved (no local unsaved changes)
+      // 2. Server text is different from current (there's an update from another device)
+      if (trimmedCurrentText === trimmedLastSaved && trimmedServerText !== trimmedCurrentText) {
+        setPostText(story.post_text || '')
+        lastSavedTextRef.current = trimmedServerText
+      }
     }
-    // After initialization, NEVER sync from server to avoid overwriting user's typing
-    // The local state is the source of truth while user is typing
-  }, [story])
+  }, [story, postText])
 
   const sensors = useSensors(
     useSensor(PointerSensor, {

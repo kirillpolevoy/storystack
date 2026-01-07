@@ -83,7 +83,7 @@ export function AssetDetailPanel({
   const [isAuditTrailExpanded, setIsAuditTrailExpanded] = useState(false)
   const [showSuccessIndicator, setShowSuccessIndicator] = useState(false)
   const lastAssetIdRef = useRef<string | null>(null)
-  const successTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const { data: availableTags } = useAvailableTags()
   const { data: availableLocations } = useAvailableLocations()
