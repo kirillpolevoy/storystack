@@ -1,13 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
-export function SignupForm() {
+function SignupFormContent() {
   const searchParams = useSearchParams()
   const inviteId = searchParams?.get('invite')
   const [email, setEmail] = useState('')
@@ -119,22 +119,22 @@ export function SignupForm() {
             await new Promise(resolve => setTimeout(resolve, 500))
             
             // Retry verification up to 3 times (RLS might take a moment)
-            let membership = null
-            let membershipError = null
+            let membership: { workspace_id: string; role: string } | null = null
+            let membershipError: any = null
             for (let attempt = 0; attempt < 3; attempt++) {
-              const { data, error } = await supabase
+              const { data: membershipData, error: membershipCheckError } = await supabase
                 .from('workspace_members')
                 .select('workspace_id, role')
                 .eq('workspace_id', workspaceId)
                 .eq('user_id', data.user.id)
                 .single()
               
-              if (!error && data) {
-                membership = data
+              if (!membershipCheckError && membershipData) {
+                membership = membershipData
                 console.log(`[SignupForm] Verified workspace membership on attempt ${attempt + 1}:`, membership)
                 break
               } else {
-                membershipError = error
+                membershipError = membershipCheckError
                 if (attempt < 2) {
                   console.log(`[SignupForm] Membership not visible yet, retrying... (attempt ${attempt + 1}/3)`)
                   await new Promise(resolve => setTimeout(resolve, 500))
@@ -331,6 +331,20 @@ export function SignupForm() {
         )}
       </Button>
     </form>
+  )
+}
+
+export function SignupForm() {
+  return (
+    <Suspense fallback={
+      <div className="space-y-6">
+        <div className="h-12 bg-gray-100 rounded-lg animate-pulse" />
+        <div className="h-12 bg-gray-100 rounded-lg animate-pulse" />
+        <div className="h-12 bg-gray-200 rounded-lg animate-pulse" />
+      </div>
+    }>
+      <SignupFormContent />
+    </Suspense>
   )
 }
 
