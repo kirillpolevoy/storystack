@@ -278,16 +278,32 @@ export default function ProfilePage() {
         // Ignore avatar deletion errors
       }
 
-      // 9. Delete auth user (this will cascade delete other user data)
-      const { error: deleteError } = await supabase.auth.admin.deleteUser(userId)
-      
-      if (deleteError) {
-        // If admin API not available, try to delete via RPC or just sign out
-        console.warn('[Profile] Admin delete not available, signing out instead')
-        await supabase.auth.signOut()
-        window.location.href = '/login'
-        return
+      // 9. Delete auth user via edge function (this will cascade delete other user data)
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        throw new Error('No active session')
       }
+
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+      if (!supabaseUrl) {
+        throw new Error('Supabase URL not configured')
+      }
+
+      const deleteResponse = await fetch(`${supabaseUrl}/functions/v1/delete-user`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+      })
+
+      if (!deleteResponse.ok) {
+        const errorData = await deleteResponse.json().catch(() => ({ error: 'Failed to delete user' }))
+        throw new Error(errorData.error || `Failed to delete user: ${deleteResponse.statusText}`)
+      }
+
+      const deleteResult = await deleteResponse.json()
+      console.log('[Profile] User deletion result:', deleteResult)
 
       // Sign out and redirect
       await supabase.auth.signOut()

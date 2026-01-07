@@ -1,5 +1,5 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -131,6 +131,26 @@ Deno.serve(async (req) => {
     } catch (rpcException) {
       console.warn('[delete-user] Exception calling delete_user_storage_objects:', rpcException);
       // Continue anyway
+    }
+    
+    // Delete campaigns owned by the user before deleting the user
+    // This prevents foreign key constraint violations
+    console.log('[delete-user] Deleting campaigns for user:', user.id);
+    try {
+      const { error: campaignsDeleteError } = await supabaseAdmin
+        .from('campaigns')
+        .delete()
+        .eq('user_id', user.id);
+      
+      if (campaignsDeleteError) {
+        console.warn('[delete-user] Error deleting campaigns:', campaignsDeleteError);
+        // Continue anyway - might not have campaigns or table might not exist
+      } else {
+        console.log('[delete-user] Successfully deleted campaigns');
+      }
+    } catch (campaignsError) {
+      console.warn('[delete-user] Exception deleting campaigns:', campaignsError);
+      // Continue anyway - campaigns table might not exist or might be handled by CASCADE
     }
     
     // Small delay to ensure storage deletions are committed
