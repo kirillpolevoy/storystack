@@ -88,51 +88,71 @@ export function SignupForm() {
           
           console.log('[SignupForm] RPC call successful, rpcData:', rpcData)
           
-          // Verify the user was added to the workspace
+          // Verify the user was added to the workspace and set as active
           if (workspaceId) {
             // Wait a moment for the database to commit
             await new Promise(resolve => setTimeout(resolve, 500))
             
-            // Verify membership was created
-            const { data: membership, error: membershipError } = await supabase
-              .from('workspace_members')
-              .select('workspace_id, role')
-              .eq('workspace_id', workspaceId)
-              .eq('user_id', data.user.id)
-              .single()
-            
-            if (membershipError || !membership) {
-              console.error('[SignupForm] Failed to verify workspace membership:', membershipError)
-              // Don't throw - membership might still be created, just not visible yet due to RLS
-            } else {
-              console.log('[SignupForm] Verified workspace membership:', membership)
+            // Retry verification up to 3 times (RLS might take a moment)
+            let membership = null
+            let membershipError = null
+            for (let attempt = 0; attempt < 3; attempt++) {
+              const { data, error } = await supabase
+                .from('workspace_members')
+                .select('workspace_id, role')
+                .eq('workspace_id', workspaceId)
+                .eq('user_id', data.user.id)
+                .single()
+              
+              if (!error && data) {
+                membership = data
+                console.log(`[SignupForm] Verified workspace membership on attempt ${attempt + 1}:`, membership)
+                break
+              } else {
+                membershipError = error
+                if (attempt < 2) {
+                  console.log(`[SignupForm] Membership not visible yet, retrying... (attempt ${attempt + 1}/3)`)
+                  await new Promise(resolve => setTimeout(resolve, 500))
+                }
+              }
             }
             
-            // Set workspace as active in localStorage
+            if (!membership) {
+              console.error('[SignupForm] Failed to verify workspace membership after retries:', membershipError)
+              // Still set workspace as active - it might be created but not visible due to RLS timing
+            }
+            
+            // Set workspace as active in localStorage immediately
             localStorage.setItem('@storystack:active_workspace_id', workspaceId)
             window.dispatchEvent(new Event('workspace-changed'))
             
             // Also set in database for persistence
             try {
-              await supabase
+              const { error: prefError } = await supabase
                 .from('user_preferences')
                 .upsert({
                   user_id: data.user.id,
                   active_workspace_id: workspaceId,
                   updated_at: new Date().toISOString(),
                 })
-              console.log('[SignupForm] Set active workspace in database:', workspaceId)
+              
+              if (prefError) {
+                console.warn('[SignupForm] Failed to set workspace preference in database:', prefError)
+              } else {
+                console.log('[SignupForm] Set active workspace in database:', workspaceId)
+              }
             } catch (prefError) {
-              console.warn('[SignupForm] Failed to set workspace preference in database:', prefError)
+              console.warn('[SignupForm] Exception setting workspace preference:', prefError)
               // Continue anyway - localStorage is set
             }
             
             console.log('[SignupForm] Set active workspace to:', workspaceId)
           }
           
-          // Invalidate workspaces query to refresh the workspace list
+          // Invalidate all workspace-related queries to force refresh
           await queryClient.invalidateQueries({ queryKey: ['workspaces'] })
           await queryClient.invalidateQueries({ queryKey: ['workspaces', data.user.id] })
+          await queryClient.invalidateQueries({ queryKey: ['user'] })
           
           console.log('[SignupForm] Processed workspace invitations, workspaceId:', workspaceId)
         } catch (inviteError: any) {
