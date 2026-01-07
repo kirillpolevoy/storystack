@@ -1,6 +1,6 @@
 {
   "name": "storystack",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "private": true,
   "scripts": {
     "start": "expo start",
@@ -17,6 +17,7 @@
     "expo": "^54.0.23",
     "expo-application": "~7.0.8",
     "expo-blur": "^15.0.7",
+    "expo-clipboard": "~8.0.8",
     "expo-crypto": "^15.0.7",
     "expo-device": "~8.0.10",
     "expo-file-system": "~19.0.20",

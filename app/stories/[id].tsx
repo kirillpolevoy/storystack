@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, TouchableOpacity, FlatList, ActivityIndicator, Alert, Modal, TextInput, ScrollView, Animated, Easing, Keyboard, TouchableWithoutFeedback } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { View, Text, TouchableOpacity, FlatList, ActivityIndicator, Alert, Modal, TextInput, ScrollView, Animated, Easing, Keyboard, TouchableWithoutFeedback, KeyboardAvoidingView, Platform, AppState } from 'react-native';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Swipeable } from 'react-native-gesture-handler';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import * as Clipboard from 'expo-clipboard';
 import { useAuth } from '@/contexts/AuthContext';
 import { StoryWithAssets, Asset } from '@/types';
 import { getStoryById, updateStory, deleteStory, removeAssetFromStory, reorderStoryAssets } from '@/utils/stories';
@@ -27,41 +28,145 @@ export default function StoryDetailScreen() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [postText, setPostText] = useState('');
+  const [isSavingPostText, setIsSavingPostText] = useState(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const postTextRef = useRef<string>('');
+  const isSavingRef = useRef<boolean>(false);
+  const flatListRef = useRef<FlatList>(null);
+  const postTextInputRef = useRef<TextInput>(null);
   
   // Modal animations
   const modalScale = useRef(new Animated.Value(0.95)).current;
   const modalOpacity = useRef(new Animated.Value(0)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
 
-  const loadStory = useCallback(async () => {
+  const loadStory = useCallback(async (skipLoadingState = false) => {
     if (!session?.user?.id || !storyId) {
       setIsLoading(false);
       return;
     }
 
-    setIsLoading(true);
+    if (!skipLoadingState) {
+      setIsLoading(true);
+    }
     try {
       const storyData = await getStoryById(storyId, session.user.id);
       if (storyData) {
-        setStory(storyData);
-        setEditName(storyData.name);
-        setEditDescription(storyData.description || '');
+        // Get current state values at the time of update using refs
+        const currentPostText = postTextRef.current;
+        const currentlySaving = isSavingRef.current;
+        
+        setStory((currentStory) => {
+          // Only update if story data actually changed (prevent unnecessary re-renders)
+          if (currentStory && 
+              currentStory.name === storyData.name &&
+              currentStory.description === storyData.description &&
+              currentStory.post_text === storyData.post_text &&
+              currentStory.assets?.length === storyData.assets?.length) {
+            // No changes, skip update to prevent flickering
+            return currentStory;
+          }
+          
+          setEditName(storyData.name);
+          setEditDescription(storyData.description || '');
+          
+          // Only update postText if user isn't currently typing (to avoid overwriting unsaved changes)
+          if (currentStory) {
+            const trimmedCurrentText = currentPostText.trim() || '';
+            const trimmedNewText = (storyData.post_text || '').trim();
+            const trimmedCurrentStoryText = (currentStory.post_text || '').trim();
+            
+            // If local text matches current story text (no local changes), safe to update
+            // Or if local text is empty and new text exists, update
+            const shouldUpdatePostText = trimmedCurrentText === trimmedCurrentStoryText || 
+                                       (trimmedCurrentText === '' && trimmedNewText !== '') ||
+                                       trimmedCurrentText === trimmedNewText;
+            
+            if (shouldUpdatePostText && !currentlySaving) {
+              setPostText(storyData.post_text || '');
+              postTextRef.current = storyData.post_text || '';
+            }
+          } else {
+            // First load, always set postText
+            setPostText(storyData.post_text || '');
+            postTextRef.current = storyData.post_text || '';
+          }
+          
+          return storyData;
+        });
       } else {
-        Alert.alert('Error', 'Story not found');
-        router.back();
+        if (!skipLoadingState) {
+          Alert.alert('Error', 'Story not found');
+          router.back();
+        }
       }
     } catch (error) {
       console.error('[StoryDetail] Failed to load story:', error);
-      Alert.alert('Error', 'Failed to load story');
-      router.back();
+      if (!skipLoadingState) {
+        Alert.alert('Error', 'Failed to load story');
+        router.back();
+      }
     } finally {
-      setIsLoading(false);
+      if (!skipLoadingState) {
+        setIsLoading(false);
+      }
     }
-  }, [session, storyId, router]);
+  }, [session?.user?.id, storyId, router]);
 
   useEffect(() => {
     loadStory();
   }, [loadStory]);
+
+  // Refresh story data when screen comes into focus (for cross-device sync)
+  useFocusEffect(
+    useCallback(() => {
+      // Only refresh if we're not currently saving to avoid overwriting user's typing
+      if (!isSavingRef.current && storyId && session?.user?.id) {
+        loadStory(true); // Skip loading state for background refresh
+      }
+    }, [storyId, session?.user?.id, loadStory])
+  );
+
+  // Periodic refresh for cross-device sync (every 10 seconds, less frequent to reduce flickering)
+  useEffect(() => {
+    if (!storyId || !story) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      // Only refresh if user hasn't typed recently (compare current postText with story.post_text)
+      const currentPostText = postTextRef.current;
+      const trimmedCurrentText = currentPostText.trim() || '';
+      const trimmedStoryText = (story.post_text || '').trim();
+      
+      // If local text matches server text and not saving, safe to refresh
+      // This prevents overwriting user's unsaved changes
+      // Only refresh post_text, not the entire story to avoid image flickering
+      if (trimmedCurrentText === trimmedStoryText && !isSavingRef.current) {
+        // Only refresh post_text field, not assets to prevent thumbnail flickering
+        loadStory(true); // Skip loading state for background refresh
+      }
+    }, 10000); // Check every 10 seconds (reduced frequency to minimize flickering)
+
+    return () => clearInterval(interval);
+  }, [storyId, story, loadStory]);
+
+  // Refresh when app comes to foreground
+  useEffect(() => {
+    if (!storyId || !session?.user?.id) return;
+    
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active' && !isSavingRef.current) {
+        // App came to foreground, refresh to sync with other devices
+        loadStory(true); // Skip loading state for background refresh
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [storyId, session?.user?.id, loadStory]);
 
   // Animate modal
   useEffect(() => {
@@ -180,6 +285,76 @@ export default function StoryDetailScreen() {
     }
   };
 
+  const handleCopyPostText = async () => {
+    const textToCopy = postText.trim();
+    if (!textToCopy) {
+      return;
+    }
+
+    await Clipboard.setStringAsync(textToCopy);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    Alert.alert('Copied!', 'Post text copied to clipboard');
+  };
+
+  // Update refs when state changes
+  useEffect(() => {
+    postTextRef.current = postText;
+  }, [postText]);
+
+  useEffect(() => {
+    isSavingRef.current = isSavingPostText;
+  }, [isSavingPostText]);
+
+  // Auto-save post text with debounce (500ms delay)
+  useEffect(() => {
+    if (!story || !session?.user?.id) {
+      return;
+    }
+
+    // Clear existing timeout
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+
+    // Don't auto-save if text hasn't changed from story's post_text
+    const trimmedCurrentText = postText.trim() || '';
+    const trimmedStoryText = (story.post_text || '').trim();
+    if (trimmedCurrentText === trimmedStoryText) {
+      return;
+    }
+
+    // Set new timeout to save after user stops typing
+    saveTimeoutRef.current = setTimeout(async () => {
+      const textToSave = postText.trim() || '';
+      
+      setIsSavingPostText(true);
+      isSavingRef.current = true;
+      try {
+        const success = await updateStory(story.id, session.user.id, {
+          post_text: textToSave || null,
+        });
+        if (success) {
+          // Update local story state
+          setStory((prev) => prev ? { ...prev, post_text: textToSave || null } : null);
+        }
+      } catch (error) {
+        console.error('[StoryDetail] Failed to save post text:', error);
+      } finally {
+        setIsSavingPostText(false);
+        isSavingRef.current = false;
+      }
+    }, 500);
+
+    // Cleanup timeout on unmount or when postText changes
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+    };
+  }, [postText, story, session]);
+
   const handleAddPhotos = () => {
     if (!story) return;
     router.push({
@@ -192,7 +367,7 @@ export default function StoryDetailScreen() {
     } as any);
   };
 
-  // Asset Item Component
+  // Asset Item Component - Apple Design
   const AssetItem = ({ asset, index }: { asset: Asset; index: number }) => {
     const swipeableRef = useRef<Swipeable>(null);
 
@@ -216,9 +391,9 @@ export default function StoryDetailScreen() {
             height: '100%',
             justifyContent: 'center',
             alignItems: 'center',
-            paddingHorizontal: 24,
-            borderTopRightRadius: 16,
-            borderBottomRightRadius: 16,
+            paddingHorizontal: 20,
+            borderTopRightRadius: 12,
+            borderBottomRightRadius: 12,
           }}
         >
           <Text
@@ -266,6 +441,9 @@ export default function StoryDetailScreen() {
                   source={{ uri: asset.publicUrl }}
                   style={{ width: 88, height: 88 }}
                   contentFit="cover"
+                  cachePolicy="memory-disk"
+                  transition={0}
+                  recyclingKey={asset.id}
                 />
               ) : (
                 <View
@@ -324,9 +502,9 @@ export default function StoryDetailScreen() {
     );
   };
 
-  const renderAssetItem = ({ item: asset, index }: { item: Asset; index: number }) => {
+  const renderAssetItem = useCallback(({ item: asset, index }: { item: Asset; index: number }) => {
     return <AssetItem asset={asset} index={index} />;
-  };
+  }, []);
 
   if (isLoading) {
     return (
@@ -477,7 +655,16 @@ export default function StoryDetailScreen() {
 
       {/* Photos List */}
       {story.assets.length === 0 ? (
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40 }}>
+        <ScrollView
+          contentContainerStyle={{
+            flexGrow: 1,
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingHorizontal: 40,
+            paddingBottom: Math.max(insets.bottom + 20, 40) + 200,
+          }}
+          showsVerticalScrollIndicator={false}
+        >
           <View
             style={{
               width: 100,
@@ -540,53 +727,312 @@ export default function StoryDetailScreen() {
               Add Photos
             </Text>
           </TouchableOpacity>
-        </View>
-      ) : (
-        <FlatList
-          data={story.assets}
-          renderItem={renderAssetItem}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={{
-            paddingTop: 12,
-            paddingBottom: Math.max(insets.bottom + 20, 40) + 80, // Extra padding for tab bar
-          }}
-          showsVerticalScrollIndicator={false}
-          ListFooterComponent={
-            <TouchableOpacity
-              onPress={handleAddPhotos}
-              activeOpacity={0.7}
-              style={{
-                marginHorizontal: 20,
-                marginTop: 8,
-                padding: 24,
-                borderRadius: 16,
-                backgroundColor: '#ffffff',
-                borderWidth: 2,
-                borderColor: '#e5e5ea',
-                borderStyle: 'dashed',
-                alignItems: 'center',
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 1 },
-                shadowOpacity: 0.04,
-                shadowRadius: 8,
-                elevation: 1,
-              }}
-            >
-              <MaterialCommunityIcons name="plus-circle" size={36} color="#b38f5b" />
+
+          {/* Post Text Section */}
+          <View
+            style={{
+              marginTop: 40,
+              width: '100%',
+            }}
+          >
+            {/* Section Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, paddingHorizontal: 4 }}>
               <Text
                 style={{
-                  fontSize: 17,
+                  fontSize: 13,
                   fontWeight: '600',
-                  color: '#b38f5b',
-                  marginTop: 12,
-                  letterSpacing: -0.3,
+                  color: '#8e8e93',
+                  textTransform: 'uppercase',
+                  letterSpacing: 0.5,
                 }}
               >
-                Add More Photos
+                Post Copy
               </Text>
-            </TouchableOpacity>
-          }
-        />
+              {isSavingPostText && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <View
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: 3,
+                      backgroundColor: '#34c759',
+                    }}
+                  />
+                </View>
+              )}
+            </View>
+
+            {/* Text Input Container */}
+            <View
+              style={{
+                backgroundColor: '#ffffff',
+                borderRadius: 12,
+                borderWidth: 0.5,
+                borderColor: '#c6c6c8',
+                overflow: 'hidden',
+              }}
+            >
+                    <TextInput
+                      ref={postTextInputRef}
+                      value={postText}
+                      onChangeText={setPostText}
+                      placeholder="Write your post copy here..."
+                      placeholderTextColor="#c7c7cc"
+                      multiline
+                      textAlignVertical="top"
+                      onFocus={() => {
+                        // Scroll to text input when focused
+                        setTimeout(() => {
+                          if (flatListRef.current && story.assets.length > 0) {
+                            // Scroll to end where post text section is
+                            flatListRef.current.scrollToEnd({ animated: true });
+                          }
+                        }, 300);
+                      }}
+                      style={{
+                        fontSize: 17,
+                        fontWeight: '400',
+                        color: '#000000',
+                        padding: 16,
+                        minHeight: 140,
+                        maxHeight: 300,
+                        lineHeight: 22,
+                        letterSpacing: -0.41,
+                      }}
+                    />
+              
+              {/* Footer with character count and copy button */}
+              {postText.length > 0 && (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    paddingHorizontal: 16,
+                    paddingBottom: 12,
+                    paddingTop: 8,
+                    borderTopWidth: 0.5,
+                    borderTopColor: '#e5e5ea',
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontWeight: '400',
+                      color: '#8e8e93',
+                      letterSpacing: -0.08,
+                    }}
+                  >
+                    {postText.length} {postText.length === 1 ? 'character' : 'characters'}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={handleCopyPostText}
+                    activeOpacity={0.6}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      paddingHorizontal: 10,
+                      paddingVertical: 6,
+                    }}
+                  >
+                    <MaterialCommunityIcons name="content-copy" size={16} color="#007AFF" style={{ marginRight: 4 }} />
+                    <Text
+                      style={{
+                        fontSize: 15,
+                        fontWeight: '400',
+                        color: '#007AFF',
+                        letterSpacing: -0.24,
+                      }}
+                    >
+                      Copy
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          </View>
+        </ScrollView>
+      ) : (
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 20}
+        >
+          <FlatList
+            ref={flatListRef}
+            data={story.assets}
+            renderItem={renderAssetItem}
+            keyExtractor={(item) => item.id}
+            removeClippedSubviews={false}
+            contentContainerStyle={{
+              paddingTop: 12,
+              paddingBottom: Math.max(insets.bottom + 20, 40) + 200,
+            }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            ListFooterComponent={
+              <>
+                <TouchableOpacity
+                  onPress={handleAddPhotos}
+                  activeOpacity={0.7}
+                  style={{
+                    marginHorizontal: 20,
+                    marginTop: 8,
+                    padding: 24,
+                    borderRadius: 16,
+                    backgroundColor: '#ffffff',
+                    borderWidth: 2,
+                    borderColor: '#e5e5ea',
+                    borderStyle: 'dashed',
+                    alignItems: 'center',
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 1 },
+                    shadowOpacity: 0.04,
+                    shadowRadius: 8,
+                    elevation: 1,
+                  }}
+                >
+                  <MaterialCommunityIcons name="plus-circle" size={36} color="#b38f5b" />
+                  <Text
+                    style={{
+                      fontSize: 17,
+                      fontWeight: '600',
+                      color: '#b38f5b',
+                      marginTop: 12,
+                      letterSpacing: -0.3,
+                    }}
+                  >
+                    Add More Photos
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Post Text Section */}
+                <View
+                  style={{
+                    marginTop: 24,
+                    marginHorizontal: 20,
+                  }}
+                >
+                  {/* Section Header */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, paddingHorizontal: 4 }}>
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        fontWeight: '600',
+                        color: '#8e8e93',
+                        textTransform: 'uppercase',
+                        letterSpacing: 0.5,
+                      }}
+                    >
+                      Post Copy
+                    </Text>
+                    {isSavingPostText && (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <View
+                          style={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: 3,
+                            backgroundColor: '#34c759',
+                          }}
+                        />
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Text Input Container */}
+                  <View
+                    style={{
+                      backgroundColor: '#ffffff',
+                      borderRadius: 12,
+                      borderWidth: 0.5,
+                      borderColor: '#c6c6c8',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <TextInput
+                      ref={postTextInputRef}
+                      value={postText}
+                      onChangeText={setPostText}
+                      placeholder="Write your post copy here..."
+                      placeholderTextColor="#c7c7cc"
+                      multiline
+                      textAlignVertical="top"
+                      onFocus={() => {
+                        // Scroll to text input when focused
+                        setTimeout(() => {
+                          if (flatListRef.current && story.assets.length > 0) {
+                            // Scroll to end where post text section is
+                            flatListRef.current.scrollToEnd({ animated: true });
+                          }
+                        }, 300);
+                      }}
+                      style={{
+                        fontSize: 17,
+                        fontWeight: '400',
+                        color: '#000000',
+                        padding: 16,
+                        minHeight: 140,
+                        maxHeight: 300,
+                        lineHeight: 22,
+                        letterSpacing: -0.41,
+                      }}
+                    />
+                    
+                    {/* Footer with character count and copy button */}
+                    {postText.length > 0 && (
+                      <View
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          paddingHorizontal: 16,
+                          paddingBottom: 12,
+                          paddingTop: 8,
+                          borderTopWidth: 0.5,
+                          borderTopColor: '#e5e5ea',
+                        }}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 13,
+                            fontWeight: '400',
+                            color: '#8e8e93',
+                            letterSpacing: -0.08,
+                          }}
+                        >
+                          {postText.length} {postText.length === 1 ? 'character' : 'characters'}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={handleCopyPostText}
+                          activeOpacity={0.6}
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            paddingHorizontal: 10,
+                            paddingVertical: 6,
+                          }}
+                        >
+                          <MaterialCommunityIcons name="content-copy" size={16} color="#007AFF" style={{ marginRight: 4 }} />
+                          <Text
+                            style={{
+                              fontSize: 15,
+                              fontWeight: '400',
+                              color: '#007AFF',
+                              letterSpacing: -0.24,
+                            }}
+                          >
+                            Copy
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                </View>
+              </>
+            }
+          />
+        </KeyboardAvoidingView>
       )}
 
       {/* Edit Modal */}
@@ -763,7 +1209,7 @@ export default function StoryDetailScreen() {
       {/* Menu Drawer */}
       <MenuDrawer visible={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
 
-      {/* Bottom Tab Bar */}
+      {/* Bottom Tab Bar - Fixed at bottom */}
       <BottomTabBar onAddPress={() => router.push('/')} />
     </View>
   );

@@ -89,6 +89,7 @@ export type Story = {
   workspace_id: string; // Required - workspace owns the story
   name: string;
   description?: string | null;
+  post_text?: string | null; // Text content associated with the story/post that will be included in zip downloads
   cover_asset_id?: string | null;
   created_at: string;
   updated_at: string;

@@ -98,6 +98,13 @@ function SignupFormContent() {
             // Don't throw - continue with signup, but log the error
           } else {
             console.log('[SignupForm] RPC call successful, rpcData:', rpcData)
+            if (rpcData && rpcData.length > 0) {
+              const result = rpcData[0]
+              console.log('[SignupForm] Processed invitations:', result.processed_count)
+              if (result.errors && result.errors.length > 0) {
+                console.error('[SignupForm] Errors during processing:', result.errors)
+              }
+            }
             
             // Verify invitation was marked as accepted
             if (inviteId) {

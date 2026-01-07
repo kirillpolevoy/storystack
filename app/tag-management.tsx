@@ -793,7 +793,7 @@ export default function TagManagementScreen() {
         }
       }
       
-      // Update custom tags list atomically (user-specific)
+      // Update custom tags list atomically (workspace-specific)
       if (!activeWorkspaceId) {
         console.warn('[TagManagement] No workspace ID - cannot save custom tag');
         return;
@@ -821,10 +821,11 @@ export default function TagManagementScreen() {
         }
       }
       
-      // Fallback to AsyncStorage
-      if (currentCustomTags.length === 0) {
+      // Fallback to workspace-specific AsyncStorage
+      if (currentCustomTags.length === 0 && activeWorkspaceId) {
         try {
-          const customTagsJson = await AsyncStorage.getItem(CUSTOM_TAGS_STORAGE_KEY);
+          const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+          const customTagsJson = await AsyncStorage.getItem(workspaceSpecificKey);
           currentCustomTags = customTagsJson ? JSON.parse(customTagsJson) : [];
         } catch (error) {
           currentCustomTags = [];
@@ -848,20 +849,20 @@ export default function TagManagementScreen() {
       console.log(`[TagManagement] Saving custom_tags:`, updatedCustomTags);
       console.log(`[TagManagement] Expected new tag "${trimmed}" in list:`, updatedCustomTags.includes(trimmed));
       
-      // Save to user-specific AsyncStorage first (immediate, reliable)
-      if (userId) {
-        const userSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${userId}`;
-        await AsyncStorage.setItem(userSpecificKey, JSON.stringify(updatedCustomTags));
+      // Save to workspace-specific AsyncStorage first (immediate, reliable)
+      if (activeWorkspaceId) {
+        const workspaceSpecificKey = `${CUSTOM_TAGS_STORAGE_KEY}:${activeWorkspaceId}`;
+        await AsyncStorage.setItem(workspaceSpecificKey, JSON.stringify(updatedCustomTags));
         console.log(`[TagManagement] Custom tags saved to AsyncStorage:`, updatedCustomTags);
       }
       
-      // Then try to save to Supabase
-      if (supabase && userId) {
+      // Then try to save to Supabase (workspace-scoped)
+      if (supabase && activeWorkspaceId) {
         let error = null;
         try {
           const result = await supabase
             .from('tag_config')
-            .upsert({ user_id: userId, custom_tags: updatedCustomTags }, { onConflict: 'user_id' });
+            .upsert({ workspace_id: activeWorkspaceId, custom_tags: updatedCustomTags }, { onConflict: 'workspace_id' });
           error = result.error;
         } catch (upsertError: any) {
           // If upsert fails, try update as fallback
@@ -869,7 +870,7 @@ export default function TagManagementScreen() {
           const updateResult = await supabase
             .from('tag_config')
             .update({ custom_tags: updatedCustomTags })
-            .eq('user_id', userId);
+            .eq('workspace_id', activeWorkspaceId);
           error = updateResult.error;
         }
         

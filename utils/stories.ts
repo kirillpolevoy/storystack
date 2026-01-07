@@ -169,12 +169,11 @@ export async function getStoryById(storyId: string, userId: string): Promise<Sto
   }
 
   try {
-    // Get story
+    // Get story (RLS policies will ensure user can only access stories from workspaces they're members of)
     const { data: story, error: storyError } = await supabase
       .from('stories')
       .select('*')
       .eq('id', storyId)
-      .eq('user_id', userId)
       .single();
 
     if (storyError || !story) {
@@ -182,7 +181,7 @@ export async function getStoryById(storyId: string, userId: string): Promise<Sto
       return null;
     }
 
-    // Get story assets in order
+    // Get story assets in order (RLS policies will ensure user can only access story_assets from accessible stories)
     const { data: storyAssets, error: assetsError } = await supabase
       .from('story_assets')
       .select('asset_id, order_index')
@@ -206,13 +205,13 @@ export async function getStoryById(storyId: string, userId: string): Promise<Sto
       } as StoryWithAssets;
     }
 
-    // Get actual assets
+    // Get actual assets (filter by workspace_id instead of user_id to support workspace collaboration)
     const assetIds = storyAssets.map((sa) => sa.asset_id);
     const { data: assets, error: assetsDataError } = await supabase
       .from('assets')
       .select('id, storage_path, source, tags, created_at')
       .in('id', assetIds)
-      .eq('user_id', userId);
+      .eq('workspace_id', story.workspace_id);
 
     if (assetsDataError || !assets) {
       console.error('[stories] Failed to fetch assets:', assetsDataError);
@@ -254,6 +253,7 @@ export async function updateStory(
   updates: {
     name?: string;
     description?: string;
+    post_text?: string | null;
     cover_asset_id?: string | null;
   }
 ): Promise<boolean> {
@@ -266,13 +266,14 @@ export async function updateStory(
     const updateData: any = {};
     if (updates.name !== undefined) updateData.name = updates.name.trim();
     if (updates.description !== undefined) updateData.description = updates.description?.trim() || null;
+    if (updates.post_text !== undefined) updateData.post_text = updates.post_text?.trim() || null;
     if (updates.cover_asset_id !== undefined) updateData.cover_asset_id = updates.cover_asset_id;
 
+    // RLS policies will ensure user can only update stories from workspaces where they have editor+ role
     const { error } = await supabase
       .from('stories')
       .update(updateData)
-      .eq('id', storyId)
-      .eq('user_id', userId);
+      .eq('id', storyId);
 
     if (error) {
       console.error('[stories] Failed to update story:', error);
@@ -297,14 +298,14 @@ export async function deleteStory(storyId: string, userId: string): Promise<bool
 
   try {
     // Soft delete: Set deleted_at and deleted_by (do NOT hard delete)
+    // RLS policies will ensure user can only delete stories from workspaces where they have editor+ role
     const { error } = await supabase
       .from('stories')
       .update({
         deleted_at: new Date().toISOString(),
         deleted_by: userId,
       })
-      .eq('id', storyId)
-      .eq('user_id', userId);
+      .eq('id', storyId);
 
     if (error) {
       console.error('[stories] Failed to soft delete story:', error);
@@ -333,16 +334,15 @@ export async function addAssetsToStory(
   }
 
   try {
-    // Verify story belongs to user
-    const { data: story } = await supabase
+    // Verify story exists and user has access (RLS policies will enforce workspace permissions)
+    const { data: story, error: storyError } = await supabase
       .from('stories')
       .select('id')
       .eq('id', storyId)
-      .eq('user_id', userId)
       .single();
 
-    if (!story) {
-      console.error('[stories] Story not found or access denied');
+    if (storyError || !story) {
+      console.error('[stories] Story not found or access denied:', storyError);
       return false;
     }
 
@@ -438,16 +438,15 @@ export async function removeAssetFromStory(
   }
 
   try {
-    // Verify story belongs to user
-    const { data: story } = await supabase
+    // Verify story exists and user has access (RLS policies will enforce workspace permissions)
+    const { data: story, error: storyError } = await supabase
       .from('stories')
       .select('id')
       .eq('id', storyId)
-      .eq('user_id', userId)
       .single();
 
-    if (!story) {
-      console.error('[stories] Story not found or access denied');
+    if (storyError || !story) {
+      console.error('[stories] Story not found or access denied:', storyError);
       return false;
     }
 
@@ -489,16 +488,15 @@ export async function reorderStoryAssets(
   }
 
   try {
-    // Verify story belongs to user
-    const { data: story } = await supabase
+    // Verify story exists and user has access (RLS policies will enforce workspace permissions)
+    const { data: story, error: storyError } = await supabase
       .from('stories')
       .select('id')
       .eq('id', storyId)
-      .eq('user_id', userId)
       .single();
 
-    if (!story) {
-      console.error('[stories] Story not found or access denied');
+    if (storyError || !story) {
+      console.error('[stories] Story not found or access denied:', storyError);
       return false;
     }
 

@@ -2676,11 +2676,16 @@ export default function LibraryScreen() {
       return;
     }
 
-    // Check if user has tags enabled for autotagging
+    if (!activeWorkspaceId) {
+      Alert.alert('Error', 'No workspace selected.');
+      return;
+    }
+
+    // Check if workspace has tags enabled for autotagging (workspace-scoped)
     const { data: tagConfig, error: configError } = await supabase
       .from('tag_config')
       .select('auto_tags')
-      .eq('user_id', session.user.id)
+      .eq('workspace_id', activeWorkspaceId)
       .single();
     
     if (configError) {
