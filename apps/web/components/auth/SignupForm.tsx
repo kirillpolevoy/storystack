@@ -1,12 +1,15 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 export function SignupForm() {
+  const searchParams = useSearchParams()
+  const inviteId = searchParams?.get('invite')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -16,6 +19,7 @@ export function SignupForm() {
   const [passwordFocused, setPasswordFocused] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const router = useRouter()
+  const queryClient = useQueryClient()
   const supabase = createClient()
 
   const validatePassword = (pwd: string) => {
@@ -54,11 +58,40 @@ export function SignupForm() {
 
       if (data.session && data.user) {
         // Process workspace invitations for the new user
+        let workspaceId: string | null = null
         try {
+          // If there's a specific invite ID, get the workspace ID first
+          if (inviteId) {
+            const { data: invitation } = await supabase
+              .from('workspace_invitations')
+              .select('workspace_id')
+              .eq('id', inviteId)
+              .eq('email', email.toLowerCase())
+              .eq('status', 'pending')
+              .single()
+            
+            if (invitation) {
+              workspaceId = invitation.workspace_id
+            }
+          }
+          
+          // Process all pending invitations for this email
           await supabase.rpc('process_workspace_invitations_for_user', {
             user_id: data.user.id,
             user_email: email.toLowerCase(),
           })
+          
+          // If we have a workspace ID from the invite, set it as active
+          if (workspaceId) {
+            localStorage.setItem('@storystack:active_workspace_id', workspaceId)
+            window.dispatchEvent(new Event('workspace-changed'))
+            console.log('[SignupForm] Set active workspace to:', workspaceId)
+          }
+          
+          // Invalidate workspaces query to refresh the workspace list
+          await queryClient.invalidateQueries({ queryKey: ['workspaces'] })
+          
+          console.log('[SignupForm] Processed workspace invitations, workspaceId:', workspaceId)
         } catch (inviteError) {
           // Log error but don't block signup if invitation processing fails
           console.error('Error processing workspace invitations:', inviteError)
@@ -66,6 +99,8 @@ export function SignupForm() {
         
         setSuccess(true)
         // Wait for cookies to be set, then redirect
+        // If we have a workspace ID from the invite, we could redirect there
+        // For now, redirect to library and let workspace context handle it
         setTimeout(() => {
           window.location.href = '/app/library'
         }, 1000)
