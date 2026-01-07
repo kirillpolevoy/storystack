@@ -1,14 +1,16 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { LoginForm } from '@/components/auth/LoginForm'
 import { SignupForm } from '@/components/auth/SignupForm'
 import { createClient } from '@/lib/supabase/client'
 
 export default function LoginPage() {
-  const [activeTab, setActiveTab] = useState<'login' | 'signup'>('login')
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const inviteParam = searchParams?.get('invite')
+  const [activeTab, setActiveTab] = useState<'login' | 'signup'>(inviteParam ? 'signup' : 'login')
 
   useEffect(() => {
     // Check if user is already logged in
@@ -26,6 +28,13 @@ export default function LoginPage() {
     }
     checkAuth()
   }, [router])
+
+  // Update active tab when invite parameter changes
+  useEffect(() => {
+    if (inviteParam) {
+      setActiveTab('signup')
+    }
+  }, [inviteParam])
 
   return (
     <div className="flex min-h-screen bg-white antialiased">

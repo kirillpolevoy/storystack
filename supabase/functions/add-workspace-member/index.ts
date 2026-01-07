@@ -213,7 +213,7 @@ serve(async (req) => {
         const resendApiKey = Deno.env.get('RESEND_API_KEY')
         const siteUrl = Deno.env.get('SITE_URL') || 'https://storystackstudios.com'
         const logoUrl = `${siteUrl}/logo.png`
-        const inviteLink = `${siteUrl}/signup?invite=${invitation.id}`
+        const inviteLink = `${siteUrl}/login?invite=${invitation.id}`
         const workspaceName = workspace?.name || 'a workspace'
         const inviterEmail = inviter?.user?.email || 'a team member'
         const inviterName = inviter?.user?.user_metadata?.full_name || inviterEmail.split('@')[0]
