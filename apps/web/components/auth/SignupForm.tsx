@@ -33,6 +33,7 @@ function SignupFormContent() {
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault()
+    console.log('[SignupForm] handleSignup called', { email, inviteId })
     setError(null)
     setLoading(true)
 
@@ -255,7 +256,13 @@ function SignupFormContent() {
   const isFormValid = email.trim() && password.trim() && !passwordError
 
   return (
-    <form onSubmit={handleSignup} className="space-y-6">
+    <form 
+      onSubmit={(e) => {
+        console.log('[SignupForm] Form submit event triggered')
+        handleSignup(e)
+      }} 
+      className="space-y-6"
+    >
       {/* Error Message */}
       {error && (
         <div className="rounded-lg bg-red-50 border border-red-100 p-4 text-[14px] font-normal text-red-800 animate-in fade-in slide-in-from-top-2 duration-300">
