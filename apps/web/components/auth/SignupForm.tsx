@@ -76,34 +76,84 @@ export function SignupForm() {
           }
           
           // Process all pending invitations for this email
-          await supabase.rpc('process_workspace_invitations_for_user', {
+          const { data: rpcData, error: rpcError } = await supabase.rpc('process_workspace_invitations_for_user', {
             user_id: data.user.id,
             user_email: email.toLowerCase(),
           })
           
-          // If we have a workspace ID from the invite, set it as active
+          if (rpcError) {
+            console.error('[SignupForm] RPC error processing invitations:', rpcError)
+            throw new Error(`Failed to process workspace invitations: ${rpcError.message}`)
+          }
+          
+          console.log('[SignupForm] RPC call successful, rpcData:', rpcData)
+          
+          // Verify the user was added to the workspace
           if (workspaceId) {
+            // Wait a moment for the database to commit
+            await new Promise(resolve => setTimeout(resolve, 500))
+            
+            // Verify membership was created
+            const { data: membership, error: membershipError } = await supabase
+              .from('workspace_members')
+              .select('workspace_id, role')
+              .eq('workspace_id', workspaceId)
+              .eq('user_id', data.user.id)
+              .single()
+            
+            if (membershipError || !membership) {
+              console.error('[SignupForm] Failed to verify workspace membership:', membershipError)
+              // Don't throw - membership might still be created, just not visible yet due to RLS
+            } else {
+              console.log('[SignupForm] Verified workspace membership:', membership)
+            }
+            
+            // Set workspace as active in localStorage
             localStorage.setItem('@storystack:active_workspace_id', workspaceId)
             window.dispatchEvent(new Event('workspace-changed'))
+            
+            // Also set in database for persistence
+            try {
+              await supabase
+                .from('user_preferences')
+                .upsert({
+                  user_id: data.user.id,
+                  active_workspace_id: workspaceId,
+                  updated_at: new Date().toISOString(),
+                })
+              console.log('[SignupForm] Set active workspace in database:', workspaceId)
+            } catch (prefError) {
+              console.warn('[SignupForm] Failed to set workspace preference in database:', prefError)
+              // Continue anyway - localStorage is set
+            }
+            
             console.log('[SignupForm] Set active workspace to:', workspaceId)
           }
           
           // Invalidate workspaces query to refresh the workspace list
           await queryClient.invalidateQueries({ queryKey: ['workspaces'] })
+          await queryClient.invalidateQueries({ queryKey: ['workspaces', data.user.id] })
           
           console.log('[SignupForm] Processed workspace invitations, workspaceId:', workspaceId)
-        } catch (inviteError) {
+        } catch (inviteError: any) {
           // Log error but don't block signup if invitation processing fails
-          console.error('Error processing workspace invitations:', inviteError)
+          console.error('[SignupForm] Error processing workspace invitations:', inviteError)
+          console.error('[SignupForm] Error details:', {
+            message: inviteError?.message,
+            code: inviteError?.code,
+            details: inviteError?.details,
+            hint: inviteError?.hint,
+          })
+          // Continue with signup even if invitation processing fails
         }
         
         setSuccess(true)
-        // Wait for cookies to be set, then redirect
-        // If we have a workspace ID from the invite, we could redirect there
-        // For now, redirect to library and let workspace context handle it
+        // Wait for cookies to be set and workspace to be available, then redirect
+        // Give extra time for workspace membership to be visible
         setTimeout(() => {
+          // Force a hard refresh to ensure workspace context picks up the new workspace
           window.location.href = '/app/library'
-        }, 1000)
+        }, 1500)
       } else {
         // Email confirmation required
         setSuccess(true)
