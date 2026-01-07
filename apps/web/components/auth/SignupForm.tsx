@@ -76,6 +76,12 @@ export function SignupForm() {
           }
           
           // Process all pending invitations for this email
+          console.log('[SignupForm] Calling process_workspace_invitations_for_user with:', {
+            user_id: data.user.id,
+            user_email: email.toLowerCase(),
+            inviteId,
+          })
+          
           const { data: rpcData, error: rpcError } = await supabase.rpc('process_workspace_invitations_for_user', {
             user_id: data.user.id,
             user_email: email.toLowerCase(),
@@ -83,10 +89,29 @@ export function SignupForm() {
           
           if (rpcError) {
             console.error('[SignupForm] RPC error processing invitations:', rpcError)
-            throw new Error(`Failed to process workspace invitations: ${rpcError.message}`)
+            console.error('[SignupForm] RPC error details:', {
+              message: rpcError.message,
+              code: rpcError.code,
+              details: rpcError.details,
+              hint: rpcError.hint,
+            })
+            // Don't throw - continue with signup, but log the error
+          } else {
+            console.log('[SignupForm] RPC call successful, rpcData:', rpcData)
+            
+            // Verify invitation was marked as accepted
+            if (inviteId) {
+              const { data: invitation } = await supabase
+                .from('workspace_invitations')
+                .select('status, accepted_at')
+                .eq('id', inviteId)
+                .single()
+              
+              if (invitation) {
+                console.log('[SignupForm] Invitation status after processing:', invitation)
+              }
+            }
           }
-          
-          console.log('[SignupForm] RPC call successful, rpcData:', rpcData)
           
           // Verify the user was added to the workspace and set as active
           if (workspaceId) {
