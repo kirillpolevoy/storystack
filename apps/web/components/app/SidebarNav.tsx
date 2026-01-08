@@ -3,7 +3,7 @@
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
-import { LogOut, Library, BookOpen, Tag, HelpCircle, User, Settings, ChevronLeft, ChevronRight, CreditCard, Mail } from 'lucide-react'
+import { LogOut, Library, BookOpen, Tag, HelpCircle, User, Settings, ChevronLeft, ChevronRight, CreditCard, Mail, Lightbulb } from 'lucide-react'
 
 interface SidebarNavProps {
   isMinimized: boolean
@@ -48,6 +48,10 @@ export function SidebarNav({ isMinimized, onNavigate }: SidebarNavProps) {
         <NavLink href="/app/profile" pathname={pathname} secondary isMinimized={isMinimized} onNavigate={onNavigate} router={router}>
           <User className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-3.5 w-3.5 flex-shrink-0"} />
           {!isMinimized && <span>Profile</span>}
+        </NavLink>
+        <NavLink href="/app/how-to" pathname={pathname} secondary support isMinimized={isMinimized} onNavigate={onNavigate} router={router}>
+          <Lightbulb className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-3.5 w-3.5 flex-shrink-0"} />
+          {!isMinimized && <span>How To</span>}
         </NavLink>
         <NavLink href="/app/contact" pathname={pathname} secondary support isMinimized={isMinimized} onNavigate={onNavigate} router={router}>
           <Mail className={isMinimized ? "h-5 w-5 flex-shrink-0" : "mr-3 h-3.5 w-3.5 flex-shrink-0"} />
@@ -103,13 +107,14 @@ function NavLink({
     className += ' bg-accent/10 text-gray-900 font-semibold'
   }
 
-  const tooltipText = isMinimized 
-    ? (href.includes('library') ? 'Library' 
-      : href.includes('stories') ? 'Stories' 
+  const tooltipText = isMinimized
+    ? (href.includes('library') ? 'Library'
+      : href.includes('stories') ? 'Stories'
       : href.includes('workspace-settings') ? 'Workspaces'
-      : href.includes('tags') ? 'Tags' 
+      : href.includes('tags') ? 'Tags'
       : href.includes('subscription') ? 'Subscriptions'
       : href.includes('profile') ? 'Profile'
+      : href.includes('how-to') ? 'How To'
       : href.includes('contact') ? 'Contact Us'
       : undefined)
     : undefined

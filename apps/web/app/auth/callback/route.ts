@@ -31,7 +31,10 @@ export async function GET(request: NextRequest) {
     })
 
     if (!error) {
-      return NextResponse.redirect(`${origin}${next}`)
+      // For signup confirmations, add welcome param to show welcome modal
+      const isSignup = type === 'signup'
+      const redirectUrl = isSignup ? `${origin}${next}?welcome=true` : `${origin}${next}`
+      return NextResponse.redirect(redirectUrl)
     }
 
     console.error('[Auth Callback] Error verifying OTP:', error)

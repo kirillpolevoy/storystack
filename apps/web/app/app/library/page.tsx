@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useAssets, AssetViewFilter } from '@/hooks/useAssets'
 import { useAvailableTags } from '@/hooks/useAvailableTags'
 import { useAvailableLocations } from '@/hooks/useAvailableLocations'
@@ -23,11 +24,16 @@ import { useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { initializeBatchPolling, stopBatchPolling, addBatchToPoll, startBatchPolling } from '@/utils/pollBatchStatus'
 import { MobileMenuButton } from '@/components/app/MobileMenuButton'
+import { WelcomeModal } from '@/components/app/WelcomeModal'
+
+const WELCOME_MODAL_KEY = '@storystack:welcome_shown'
 
 export default function LibraryPage() {
   const [mounted, setMounted] = useState(false)
   const supabase = createClient()
   const queryClient = useQueryClient()
+  const searchParams = useSearchParams()
+  const router = useRouter()
   
   const [viewFilter, setViewFilter] = useState<AssetViewFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
@@ -62,6 +68,9 @@ export default function LibraryPage() {
   // Bulk delete last X photos state
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false)
   const [bulkDeleteCount, setBulkDeleteCount] = useState<string>('10')
+
+  // Welcome modal state
+  const [showWelcomeModal, setShowWelcomeModal] = useState(false)
 
   const { data: tagsData } = useAvailableTags()
   const availableTags = tagsData || []
@@ -131,6 +140,27 @@ export default function LibraryPage() {
     
     ensureSessionAndRefetch()
   }, [queryClient, refetch, supabase])
+
+  // Check for new signup and show welcome modal
+  useEffect(() => {
+    const welcomeShown = localStorage.getItem(WELCOME_MODAL_KEY)
+    const isNewSignupFromUrl = searchParams?.get('welcome') === 'true'
+    const isNewSignupFromSession = sessionStorage.getItem('@storystack:new_signup')
+
+    if (!welcomeShown && (isNewSignupFromUrl || isNewSignupFromSession)) {
+      // Small delay to let the page render first
+      const timer = setTimeout(() => {
+        setShowWelcomeModal(true)
+        // Clear the session flag
+        sessionStorage.removeItem('@storystack:new_signup')
+        // Clean up URL param if present
+        if (isNewSignupFromUrl) {
+          router.replace('/app/library', { scroll: false })
+        }
+      }, 800)
+      return () => clearTimeout(timer)
+    }
+  }, [searchParams, router])
 
   // Log errors for debugging but don't crash the page
   if (isError && error) {
@@ -1314,6 +1344,12 @@ export default function LibraryPage() {
           </div>
         </div>
       )}
+
+      {/* Welcome Modal for new signups */}
+      <WelcomeModal
+        open={showWelcomeModal}
+        onOpenChange={setShowWelcomeModal}
+      />
     </div>
   )
 }

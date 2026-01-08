@@ -206,6 +206,8 @@ function SignupFormContent() {
         }
         
         setSuccess(true)
+        // Mark as new signup to show welcome modal
+        sessionStorage.setItem('@storystack:new_signup', 'true')
         // Wait for cookies to be set and workspace to be available, then redirect
         // Give extra time for workspace membership to be visible
         setTimeout(() => {
