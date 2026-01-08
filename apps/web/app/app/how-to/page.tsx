@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Sparkles, ArrowRight, Check, Upload, Tags, Search, Users } from 'lucide-react'
 import Image from 'next/image'
@@ -18,41 +19,75 @@ const DEMO_PHOTOS = [
 type OnboardingState = 'loading' | 'welcome' | 'tags-created' | 'complete'
 
 export default function HowToPage() {
-  const [state, setState] = useState<OnboardingState>('loading')
-  const [tagCount, setTagCount] = useState(0)
-  const [photoCount, setPhotoCount] = useState(0)
   const activeWorkspaceId = useActiveWorkspace()
+  const supabase = createClient()
 
-  useEffect(() => {
-    async function checkProgress() {
-      if (!activeWorkspaceId) return
+  // Fetch progress data using React Query (same pattern as tags page)
+  const { data: progressData, isLoading } = useQuery({
+    queryKey: ['onboarding-progress', activeWorkspaceId],
+    enabled: !!activeWorkspaceId,
+    staleTime: 0,
+    queryFn: async ({ queryKey }) => {
+      const workspaceId = queryKey[1] as string
 
-      const supabase = createClient()
-
-      const { count: tags } = await supabase
-        .from('tags')
-        .select('*', { count: 'exact', head: true })
-        .eq('workspace_id', activeWorkspaceId)
-
-      const { count: photos } = await supabase
+      // Get unique tags from assets
+      const { data: assets, error: assetsError } = await supabase
         .from('assets')
-        .select('*', { count: 'exact', head: true })
-        .eq('workspace_id', activeWorkspaceId)
+        .select('tags')
+        .eq('workspace_id', workspaceId)
+        .is('deleted_at', null)
 
-      setTagCount(tags || 0)
-      setPhotoCount(photos || 0)
-
-      if ((photos || 0) > 0) {
-        setState('complete')
-      } else if ((tags || 0) > 0) {
-        setState('tags-created')
-      } else {
-        setState('welcome')
+      if (assetsError) {
+        console.error('[HowTo] Error fetching assets:', assetsError)
+        throw assetsError
       }
-    }
 
-    checkProgress()
-  }, [activeWorkspaceId])
+      // Count unique tags
+      const uniqueTags = new Set<string>()
+      assets?.forEach((asset) => {
+        if (Array.isArray(asset.tags)) {
+          asset.tags.forEach((tag: string) => {
+            if (tag && tag.trim()) {
+              uniqueTags.add(tag.trim())
+            }
+          })
+        }
+      })
+
+      // Also check tag_config for defined tags (even if not used yet)
+      const { data: tagConfig } = await supabase
+        .from('tag_config')
+        .select('auto_tags, custom_tags')
+        .eq('workspace_id', workspaceId)
+        .single()
+
+      if (tagConfig) {
+        if (Array.isArray(tagConfig.auto_tags)) {
+          tagConfig.auto_tags.forEach((tag: string) => uniqueTags.add(tag))
+        }
+        if (Array.isArray(tagConfig.custom_tags)) {
+          tagConfig.custom_tags.forEach((tag: string) => uniqueTags.add(tag))
+        }
+      }
+
+      const photoCount = assets?.length || 0
+      const tagCount = uniqueTags.size
+
+      console.log('[HowTo] Progress:', { workspaceId, tagCount, photoCount })
+
+      return { tagCount, photoCount }
+    },
+  })
+
+  const tagCount = progressData?.tagCount || 0
+  const photoCount = progressData?.photoCount || 0
+
+  const state: OnboardingState = useMemo(() => {
+    if (isLoading || !activeWorkspaceId) return 'loading'
+    if (photoCount > 0) return 'complete'
+    if (tagCount > 0) return 'tags-created'
+    return 'welcome'
+  }, [isLoading, activeWorkspaceId, tagCount, photoCount])
 
   return (
     <div className="flex h-full flex-col bg-[#FDFCFB]">
