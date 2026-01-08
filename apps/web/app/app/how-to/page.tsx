@@ -7,7 +7,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { MobileMenuButton } from '@/components/app/MobileMenuButton'
 import { createClient } from '@/lib/supabase/client'
-import { useWorkspace } from '@/contexts/WorkspaceContext'
+import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
 
 const DEMO_PHOTOS = [
   'https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=400&h=400&fit=crop&q=80',
@@ -21,7 +21,7 @@ export default function HowToPage() {
   const [state, setState] = useState<OnboardingState>('loading')
   const [tagCount, setTagCount] = useState(0)
   const [photoCount, setPhotoCount] = useState(0)
-  const { activeWorkspaceId } = useWorkspace()
+  const activeWorkspaceId = useActiveWorkspace()
 
   useEffect(() => {
     async function checkProgress() {
