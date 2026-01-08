@@ -84,6 +84,7 @@ export function AssetDetailPanel({
   const [showSuccessIndicator, setShowSuccessIndicator] = useState(false)
   const lastAssetIdRef = useRef<string | null>(null)
   const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isLocalTagUpdateRef = useRef(false) // Track when we're making a local tag update to prevent flickering
 
   const { data: availableTags } = useAvailableTags()
   const { data: availableLocations } = useAvailableLocations()
@@ -166,11 +167,13 @@ export function AssetDetailPanel({
         lastAssetIdRef.current = assetToUse.id
       } else {
         // For same asset, only update if values actually changed (to prevent unnecessary re-renders)
+        // IMPORTANT: Don't sync tags if we're making a local update to prevent flickering
         const currentTags = assetToUse.tags || []
         const tagsChanged = JSON.stringify(currentTags) !== JSON.stringify(tags)
         const locationChanged = assetToUse.location !== location
         
-        if (tagsChanged && !updateTagsMutation.isPending) {
+        // Only sync tags if they changed AND mutation is not pending AND we're not making a local update
+        if (tagsChanged && !updateTagsMutation.isPending && !isLocalTagUpdateRef.current) {
           setTags(currentTags)
         }
         if (locationChanged && !updateLocationMutation.isPending && !isEditingLocation) {
@@ -306,24 +309,34 @@ export function AssetDetailPanel({
     const trimmedTag = tagToUse.trim()
 
     if (trimmedTag && !tags.includes(trimmedTag)) {
-      // Check edit access before proceeding
-      await withEditAccess(async () => {
-        const updatedTags = [...tags, trimmedTag]
-        setTags(updatedTags)
-        updateTagsMutation.mutate({
-          assetId: currentAsset.id,
-          tags: updatedTags,
-        }, {
-          onSuccess: () => {
-            // Refresh asset data after successful tag update
-            refetchAsset()
-            // Refresh audit log to show new entry
-            setTimeout(() => {
-              queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
-              refetchAuditLog()
-            }, 500) // Small delay to ensure audit log entry is created
-          }
-        })
+    // Check edit access before proceeding
+    await withEditAccess(async () => {
+      // Mark that we're making a local update to prevent useEffect from syncing
+      isLocalTagUpdateRef.current = true
+      const updatedTags = [...tags, trimmedTag]
+      setTags(updatedTags)
+      updateTagsMutation.mutate({
+        assetId: currentAsset.id,
+        tags: updatedTags,
+      }, {
+        onSuccess: () => {
+          // Clear the flag after a short delay to allow refetch to complete
+          setTimeout(() => {
+            isLocalTagUpdateRef.current = false
+          }, 100)
+          // Refresh asset data after successful tag update
+          refetchAsset()
+          // Refresh audit log to show new entry
+          setTimeout(() => {
+            queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
+            refetchAuditLog()
+          }, 500) // Small delay to ensure audit log entry is created
+        },
+        onError: () => {
+          // Clear the flag on error
+          isLocalTagUpdateRef.current = false
+        }
+      })
 
         // If this tag doesn't exist in available tags, add it to local list and update query cache
         if (!allAvailableTags.includes(trimmedTag)) {
@@ -366,6 +379,8 @@ export function AssetDetailPanel({
 
     // Check edit access before proceeding
     await withEditAccess(async () => {
+      // Mark that we're making a local update to prevent useEffect from syncing
+      isLocalTagUpdateRef.current = true
       setTags(updatedTags)
       updateTagsMutation.mutate(
         {
@@ -379,6 +394,10 @@ export function AssetDetailPanel({
             if (data?.tags) {
               setTags(data.tags)
             }
+            // Clear the flag after a short delay to allow refetch to complete
+            setTimeout(() => {
+              isLocalTagUpdateRef.current = false
+            }, 100)
             // Refresh asset data after successful tag update
             refetchAsset()
             // Invalidate queries to update Tag Management usage counts
@@ -394,6 +413,8 @@ export function AssetDetailPanel({
           },
           onError: (error) => {
             console.error('[AssetDetailPanel] Tag removal failed:', error)
+            // Clear the flag on error
+            isLocalTagUpdateRef.current = false
             // Revert to original tags on error
             setTags(currentAsset.tags || [])
           },
