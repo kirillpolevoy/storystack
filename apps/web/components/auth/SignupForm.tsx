@@ -65,8 +65,11 @@ function SignupFormContent() {
         throw new Error(errorMessage)
       }
 
-      if (data.session && data.user) {
-        console.log('[SignupForm] Session and user available, processing invitations...')
+      // Check if email confirmation is required (email_confirmed_at will be null)
+      const emailConfirmed = data.user?.email_confirmed_at != null
+
+      if (data.session && data.user && emailConfirmed) {
+        console.log('[SignupForm] Session and user available, email confirmed, processing invitations...')
         // Process workspace invitations for the new user
         let workspaceId: string | null = null
         try {
@@ -210,8 +213,8 @@ function SignupFormContent() {
           window.location.href = '/app/library'
         }, 1500)
       } else {
-        // Email confirmation required - still process invitations in case they confirm later
-        console.log('[SignupForm] No session yet (email confirmation required), but processing invitations anyway...')
+        // Email confirmation required - user created but email not yet confirmed
+        console.log('[SignupForm] Email confirmation required, emailConfirmed:', emailConfirmed, 'hasSession:', !!data.session)
         if (data.user) {
           try {
             console.log('[SignupForm] Processing invitations for user without session:', data.user.id)
@@ -219,7 +222,7 @@ function SignupFormContent() {
               user_id: data.user.id,
               user_email: email.toLowerCase(),
             })
-            
+
             if (rpcError) {
               console.error('[SignupForm] RPC error (no session):', rpcError)
             } else {
@@ -229,8 +232,10 @@ function SignupFormContent() {
             console.error('[SignupForm] Error processing invitations (no session):', inviteError)
           }
         }
+        setNeedsEmailConfirmation(true)
         setSuccess(true)
         setError(null)
+        setLoading(false)
       }
     } catch (err: any) {
       console.error('[SignupForm] Signup failed:', err)
@@ -239,7 +244,24 @@ function SignupFormContent() {
     }
   }
 
+  const [needsEmailConfirmation, setNeedsEmailConfirmation] = useState(false)
+
   if (success) {
+    if (needsEmailConfirmation) {
+      return (
+        <div className="rounded-xl bg-blue-50 border border-blue-200 p-6 text-center animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex items-center justify-center mb-3">
+            <svg className="w-12 h-12 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+          </div>
+          <h3 className="text-lg font-semibold text-blue-900 mb-2">Check your email</h3>
+          <p className="text-sm text-blue-700">We sent a confirmation link to <strong>{email}</strong></p>
+          <p className="text-xs text-blue-600 mt-2">Click the link to activate your account</p>
+        </div>
+      )
+    }
+
     return (
       <div className="rounded-xl bg-green-50 border border-green-200 p-6 text-center animate-in fade-in slide-in-from-top-2 duration-300">
         <div className="flex items-center justify-center mb-3">
