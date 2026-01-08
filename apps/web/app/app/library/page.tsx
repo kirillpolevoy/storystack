@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useState, useMemo, useCallback, useEffect, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useAssets, AssetViewFilter } from '@/hooks/useAssets'
 import { useAvailableTags } from '@/hooks/useAvailableTags'
@@ -28,7 +28,7 @@ import { WelcomeModal } from '@/components/app/WelcomeModal'
 
 const WELCOME_MODAL_KEY = '@storystack:welcome_shown'
 
-export default function LibraryPage() {
+function LibraryPageContent() {
   const [mounted, setMounted] = useState(false)
   const supabase = createClient()
   const queryClient = useQueryClient()
@@ -143,6 +143,9 @@ export default function LibraryPage() {
 
   // Check for new signup and show welcome modal
   useEffect(() => {
+    // Only run after hydration to avoid mismatch
+    if (!mounted) return
+
     const welcomeShown = localStorage.getItem(WELCOME_MODAL_KEY)
     const isNewSignupFromUrl = searchParams?.get('welcome') === 'true'
     const isNewSignupFromSession = sessionStorage.getItem('@storystack:new_signup')
@@ -160,7 +163,7 @@ export default function LibraryPage() {
       }, 800)
       return () => clearTimeout(timer)
     }
-  }, [searchParams, router])
+  }, [mounted, searchParams, router])
 
   // Log errors for debugging but don't crash the page
   if (isError && error) {
@@ -1351,5 +1354,17 @@ export default function LibraryPage() {
         onOpenChange={setShowWelcomeModal}
       />
     </div>
+  )
+}
+
+export default function LibraryPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex h-screen items-center justify-center bg-white">
+        <div className="animate-pulse text-gray-400">Loading...</div>
+      </div>
+    }>
+      <LibraryPageContent />
+    </Suspense>
   )
 }

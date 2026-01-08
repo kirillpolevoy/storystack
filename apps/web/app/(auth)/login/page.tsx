@@ -10,7 +10,8 @@ function LoginPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const inviteParam = searchParams?.get('invite')
-  const [activeTab, setActiveTab] = useState<'login' | 'signup'>(inviteParam ? 'signup' : 'login')
+  // Start with 'login' to avoid hydration mismatch, then update in useEffect if invite param exists
+  const [activeTab, setActiveTab] = useState<'login' | 'signup'>('login')
 
   useEffect(() => {
     // Check if user is already logged in
