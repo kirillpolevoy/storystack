@@ -1201,7 +1201,7 @@ async function processBatchResults(
   supabaseClient: any
 ): Promise<void> {
   console.log(`[auto_tag_asset] 🔍 Processing batch results for batch: ${batchId}`);
-  
+
   // Step 1: Check batch status
   const statusResponse = await fetch(`${OPENAI_BATCH_API_URL}/${batchId}`, {
     method: 'GET',
@@ -1209,64 +1209,88 @@ async function processBatchResults(
       'Authorization': `Bearer ${apiKey}`,
     },
   });
-  
+
   if (!statusResponse.ok) {
     const errorText = await statusResponse.text();
     throw new Error(`Failed to check batch status: ${statusResponse.status} ${errorText}`);
   }
-  
+
   const batchStatus = await statusResponse.json();
-  
+
+  // Handle failed/cancelled batches - mark all assets as failed
+  if (batchStatus.status === 'failed' || batchStatus.status === 'cancelled' || batchStatus.status === 'expired') {
+    console.error(`[auto_tag_asset] ❌ Batch ${batchId} ${batchStatus.status}`);
+    const { error: failedUpdateError } = await supabaseClient
+      .from('assets')
+      .update({ auto_tag_status: 'failed' })
+      .eq('openai_batch_id', batchId)
+      .eq('auto_tag_status', 'pending');
+
+    if (failedUpdateError) {
+      console.error(`[auto_tag_asset] Failed to mark assets as failed:`, failedUpdateError);
+    } else {
+      console.log(`[auto_tag_asset] Marked all pending assets for batch ${batchId} as failed`);
+    }
+    return;
+  }
+
   if (batchStatus.status !== 'completed') {
     console.log(`[auto_tag_asset] Batch ${batchId} status: ${batchStatus.status}`);
     return; // Not completed yet, will be polled again
   }
-  
+
   // Step 2: Download results file
   const outputFileId = batchStatus.output_file_id;
   if (!outputFileId) {
     throw new Error('Batch completed but no output file ID');
   }
-  
+
   const fileResponse = await fetch(`${OPENAI_FILES_API_URL}/${outputFileId}/content`, {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
     },
   });
-  
+
   if (!fileResponse.ok) {
     const errorText = await fileResponse.text();
     throw new Error(`Failed to download results file: ${fileResponse.status} ${errorText}`);
   }
-  
+
   const fileContent = await fileResponse.text();
   const lines = fileContent.trim().split('\n');
-  
+
+  // Track successfully processed assets
+  const processedAssetIds: string[] = [];
+  const failedAssetIds: string[] = [];
+
   // Step 3: Parse results and update database
   for (const line of lines) {
     if (!line.trim()) continue;
-    
+
     try {
       const result = JSON.parse(line);
       const customId = result.custom_id;
       const responseBody = result.response?.body;
-      
+
       if (!customId || !responseBody) {
         console.warn(`[auto_tag_asset] Skipping invalid result line: ${line.substring(0, 100)}`);
+        // If we can extract customId, mark as failed
+        if (customId) failedAssetIds.push(customId);
         continue;
       }
-      
+
       const content = responseBody.choices?.[0]?.message?.content;
       if (!content) {
         console.warn(`[auto_tag_asset] No content in result for ${customId}`);
+        failedAssetIds.push(customId);
         continue;
       }
-      
+
       const parsed = JSON.parse(content);
       const tags = Array.isArray(parsed.tags) ? parsed.tags : [];
-      
-      // Update asset in database
+
+      // Update asset in database - mark as completed even if no tags (AI processed it, just nothing matched)
       const { error: updateError } = await supabaseClient
         .from('assets')
         .update({
@@ -1274,18 +1298,57 @@ async function processBatchResults(
           auto_tag_status: 'completed',
         })
         .eq('id', customId);
-      
+
       if (updateError) {
         console.error(`[auto_tag_asset] Failed to update asset ${customId}:`, updateError);
+        failedAssetIds.push(customId);
       } else {
         console.log(`[auto_tag_asset] ✅ Updated asset ${customId} with tags: [${tags.join(', ')}]`);
+        processedAssetIds.push(customId);
       }
     } catch (parseError) {
       console.error(`[auto_tag_asset] Failed to parse result line:`, parseError);
       console.error(`[auto_tag_asset] Line: ${line.substring(0, 200)}`);
+      // Try to extract customId from the line for error tracking
+      try {
+        const partialResult = JSON.parse(line);
+        if (partialResult.custom_id) failedAssetIds.push(partialResult.custom_id);
+      } catch {
+        // Can't extract ID, will be caught by cleanup below
+      }
     }
   }
-  
+
+  console.log(`[auto_tag_asset] ✅ Successfully processed ${processedAssetIds.length} assets`);
+
+  // Step 4: Mark explicitly failed assets
+  if (failedAssetIds.length > 0) {
+    const { error: failedUpdateError } = await supabaseClient
+      .from('assets')
+      .update({ auto_tag_status: 'failed' })
+      .in('id', failedAssetIds);
+
+    if (failedUpdateError) {
+      console.error(`[auto_tag_asset] Failed to mark failed assets:`, failedUpdateError);
+    } else {
+      console.log(`[auto_tag_asset] Marked ${failedAssetIds.length} assets as failed`);
+    }
+  }
+
+  // Step 5: Cleanup - mark any remaining pending assets with this batch_id as failed
+  // This catches assets that weren't in the results file at all
+  const { error: cleanupError, count: cleanupCount } = await supabaseClient
+    .from('assets')
+    .update({ auto_tag_status: 'failed' })
+    .eq('openai_batch_id', batchId)
+    .eq('auto_tag_status', 'pending');
+
+  if (cleanupError) {
+    console.error(`[auto_tag_asset] Failed to cleanup pending assets:`, cleanupError);
+  } else if (cleanupCount && cleanupCount > 0) {
+    console.log(`[auto_tag_asset] ⚠️ Marked ${cleanupCount} orphaned pending assets as failed (not in batch results)`);
+  }
+
   console.log(`[auto_tag_asset] ✅ Processed ${lines.length} batch results`);
 }
 
