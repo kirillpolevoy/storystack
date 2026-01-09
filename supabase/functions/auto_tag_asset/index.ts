@@ -1596,7 +1596,7 @@ Deno.serve(async (req) => {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
       status: 405,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
@@ -1613,27 +1613,27 @@ Deno.serve(async (req) => {
       if (!batchBody.assets || batchBody.assets.length === 0) {
         return new Response(JSON.stringify({ error: 'Invalid batch payload - assets array required' }), {
           status: 400,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
-      
+
       // Validate all assets have required fields
       for (const asset of batchBody.assets) {
         if (!asset?.assetId || !asset?.imageUrl) {
           return new Response(JSON.stringify({ error: 'Invalid batch payload - all assets must have assetId and imageUrl' }), {
             status: 400,
-            headers: { 'Content-Type': 'application/json' },
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
           });
         }
       }
-      
+
       const supabaseUrl = Deno.env.get('SUPABASE_URL');
       const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
       if (!supabaseUrl || !serviceKey) {
         console.error('[auto_tag_asset] Missing Supabase env vars');
         return new Response(JSON.stringify({ error: 'Configuration error' }), {
           status: 500,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
 
@@ -1684,7 +1684,7 @@ Deno.serve(async (req) => {
         console.error('[auto_tag_asset] Failed to query assets after retries:', assetsError);
         return new Response(JSON.stringify({ error: 'Failed to query assets', details: assetsError.message }), {
           status: 500,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       
@@ -1692,7 +1692,7 @@ Deno.serve(async (req) => {
         console.error('[auto_tag_asset] No assets found for IDs after retries:', assetIds);
         return new Response(JSON.stringify({ error: 'Assets not found', assetIds }), {
           status: 404,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       
@@ -1705,7 +1705,7 @@ Deno.serve(async (req) => {
           assetIds: assetsWithoutWorkspaceId.map(a => a.id) 
         }), {
           status: 400,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       
@@ -1726,7 +1726,7 @@ Deno.serve(async (req) => {
         console.error('[auto_tag_asset] No valid assets found after filtering');
         return new Response(JSON.stringify({ error: 'No valid assets found' }), {
           status: 404,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       
@@ -1736,7 +1736,7 @@ Deno.serve(async (req) => {
         console.error('[auto_tag_asset] First asset missing workspace_id');
         return new Response(JSON.stringify({ error: 'Asset missing workspace_id' }), {
           status: 400,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       console.log(`[auto_tag_asset] Processing batch of ${batchBody.assets.length} assets (${foundAssets.length} found, ${missingAssetIds.length} missing) for workspace:`, workspaceId);
@@ -1773,7 +1773,7 @@ Deno.serve(async (req) => {
         const emptyResults = batchBody.assets.map(a => ({ assetId: a.assetId, tags: [] }));
         return new Response(JSON.stringify({ results: emptyResults }), {
           status: 200,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       
@@ -1796,7 +1796,7 @@ Deno.serve(async (req) => {
             tagResults = batchBody.assets.map(asset => ({ assetId: asset.assetId, tags: [] }));
             return new Response(JSON.stringify({ results: tagResults }), {
               status: 200,
-              headers: { 'Content-Type': 'application/json' },
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             });
           }
           
@@ -1828,7 +1828,7 @@ Deno.serve(async (req) => {
               message: 'Batch API job created successfully. Results will be processed asynchronously.',
             }), {
               status: 200, // OK (changed from 202 to ensure client handles it correctly)
-              headers: { 'Content-Type': 'application/json' },
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             });
           } catch (batchError) {
             console.error(`[auto_tag_asset] ❌ Batch API failed:`, batchError);
@@ -2078,7 +2078,7 @@ Deno.serve(async (req) => {
       if (!singleBody?.assetId || !singleBody?.imageUrl) {
         return new Response(JSON.stringify({ error: 'Invalid payload' }), {
           status: 400,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
 
@@ -2088,7 +2088,7 @@ Deno.serve(async (req) => {
         console.error('[auto_tag_asset] Missing Supabase env vars');
         return new Response(JSON.stringify({ error: 'Configuration error' }), {
           status: 500,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
 
@@ -2138,7 +2138,7 @@ Deno.serve(async (req) => {
           assetId: singleBody.assetId 
         }), {
           status: assetError.code === 'PGRST116' ? 404 : 500,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       
@@ -2149,7 +2149,7 @@ Deno.serve(async (req) => {
           assetId: singleBody.assetId 
         }), {
           status: 404,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       
@@ -2161,7 +2161,7 @@ Deno.serve(async (req) => {
           assetId: singleBody.assetId 
         }), {
           status: 400,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       
@@ -2191,7 +2191,7 @@ Deno.serve(async (req) => {
 
         return new Response(JSON.stringify({ assetId: singleBody.assetId, tags: [] }), {
           status: 200,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       
@@ -2295,7 +2295,7 @@ Deno.serve(async (req) => {
     console.error('[auto_tag_asset] Unhandled error', error);
     return new Response(JSON.stringify({ error: 'Unexpected error' }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 });
