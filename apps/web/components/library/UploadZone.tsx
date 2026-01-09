@@ -21,9 +21,10 @@ interface UploadZoneProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onUploadComplete?: (assetId: string) => void
+  onBatchTaggingStart?: (assetIds: string[]) => void // Called when batch tagging starts for progress tracking
 }
 
-export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneProps) {
+export function UploadZone({ open, onOpenChange, onUploadComplete, onBatchTaggingStart }: UploadZoneProps) {
   const [uploadQueue, setUploadQueue] = useState<UploadProgress[]>([])
   const [showDuplicateDialog, setShowDuplicateDialog] = useState(false)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
@@ -73,6 +74,13 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
         firstAssetId: batchRequest.assets[0]?.assetId,
         firstImageUrl: batchRequest.assets[0]?.imageUrl?.substring(0, 100) + '...',
       })
+
+      // Notify parent to start tracking progress (only on first attempt, not retries)
+      if (retryCount === 0 && onBatchTaggingStart) {
+        const assetIds = assets.map(a => a.id)
+        console.log(`[UploadZone] 📊 Starting progress tracking for ${assetIds.length} assets`)
+        onBatchTaggingStart(assetIds)
+      }
 
       // Call edge function with batch request
       // The edge function will use OpenAI Batch API for 20+ images (50% cost savings)
@@ -175,7 +183,7 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
       console.error('[UploadZone] Stack trace:', error instanceof Error ? error.stack : 'N/A')
       // Don't throw - uploads succeeded, tagging can retry later
     }
-  }, [supabase, queryClient])
+  }, [supabase, queryClient, onBatchTaggingStart])
 
   const processFiles = useCallback(
     async (files: File[], skipDuplicates: boolean = false) => {

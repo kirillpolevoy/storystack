@@ -7,7 +7,9 @@ import { useAvailableTags } from '@/hooks/useAvailableTags'
 import { useAvailableLocations } from '@/hooks/useAvailableLocations'
 import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
 import { useAssetsRealtime } from '@/hooks/useAssetsRealtime'
+import { useTaggingProgress } from '@/hooks/useTaggingProgress'
 import { AssetGrid } from '@/components/library/AssetGrid'
+import { TaggingProgressBar } from '@/components/library/TaggingProgressBar'
 import { UploadZone } from '@/components/library/UploadZone'
 import { FilterBar } from '@/components/library/FilterBar'
 import { BulkActionBar } from '@/components/library/BulkActionBar'
@@ -82,6 +84,9 @@ function LibraryPageContent() {
 
   // Subscribe to real-time asset updates (for progressive tagging, multi-device sync)
   useAssetsRealtime()
+
+  // Track batch tagging progress for large uploads (6+ images)
+  const { progress: taggingProgress, isVisible: showTaggingProgress, startTracking: startTaggingTracking, dismiss: dismissTaggingProgress } = useTaggingProgress()
 
   // Convert filters to the format useAssets expects
   const selectedFilters = useMemo(() => {
@@ -915,6 +920,14 @@ function LibraryPageContent() {
 
   return (
     <div className="flex h-screen flex-col bg-white">
+      {/* Tagging Progress Bar - Shows for large batches (6+ images) */}
+      {showTaggingProgress && (
+        <TaggingProgressBar
+          progress={taggingProgress}
+          onDismiss={dismissTaggingProgress}
+        />
+      )}
+
       {/* Header - Reduced height, two-row structure */}
       <div className="border-b border-gray-200 bg-white">
         <div className="px-4 sm:px-6 lg:px-8 pt-4">
@@ -1205,6 +1218,10 @@ function LibraryPageContent() {
           if (assetId) {
             setRetaggingAssetIds((prev) => new Set(prev).add(assetId))
           }
+        }}
+        onBatchTaggingStart={(assetIds) => {
+          // Start tracking batch tagging progress for progress bar
+          startTaggingTracking(assetIds)
         }}
       />
 
