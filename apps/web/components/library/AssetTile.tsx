@@ -100,10 +100,16 @@ export function AssetTile({
 
       {/* Success Indicator - shows briefly after tagging completes */}
       {isCompleted && !isTagging && (
-        <div className="absolute inset-0 z-10 bg-green-50/80 flex items-center justify-center backdrop-blur-[2px]">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-green-200 text-green-700 text-[10px] font-medium rounded-md shadow-card">
+        <div className={`absolute inset-0 z-10 flex items-center justify-center backdrop-blur-[2px] ${
+          asset.tags && asset.tags.length > 0 ? 'bg-green-50/80' : 'bg-gray-50/80'
+        }`}>
+          <div className={`flex items-center gap-1.5 px-3 py-1.5 bg-white text-[10px] font-medium rounded-md shadow-card ${
+            asset.tags && asset.tags.length > 0
+              ? 'border border-green-200 text-green-700'
+              : 'border border-gray-200 text-gray-600'
+          }`}>
             <CheckCircle2 className="h-3 w-3" />
-            <span>Tagged</span>
+            <span>{asset.tags && asset.tags.length > 0 ? 'Tagged' : 'No tags'}</span>
           </div>
         </div>
       )}

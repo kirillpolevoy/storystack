@@ -622,10 +622,16 @@ export function AssetDetailPanel({
           
           {/* Success Indicator - shows briefly after tagging completes (matches AssetTile) */}
           {showSuccessIndicator && isAssetJustCompleted && !isAssetRetagging && (
-            <div className="absolute inset-0 z-10 bg-green-50/90 flex items-center justify-center backdrop-blur-sm animate-in fade-in duration-200">
-              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-green-200 text-green-700 text-[10px] font-medium rounded-md shadow-sm">
+            <div className={`absolute inset-0 z-10 flex items-center justify-center backdrop-blur-sm animate-in fade-in duration-200 ${
+              currentAsset.tags && currentAsset.tags.length > 0 ? 'bg-green-50/90' : 'bg-gray-50/90'
+            }`}>
+              <div className={`flex items-center gap-1.5 px-3 py-1.5 bg-white text-[10px] font-medium rounded-md shadow-sm ${
+                currentAsset.tags && currentAsset.tags.length > 0
+                  ? 'border border-green-200 text-green-700'
+                  : 'border border-gray-200 text-gray-600'
+              }`}>
                 <CheckCircle2 className="h-3 w-3" />
-                <span>Tagged</span>
+                <span>{currentAsset.tags && currentAsset.tags.length > 0 ? 'Tagged' : 'No tags'}</span>
               </div>
             </div>
           )}
