@@ -25,6 +25,7 @@ import { createClient } from '@/lib/supabase/client'
 import { initializeBatchPolling, stopBatchPolling, addBatchToPoll, startBatchPolling } from '@/utils/pollBatchStatus'
 import { MobileMenuButton } from '@/components/app/MobileMenuButton'
 import { WelcomeModal } from '@/components/app/WelcomeModal'
+import { toast } from '@/components/ui/use-toast'
 
 const WELCOME_MODAL_KEY = '@storystack:welcome_shown'
 
@@ -454,7 +455,10 @@ function LibraryPageContent() {
         if (allEmpty && data.results.length > 0) {
           console.warn('[LibraryPage] ⚠️  All results have empty tags - no tags may be enabled for auto-tagging')
           console.warn('[LibraryPage] ⚠️  Please check tag configuration at /app/tags and ensure at least one tag is enabled for AI')
-          alert('Auto-tagging completed but no tags were applied. Please check your tag configuration and ensure at least one tag is enabled for AI auto-tagging.')
+          toast({
+            title: 'No tags applied',
+            description: 'Enable AI tags in Settings > Tags to automatically tag your photos.',
+          })
         }
         
         // Results are already saved to DB by edge function

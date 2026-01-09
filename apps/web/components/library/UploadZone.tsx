@@ -15,6 +15,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { addBatchToPoll, startBatchPolling } from '@/utils/pollBatchStatus'
 import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
 import { useTrialGate } from '@/components/subscription/TrialGateProvider'
+import { toast } from '@/components/ui/use-toast'
 
 interface UploadZoneProps {
   open: boolean
@@ -118,9 +119,12 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
         if (allEmpty && data.results.length > 0) {
           console.warn('[UploadZone] ⚠️  All results have empty tags. This might indicate no tags are enabled for auto-tagging.')
           console.warn('[UploadZone] ⚠️  Please check tag configuration at /app/tags and ensure at least one tag is enabled for AI auto-tagging.')
-          
-          // Show user-visible warning
-          alert('Images uploaded successfully, but auto-tagging could not run because no tags are enabled for AI. Please enable tags in Settings > Tags.')
+
+          // Show user-visible warning via toast
+          toast({
+            title: 'No tags applied',
+            description: 'Enable AI tags in Settings > Tags to automatically tag your photos.',
+          })
         }
       }
 
