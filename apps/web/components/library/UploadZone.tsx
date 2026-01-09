@@ -114,7 +114,9 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
       }
 
       // Check if response indicates no tags enabled
-      if (data?.results && Array.isArray(data.results)) {
+      // Skip this check for Batch API (batchId/batchIds present) since tags are applied later
+      const hasBatchId = data?.batchId || (data?.batchIds && data.batchIds.length > 0)
+      if (!hasBatchId && data?.results && Array.isArray(data.results)) {
         const allEmpty = data.results.every((r: any) => !r.tags || r.tags.length === 0)
         if (allEmpty && data.results.length > 0) {
           console.warn('[UploadZone] ⚠️  All results have empty tags. This might indicate no tags are enabled for auto-tagging.')

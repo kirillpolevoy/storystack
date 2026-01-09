@@ -455,8 +455,10 @@ function LibraryPageContent() {
         console.log('[LibraryPage] Results:', data.results)
         
         // Check if all results are empty (indicates no tags enabled)
+        // Skip this check for Batch API (batchId/batchIds present) since tags are applied later
+        const hasBatchId = data.batchId || (data.batchIds && data.batchIds.length > 0)
         const allEmpty = Array.isArray(data.results) && data.results.every((r: any) => !r.tags || r.tags.length === 0)
-        if (allEmpty && data.results.length > 0) {
+        if (!hasBatchId && allEmpty && data.results.length > 0) {
           console.warn('[LibraryPage] ⚠️  All results have empty tags - no tags may be enabled for auto-tagging')
           console.warn('[LibraryPage] ⚠️  Please check tag configuration at /app/tags and ensure at least one tag is enabled for AI')
           toast({
