@@ -23,8 +23,8 @@ const AI_TARGET_LONG_EDGE = 1024;
 const REALTIME_IMMEDIATE_MAX = 5;     // 1-5 images: immediate real-time
 const REALTIME_CHUNKED_MAX = 100;     // 6-100 images: chunked real-time with delays
 const BATCH_API_THRESHOLD = 101;      // 101+ images: use Batch API
-const CHUNK_SIZE = 5;                 // Process 5 images at a time
-const CHUNK_DELAY_MS = 2000;          // 2 second delay between chunks
+const CHUNK_SIZE = 3;                 // Process 3 images at a time (reduced for Tier 1 TPM limits)
+const CHUNK_DELAY_MS = 6000;          // 6 second delay between chunks (stays under 200K TPM)
 
 // Progressive batch sizing for large uploads (101+ images)
 // First batch is small for quick feedback, then progressively larger
