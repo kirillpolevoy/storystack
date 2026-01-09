@@ -8,16 +8,22 @@ import { RealtimeChannel } from '@supabase/supabase-js'
 import { TaggingProgress } from '@/components/library/TaggingProgressBar'
 
 const PROGRESS_THRESHOLD = 6 // Only show progress bar for 6+ images (batch API)
+const POLL_INTERVAL_MS = 3000 // Poll every 3 seconds as fallback
 
 /**
  * Hook to track batch tagging progress
  * Shows progress bar for large batches (6+ images)
+ * Uses both realtime subscription AND polling for reliability
  */
 export function useTaggingProgress() {
   const supabase = createClient()
   const queryClient = useQueryClient()
   const activeWorkspaceId = useActiveWorkspace()
   const channelRef = useRef<RealtimeChannel | null>(null)
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const assetIdsRef = useRef<string[]>([])
+  const isCompleteRef = useRef(false)
+  const dismissTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const [progress, setProgress] = useState<TaggingProgress>({
     total: 0,
@@ -29,47 +35,17 @@ export function useTaggingProgress() {
 
   const [isVisible, setIsVisible] = useState(false)
 
-  // Start tracking a batch of assets
-  const startTracking = useCallback((assetIds: string[]) => {
-    if (assetIds.length < PROGRESS_THRESHOLD) {
-      console.log(`[useTaggingProgress] Skipping progress bar for ${assetIds.length} images (threshold: ${PROGRESS_THRESHOLD})`)
-      return
-    }
-
-    console.log(`[useTaggingProgress] Starting to track ${assetIds.length} assets`)
-    setProgress({
-      total: assetIds.length,
-      completed: 0,
-      tagged: 0,
-      noTags: 0,
-      assetIds,
-    })
-    setIsVisible(true)
-  }, [])
-
-  // Dismiss the progress bar
-  const dismiss = useCallback(() => {
-    setIsVisible(false)
-    // Reset after animation
-    setTimeout(() => {
-      setProgress({
-        total: 0,
-        completed: 0,
-        tagged: 0,
-        noTags: 0,
-        assetIds: [],
-      })
-    }, 300)
-  }, [])
-
   // Check current status of tracked assets
   const checkProgress = useCallback(async () => {
-    if (progress.assetIds.length === 0) return
+    const currentAssetIds = assetIdsRef.current
+    if (currentAssetIds.length === 0) return
+
+    console.log(`[useTaggingProgress] Checking progress for ${currentAssetIds.length} assets...`)
 
     const { data: assets, error } = await supabase
       .from('assets')
       .select('id, auto_tag_status, tags')
-      .in('id', progress.assetIds)
+      .in('id', currentAssetIds)
 
     if (error) {
       console.error('[useTaggingProgress] Error fetching assets:', error)
@@ -78,29 +54,128 @@ export function useTaggingProgress() {
 
     if (!assets) return
 
-    const completed = assets.filter(a => a.auto_tag_status === 'completed' || a.auto_tag_status === 'failed')
-    const tagged = assets.filter(a => a.auto_tag_status === 'completed' && a.tags && a.tags.length > 0)
-    const noTags = assets.filter(a => (a.auto_tag_status === 'completed' || a.auto_tag_status === 'failed') && (!a.tags || a.tags.length === 0))
+    const completedAssets = assets.filter(a => a.auto_tag_status === 'completed' || a.auto_tag_status === 'failed')
+    const taggedAssets = assets.filter(a => a.auto_tag_status === 'completed' && a.tags && a.tags.length > 0)
+    const noTagsAssets = assets.filter(a => (a.auto_tag_status === 'completed' || a.auto_tag_status === 'failed') && (!a.tags || a.tags.length === 0))
+
+    const newCompleted = completedAssets.length
+    const newTagged = taggedAssets.length
+    const newNoTags = noTagsAssets.length
+
+    console.log(`[useTaggingProgress] Progress: ${newCompleted}/${currentAssetIds.length} (${newTagged} tagged, ${newNoTags} no tags)`)
 
     setProgress(prev => ({
       ...prev,
-      completed: completed.length,
-      tagged: tagged.length,
-      noTags: noTags.length,
+      completed: newCompleted,
+      tagged: newTagged,
+      noTags: newNoTags,
     }))
 
-    // Auto-dismiss after 5 seconds when complete
-    if (completed.length >= progress.assetIds.length) {
-      console.log('[useTaggingProgress] All assets completed, auto-dismissing in 5s')
-      setTimeout(() => {
-        dismiss()
+    // Invalidate queries to refresh UI grid
+    queryClient.invalidateQueries({ queryKey: ['assets'], refetchType: 'active' })
+
+    // Check if complete
+    if (newCompleted >= currentAssetIds.length && !isCompleteRef.current) {
+      isCompleteRef.current = true
+      console.log('[useTaggingProgress] All assets completed!')
+
+      // Stop polling
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current)
+        pollIntervalRef.current = null
+      }
+
+      // Auto-dismiss after 5 seconds
+      dismissTimeoutRef.current = setTimeout(() => {
+        setIsVisible(false)
+        setTimeout(() => {
+          setProgress({
+            total: 0,
+            completed: 0,
+            tagged: 0,
+            noTags: 0,
+            assetIds: [],
+          })
+          assetIdsRef.current = []
+          isCompleteRef.current = false
+        }, 300)
       }, 5000)
     }
-  }, [progress.assetIds, supabase, dismiss])
+  }, [supabase, queryClient])
 
-  // Set up realtime subscription for tracked assets
+  // Start tracking a batch of assets
+  const startTracking = useCallback((assetIds: string[]) => {
+    if (assetIds.length < PROGRESS_THRESHOLD) {
+      console.log(`[useTaggingProgress] Skipping progress bar for ${assetIds.length} images (threshold: ${PROGRESS_THRESHOLD})`)
+      return
+    }
+
+    console.log(`[useTaggingProgress] Starting to track ${assetIds.length} assets`)
+
+    // Clear any existing dismiss timeout
+    if (dismissTimeoutRef.current) {
+      clearTimeout(dismissTimeoutRef.current)
+      dismissTimeoutRef.current = null
+    }
+
+    // Store in ref for stable access
+    assetIdsRef.current = assetIds
+    isCompleteRef.current = false
+
+    setProgress({
+      total: assetIds.length,
+      completed: 0,
+      tagged: 0,
+      noTags: 0,
+      assetIds,
+    })
+    setIsVisible(true)
+
+    // Start polling immediately
+    checkProgress()
+
+    // Set up polling interval as primary method (realtime can be unreliable)
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current)
+    }
+    pollIntervalRef.current = setInterval(() => {
+      if (!isCompleteRef.current) {
+        checkProgress()
+      }
+    }, POLL_INTERVAL_MS)
+  }, [checkProgress])
+
+  // Dismiss the progress bar
+  const dismiss = useCallback(() => {
+    // Clear dismiss timeout
+    if (dismissTimeoutRef.current) {
+      clearTimeout(dismissTimeoutRef.current)
+      dismissTimeoutRef.current = null
+    }
+
+    // Stop polling
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current)
+      pollIntervalRef.current = null
+    }
+
+    setIsVisible(false)
+    setTimeout(() => {
+      setProgress({
+        total: 0,
+        completed: 0,
+        tagged: 0,
+        noTags: 0,
+        assetIds: [],
+      })
+      assetIdsRef.current = []
+      isCompleteRef.current = false
+    }, 300)
+  }, [])
+
+  // Set up realtime subscription as bonus (polling is primary)
   useEffect(() => {
-    if (!activeWorkspaceId || progress.assetIds.length === 0) {
+    if (!activeWorkspaceId || assetIdsRef.current.length === 0) {
       return
     }
 
@@ -110,11 +185,11 @@ export function useTaggingProgress() {
       channelRef.current = null
     }
 
-    console.log(`[useTaggingProgress] Setting up realtime for ${progress.assetIds.length} assets`)
+    console.log(`[useTaggingProgress] Setting up realtime subscription for workspace ${activeWorkspaceId}`)
 
     // Subscribe to changes on tracked assets
     const channel = supabase
-      .channel(`tagging-progress-${activeWorkspaceId}`)
+      .channel(`tagging-progress-${activeWorkspaceId}-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -127,37 +202,42 @@ export function useTaggingProgress() {
           const { new: newRecord } = payload
 
           // Check if this is one of our tracked assets
-          if (progress.assetIds.includes(newRecord.id)) {
-            console.log(`[useTaggingProgress] Asset ${newRecord.id} updated:`, {
-              status: newRecord.auto_tag_status,
-              tagsCount: newRecord.tags?.length || 0,
-            })
-
-            // Re-check all progress
+          if (assetIdsRef.current.includes(newRecord.id)) {
+            console.log(`[useTaggingProgress] Realtime: Asset ${newRecord.id} updated`)
             checkProgress()
-
-            // Also invalidate queries to refresh UI
-            queryClient.invalidateQueries({ queryKey: ['assets'], refetchType: 'active' })
           }
         }
       )
       .subscribe((status) => {
-        console.log('[useTaggingProgress] Subscription status:', status)
+        console.log('[useTaggingProgress] Realtime subscription status:', status)
       })
 
     channelRef.current = channel
 
-    // Initial check
-    checkProgress()
-
     // Cleanup
     return () => {
       if (channelRef.current) {
+        console.log('[useTaggingProgress] Cleaning up realtime subscription')
         supabase.removeChannel(channelRef.current)
         channelRef.current = null
       }
     }
-  }, [activeWorkspaceId, progress.assetIds, supabase, queryClient, checkProgress])
+  }, [activeWorkspaceId, supabase, checkProgress])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current)
+      }
+      if (dismissTimeoutRef.current) {
+        clearTimeout(dismissTimeoutRef.current)
+      }
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current)
+      }
+    }
+  }, [supabase])
 
   return {
     progress,
