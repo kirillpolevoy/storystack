@@ -275,33 +275,36 @@ class AutoTagQueue {
         fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'autoTagQueue.ts:217',message:'Parsed batch results',data:{resultsCount:results.length,expectedCount:batch.length,results:results.map((r:any)=>({assetId:r.assetId,tagsCount:r.tags?.length||0})),batchAssetIds:batch.map(r=>r.assetId),batchId:batchId||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
         // #endregion
         
-        // If batchId is present, this is a Batch API async job - add to polling queue
-        if (batchId) {
-          console.log(`[AutoTagQueue] 🚀 Batch API job created: ${batchId} - adding to polling queue`);
+        // If batchId(s) present, this is a Batch API async job - add to polling queue
+        const batchIds = result.batchIds || (batchId ? [batchId] : []);
+        if (batchIds.length > 0) {
+          console.log(`[AutoTagQueue] 🚀 ${batchIds.length} Batch API job(s) created: [${batchIds.join(', ')}] - adding to polling queue`);
           try {
             // Dynamically import to avoid circular dependencies
             const { addBatchToPoll, startBatchPolling } = await import('@/utils/pollBatchStatus');
-            addBatchToPoll(batchId);
+            for (const id of batchIds) {
+              addBatchToPoll(id);
+              console.log(`[AutoTagQueue] ✅ Added batch ${id} to polling queue`);
+            }
             startBatchPolling();
-            console.log(`[AutoTagQueue] ✅ Added batch ${batchId} to polling queue`);
           } catch (pollError) {
-            console.error(`[AutoTagQueue] ❌ Failed to add batch to polling queue:`, pollError);
+            console.error(`[AutoTagQueue] ❌ Failed to add batches to polling queue:`, pollError);
             // Continue processing - polling will pick it up from database
           }
         }
         
-        console.log(`[AutoTagQueue] ✅ Batch success! Processed ${results.length} assets${batchId ? ` (async batch: ${batchId})` : ''}`);
+        console.log(`[AutoTagQueue] ✅ Batch success! Processed ${results.length} assets${batchIds.length > 0 ? ` (${batchIds.length} async batches)` : ''}`);
         console.log(`[AutoTagQueue] Results array:`, JSON.stringify(results, null, 2));
-        
-        if (results.length === 0 && !batchId) {
-          console.error(`[AutoTagQueue] ❌❌❌ CRITICAL: Response has empty results array and no batchId! ❌❌❌`);
+
+        if (results.length === 0 && batchIds.length === 0) {
+          console.error(`[AutoTagQueue] ❌❌❌ CRITICAL: Response has empty results array and no batchIds! ❌❌❌`);
           console.error(`[AutoTagQueue] Full response object:`, JSON.stringify(result, null, 2));
           // #region agent log
           fetch('http://127.0.0.1:7242/ingest/4ad6fae5-1e95-448c-8aed-85cb2ebf1745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'autoTagQueue.ts:222',message:'Empty results array',data:{batchSize:batch.length,fullResponse:JSON.stringify(result)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
           // #endregion
           // Still process callbacks with empty tags so UI can update
-        } else if (results.length === 0 && batchId) {
-          console.log(`[AutoTagQueue] ℹ️  Empty results array is expected for Batch API (batchId: ${batchId}) - tags will be populated when batch completes`);
+        } else if (results.length === 0 && batchIds.length > 0) {
+          console.log(`[AutoTagQueue] ℹ️  Empty results array is expected for Batch API (${batchIds.length} batches) - tags will be populated when batches complete`);
         }
         
         // Map results back to requests

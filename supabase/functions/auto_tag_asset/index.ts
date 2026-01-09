@@ -1158,9 +1158,9 @@ async function createOpenAIBatch(
   workspaceId: string
 ): Promise<{ batchId: string; fileId: string }> {
   console.log(`[auto_tag_asset] 🚀 Creating OpenAI Batch API job for ${requests.length} images...`);
-  
-  if (requests.length < BATCH_API_THRESHOLD) {
-    throw new Error(`Batch API requires at least ${BATCH_API_THRESHOLD} images, got ${requests.length}`);
+
+  if (requests.length === 0) {
+    throw new Error('Batch API requires at least 1 image');
   }
   
   // Step 1: Prepare all images (using A2 versions)
@@ -2017,33 +2017,52 @@ Deno.serve(async (req) => {
           }
 
           try {
-            const { batchId, fileId } = await createOpenAIBatch(
-              assetsToProcess,
-              openAiKey!,
-              tagVocabulary,
-              supabaseClient,
-              workspaceId
-            );
-            
-            console.log(`[auto_tag_asset] ✅ Batch API job created: ${batchId}`);
-            console.log(`[auto_tag_asset] ⏳ Batch processing will complete asynchronously (up to 24h)`);
-            console.log(`[auto_tag_asset] 📋 Results will be processed when batch completes`);
-            
-            // Return empty tags for now - results will be processed when batch completes
-            // The polling function will update assets with tags when batch finishes
+            // Progressive batching: split into smaller batches for faster first results
+            const batchSizes = strategy.batchSizes || [assetsToProcess.length];
+            const batchIds: string[] = [];
+            let assetIndex = 0;
+
+            console.log(`[auto_tag_asset] 🚀 Creating ${batchSizes.length} progressive batches: [${batchSizes.join(', ')}]`);
+
+            for (let i = 0; i < batchSizes.length; i++) {
+              const batchSize = batchSizes[i];
+              const batchAssets = assetsToProcess.slice(assetIndex, assetIndex + batchSize);
+              assetIndex += batchSize;
+
+              if (batchAssets.length === 0) break;
+
+              console.log(`[auto_tag_asset] 📦 Creating batch ${i + 1}/${batchSizes.length} with ${batchAssets.length} images...`);
+
+              const { batchId, fileId } = await createOpenAIBatch(
+                batchAssets,
+                openAiKey!,
+                tagVocabulary,
+                supabaseClient,
+                workspaceId
+              );
+
+              batchIds.push(batchId);
+              console.log(`[auto_tag_asset] ✅ Batch ${i + 1} created: ${batchId} (${batchAssets.length} images)`);
+            }
+
+            console.log(`[auto_tag_asset] ✅ All ${batchIds.length} batches created: [${batchIds.join(', ')}]`);
+            console.log(`[auto_tag_asset] ⏳ Smaller batches complete faster - first results should appear soon`);
+
+            // Return empty tags for now - results will be processed when batches complete
+            // The polling function will update assets with tags when each batch finishes
             tagResults = batchBody.assets.map(asset => ({
               assetId: asset.assetId,
-              tags: [], // Empty for now, will be filled when batch completes
+              tags: [], // Empty for now, will be filled when batches complete
             }));
-            
-            // Return success response indicating batch was created
-            // Use 200 instead of 202 to ensure Supabase client handles it correctly
-            return new Response(JSON.stringify({ 
+
+            // Return success response indicating batches were created
+            return new Response(JSON.stringify({
               results: tagResults,
-              batchId,
-              message: 'Batch API job created successfully. Results will be processed asynchronously.',
+              batchIds, // Return array of batch IDs
+              batchId: batchIds[0], // Keep single batchId for backwards compatibility
+              message: `${batchIds.length} batch jobs created. Smaller batches complete faster.`,
             }), {
-              status: 200, // OK (changed from 202 to ensure client handles it correctly)
+              status: 200,
               headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             });
           } catch (batchError) {
