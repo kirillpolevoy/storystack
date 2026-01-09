@@ -82,8 +82,10 @@ export function AssetDetailPanel({
   const [imageSrc, setImageSrc] = useState<string>('')
   const [isAuditTrailExpanded, setIsAuditTrailExpanded] = useState(false)
   const [showSuccessIndicator, setShowSuccessIndicator] = useState(false)
+  const [showErrorIndicator, setShowErrorIndicator] = useState(false)
   const lastAssetIdRef = useRef<string | null>(null)
   const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isLocalTagUpdateRef = useRef(false) // Track when we're making a local tag update to prevent flickering
 
   const { data: availableTags } = useAvailableTags()
@@ -253,13 +255,26 @@ export function AssetDetailPanel({
     if (currentAsset.auto_tag_status === 'failed' && retagStatus === 'pending') {
       setRetagStatus('error')
       setShowSuccessIndicator(false)
+      setShowErrorIndicator(true)
+
+      // Clear error indicator after 4 seconds
+      if (errorTimeoutRef.current) {
+        clearTimeout(errorTimeoutRef.current)
+      }
+      errorTimeoutRef.current = setTimeout(() => {
+        setShowErrorIndicator(false)
+      }, 4000)
     }
-    
-    // Cleanup timeout on unmount or asset change
+
+    // Cleanup timeouts on unmount or asset change
     return () => {
       if (successTimeoutRef.current) {
         clearTimeout(successTimeoutRef.current)
         successTimeoutRef.current = null
+      }
+      if (errorTimeoutRef.current) {
+        clearTimeout(errorTimeoutRef.current)
+        errorTimeoutRef.current = null
       }
     }
   }, [open, completedRetaggingAssetIds, currentAsset.tags, currentAsset.auto_tag_status, currentAsset.id, queryClient, retagStatus])
@@ -625,8 +640,8 @@ export function AssetDetailPanel({
             </div>
           )}
           
-          {/* Error Overlay - shows when tagging fails */}
-          {!isAssetRetagging && !isAssetJustCompleted && (currentAsset.auto_tag_status === 'failed' || retagStatus === 'error') && (
+          {/* Error Overlay - shows briefly when tagging fails */}
+          {!isAssetRetagging && !isAssetJustCompleted && showErrorIndicator && (
             <div className="absolute inset-0 z-10 bg-red-50/90 flex items-center justify-center backdrop-blur-sm animate-in fade-in duration-200">
               <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-200 text-red-700 text-[10px] font-medium rounded-md shadow-sm">
                 <AlertCircle className="h-3 w-3" />
