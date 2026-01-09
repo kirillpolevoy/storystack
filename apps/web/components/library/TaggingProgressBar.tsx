@@ -8,6 +8,7 @@ export interface TaggingProgress {
   tagged: number      // Completed with tags
   noTags: number      // Completed without tags
   assetIds: string[]  // Asset IDs being tracked
+  estimatedSecondsRemaining: number | null  // Dynamic estimate based on progress
 }
 
 interface TaggingProgressBarProps {
@@ -15,10 +16,24 @@ interface TaggingProgressBarProps {
   onDismiss: () => void
 }
 
+function formatTimeRemaining(seconds: number | null): string | null {
+  if (seconds === null || seconds <= 0) return null
+
+  if (seconds < 60) {
+    return 'Less than a minute'
+  } else if (seconds < 120) {
+    return '~1 min remaining'
+  } else {
+    const minutes = Math.ceil(seconds / 60)
+    return `~${minutes} min remaining`
+  }
+}
+
 export function TaggingProgressBar({ progress, onDismiss }: TaggingProgressBarProps) {
-  const { total, completed, tagged, noTags } = progress
+  const { total, completed, tagged, noTags, estimatedSecondsRemaining } = progress
   const percentage = total > 0 ? Math.round((completed / total) * 100) : 0
   const isComplete = completed >= total
+  const timeRemaining = formatTimeRemaining(estimatedSecondsRemaining)
 
   if (total === 0) return null
 
@@ -56,7 +71,10 @@ export function TaggingProgressBar({ progress, onDismiss }: TaggingProgressBarPr
                 {isComplete ? 'Tagging complete' : 'AI tagging in progress'}
               </p>
               <p className="text-xs text-gray-500 mt-0.5">
-                {completed} of {total} images processed
+                {completed} of {total} images
+                {!isComplete && timeRemaining && (
+                  <span className="text-gray-400"> · {timeRemaining}</span>
+                )}
               </p>
               {isComplete && (tagged > 0 || noTags > 0) && (
                 <p className="text-xs mt-1">

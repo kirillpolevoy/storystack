@@ -24,6 +24,7 @@ export function useTaggingProgress() {
   const assetIdsRef = useRef<string[]>([])
   const isCompleteRef = useRef(false)
   const dismissTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const startedAtRef = useRef<number | null>(null)
 
   const [progress, setProgress] = useState<TaggingProgress>({
     total: 0,
@@ -31,6 +32,7 @@ export function useTaggingProgress() {
     tagged: 0,
     noTags: 0,
     assetIds: [],
+    estimatedSecondsRemaining: null,
   })
 
   const [isVisible, setIsVisible] = useState(false)
@@ -64,11 +66,25 @@ export function useTaggingProgress() {
 
     console.log(`[useTaggingProgress] Progress: ${newCompleted}/${currentAssetIds.length} (${newTagged} tagged, ${newNoTags} no tags)`)
 
+    // Calculate estimated time remaining based on actual progress
+    let estimatedSecondsRemaining: number | null = null
+    const pending = currentAssetIds.length - newCompleted
+
+    if (pending > 0 && newCompleted > 0 && startedAtRef.current) {
+      const elapsedMs = Date.now() - startedAtRef.current
+      const msPerImage = elapsedMs / newCompleted
+      estimatedSecondsRemaining = Math.ceil((pending * msPerImage) / 1000)
+    } else if (pending > 0) {
+      // Before first completion, use conservative estimate (~8 sec/image for batch API)
+      estimatedSecondsRemaining = pending * 8
+    }
+
     setProgress(prev => ({
       ...prev,
       completed: newCompleted,
       tagged: newTagged,
       noTags: newNoTags,
+      estimatedSecondsRemaining,
     }))
 
     // Invalidate queries to refresh UI grid
@@ -95,9 +111,11 @@ export function useTaggingProgress() {
             tagged: 0,
             noTags: 0,
             assetIds: [],
+            estimatedSecondsRemaining: null,
           })
           assetIdsRef.current = []
           isCompleteRef.current = false
+          startedAtRef.current = null
         }, 300)
       }, 5000)
     }
@@ -121,6 +139,7 @@ export function useTaggingProgress() {
     // Store in ref for stable access
     assetIdsRef.current = assetIds
     isCompleteRef.current = false
+    startedAtRef.current = Date.now()
 
     setProgress({
       total: assetIds.length,
@@ -128,6 +147,7 @@ export function useTaggingProgress() {
       tagged: 0,
       noTags: 0,
       assetIds,
+      estimatedSecondsRemaining: assetIds.length * 8, // Initial estimate
     })
     setIsVisible(true)
 
@@ -167,9 +187,11 @@ export function useTaggingProgress() {
         tagged: 0,
         noTags: 0,
         assetIds: [],
+        estimatedSecondsRemaining: null,
       })
       assetIdsRef.current = []
       isCompleteRef.current = false
+      startedAtRef.current = null
     }, 300)
   }, [])
 
