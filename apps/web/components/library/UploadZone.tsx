@@ -123,7 +123,7 @@ export function UploadZone({ open, onOpenChange, onUploadComplete }: UploadZoneP
           // Show user-visible warning via toast
           toast({
             title: 'No tags applied',
-            description: 'Enable AI tags in Settings > Tags to automatically tag your photos.',
+            description: 'Enable AI tags in Tag Management to automatically tag your photos.',
           })
         }
       }

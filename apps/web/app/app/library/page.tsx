@@ -457,7 +457,7 @@ function LibraryPageContent() {
           console.warn('[LibraryPage] ⚠️  Please check tag configuration at /app/tags and ensure at least one tag is enabled for AI')
           toast({
             title: 'No tags applied',
-            description: 'Enable AI tags in Settings > Tags to automatically tag your photos.',
+            description: 'Enable AI tags in Tag Management to automatically tag your photos.',
           })
         }
         
