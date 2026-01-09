@@ -85,7 +85,7 @@ export function TaggingProgressBar({ progress, onDismiss }: TaggingProgressBarPr
                     <span className="text-gray-300"> · </span>
                   )}
                   {noTags > 0 && (
-                    <span className="text-gray-400">{noTags} unmatched</span>
+                    <span className="text-gray-400">{noTags} not tagged</span>
                   )}
                 </p>
               )}
