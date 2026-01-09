@@ -1752,10 +1752,24 @@ Deno.serve(async (req) => {
       console.log('[auto_tag_asset] Number of enabled tags:', tagVocabulary.length);
       console.log('[auto_tag_asset] Tag vocabulary details:', JSON.stringify(tagVocabulary, null, 2));
       
-      // If no tags are enabled, skip auto-tagging
+      // If no tags are enabled, skip auto-tagging but mark assets as completed
       if (!tagVocabulary || tagVocabulary.length === 0) {
-        console.log('[auto_tag_asset] No tags enabled for AI auto-tagging - skipping batch');
-        // Return empty tags for all assets (both found and missing)
+        console.log('[auto_tag_asset] No tags enabled for AI auto-tagging - marking assets as completed');
+
+        // Mark all assets as completed (no tags to apply, but processing is done)
+        const assetIds = batchBody.assets.map(a => a.assetId);
+        const { error: updateError } = await supabaseClient
+          .from('assets')
+          .update({ auto_tag_status: 'completed', tags: [] })
+          .in('id', assetIds);
+
+        if (updateError) {
+          console.error('[auto_tag_asset] Failed to update asset status:', updateError);
+        } else {
+          console.log(`[auto_tag_asset] ✅ Marked ${assetIds.length} assets as completed (no tags enabled)`);
+        }
+
+        // Return empty tags for all assets
         const emptyResults = batchBody.assets.map(a => ({ assetId: a.assetId, tags: [] }));
         return new Response(JSON.stringify({ results: emptyResults }), {
           status: 200,
@@ -2159,9 +2173,22 @@ Deno.serve(async (req) => {
       console.log('[auto_tag_asset] Using tag vocabulary (enabled tags only):', tagVocabulary);
       console.log('[auto_tag_asset] Number of enabled tags:', tagVocabulary.length);
       
-      // If no tags are enabled, skip auto-tagging
+      // If no tags are enabled, skip auto-tagging but mark asset as completed
       if (!tagVocabulary || tagVocabulary.length === 0) {
-        console.log('[auto_tag_asset] No tags enabled for AI auto-tagging - skipping');
+        console.log('[auto_tag_asset] No tags enabled for AI auto-tagging - marking as completed');
+
+        // Mark asset as completed (no tags to apply, but processing is done)
+        const { error: updateError } = await supabaseClient
+          .from('assets')
+          .update({ auto_tag_status: 'completed', tags: [] })
+          .eq('id', singleBody.assetId);
+
+        if (updateError) {
+          console.error('[auto_tag_asset] Failed to update asset status:', updateError);
+        } else {
+          console.log(`[auto_tag_asset] ✅ Marked asset ${singleBody.assetId} as completed (no tags enabled)`);
+        }
+
         return new Response(JSON.stringify({ assetId: singleBody.assetId, tags: [] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
