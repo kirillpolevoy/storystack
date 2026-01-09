@@ -6,6 +6,7 @@ import { useAssets, AssetViewFilter } from '@/hooks/useAssets'
 import { useAvailableTags } from '@/hooks/useAvailableTags'
 import { useAvailableLocations } from '@/hooks/useAvailableLocations'
 import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
+import { useAssetsRealtime } from '@/hooks/useAssetsRealtime'
 import { AssetGrid } from '@/components/library/AssetGrid'
 import { UploadZone } from '@/components/library/UploadZone'
 import { FilterBar } from '@/components/library/FilterBar'
@@ -78,6 +79,9 @@ function LibraryPageContent() {
 
   const { data: locationsData } = useAvailableLocations()
   const availableLocations = locationsData || []
+
+  // Subscribe to real-time asset updates (for progressive tagging, multi-device sync)
+  useAssetsRealtime()
 
   // Convert filters to the format useAssets expects
   const selectedFilters = useMemo(() => {

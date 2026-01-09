@@ -18,7 +18,100 @@ const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_BATCH_API_URL = 'https://api.openai.com/v1/batches';
 const OPENAI_FILES_API_URL = 'https://api.openai.com/v1/files';
 const AI_TARGET_LONG_EDGE = 1024;
-const BATCH_API_THRESHOLD = 20; // Use Batch API for 20+ images
+
+// Processing thresholds
+const REALTIME_IMMEDIATE_MAX = 5;     // 1-5 images: immediate real-time
+const REALTIME_CHUNKED_MAX = 100;     // 6-100 images: chunked real-time with delays
+const BATCH_API_THRESHOLD = 101;      // 101+ images: use Batch API
+const CHUNK_SIZE = 5;                 // Process 5 images at a time
+const CHUNK_DELAY_MS = 2000;          // 2 second delay between chunks
+
+// Progressive batch sizing for large uploads (101+ images)
+// First batch is small for quick feedback, then progressively larger
+const PROGRESSIVE_BATCH_SIZES = [15, 35, 100]; // First 15, then 35, then 100s
+
+// Token bucket rate limiter (protects against concurrent user bursts)
+const RATE_LIMIT_WINDOW_MS = 60_000;  // 1 minute window
+const RATE_LIMIT_MAX_REQUESTS = 400;  // Max 400 requests per minute (safe buffer under 500 RPM)
+const recentRequests: number[] = [];
+
+function canMakeRequest(): boolean {
+  const now = Date.now();
+  // Remove expired entries
+  while (recentRequests.length > 0 && recentRequests[0] < now - RATE_LIMIT_WINDOW_MS) {
+    recentRequests.shift();
+  }
+  return recentRequests.length < RATE_LIMIT_MAX_REQUESTS;
+}
+
+function recordRequest(count: number = 1) {
+  const now = Date.now();
+  for (let i = 0; i < count; i++) {
+    recentRequests.push(now);
+  }
+}
+
+function getRateLimitRetryAfter(): number {
+  if (recentRequests.length === 0) return 0;
+  const oldestRequest = recentRequests[0];
+  const timeUntilExpiry = (oldestRequest + RATE_LIMIT_WINDOW_MS) - Date.now();
+  return Math.max(1, Math.ceil(timeUntilExpiry / 1000));
+}
+
+// Helper to split array into chunks
+function chunk<T>(array: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
+  }
+  return chunks;
+}
+
+// Helper to sleep
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Determine processing strategy based on image count
+function getProcessingStrategy(imageCount: number): {
+  type: 'immediate' | 'chunked' | 'batch';
+  chunks?: number;
+  batchSizes?: number[];
+} {
+  if (imageCount <= REALTIME_IMMEDIATE_MAX) {
+    return { type: 'immediate' };
+  }
+  if (imageCount <= REALTIME_CHUNKED_MAX) {
+    return { type: 'chunked', chunks: Math.ceil(imageCount / CHUNK_SIZE) };
+  }
+  // For batch API, calculate progressive batch sizes
+  const batchSizes = calculateProgressiveBatchSizes(imageCount);
+  return { type: 'batch', batchSizes };
+}
+
+// Calculate progressive batch sizes for large uploads
+// First batches are smaller for quick feedback
+function calculateProgressiveBatchSizes(totalImages: number): number[] {
+  const sizes: number[] = [];
+  let remaining = totalImages;
+
+  // Use progressive sizes first (15, 35, 100)
+  for (const size of PROGRESSIVE_BATCH_SIZES) {
+    if (remaining <= 0) break;
+    const batchSize = Math.min(size, remaining);
+    sizes.push(batchSize);
+    remaining -= batchSize;
+  }
+
+  // Remaining images in chunks of 100
+  while (remaining > 0) {
+    const batchSize = Math.min(100, remaining);
+    sizes.push(batchSize);
+    remaining -= batchSize;
+  }
+
+  return sizes;
+}
 
 // Default tag vocabulary (fallback if config not found)
 const DEFAULT_TAG_VOCABULARY = [
@@ -952,11 +1045,101 @@ async function getSuggestedTagsBatch(
   
   const successCount = results.filter(r => r.tags.length > 0).length;
   console.log(`[auto_tag_asset] ✅✅✅ Batch processing complete: ${successCount}/${requests.length} succeeded ✅✅✅`);
-  
+
   return results;
 }
 
-// OpenAI Batch API: Create batch job for 20+ images (async, 50% cost savings)
+// Chunked processing: Process images in chunks with delays to avoid rate limiting
+// Also updates database progressively so users see results appearing
+async function getSuggestedTagsChunked(
+  requests: AutoTagRequest[],
+  apiKey: string,
+  tagVocabulary: string[],
+  supabaseClient: any
+): Promise<TagResult[]> {
+  if (!apiKey) {
+    throw new Error('OpenAI API key not configured');
+  }
+
+  if (!tagVocabulary || tagVocabulary.length === 0) {
+    throw new Error('No tags enabled for auto-tagging');
+  }
+
+  if (requests.length === 0) {
+    return [];
+  }
+
+  const totalImages = requests.length;
+  const chunks = chunk(requests, CHUNK_SIZE);
+  const allResults: TagResult[] = [];
+
+  console.log(`[auto_tag_asset] 🔄 Chunked processing: ${totalImages} images in ${chunks.length} chunks of ${CHUNK_SIZE}`);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const currentChunk = chunks[i];
+    const chunkStart = i * CHUNK_SIZE + 1;
+    const chunkEnd = Math.min((i + 1) * CHUNK_SIZE, totalImages);
+
+    console.log(`[auto_tag_asset] 📦 Processing chunk ${i + 1}/${chunks.length} (images ${chunkStart}-${chunkEnd})...`);
+
+    // Check rate limit before processing chunk
+    if (!canMakeRequest()) {
+      const retryAfter = getRateLimitRetryAfter();
+      console.warn(`[auto_tag_asset] ⚠️ Rate limit approaching, waiting ${retryAfter}s before chunk ${i + 1}...`);
+      await sleep(retryAfter * 1000);
+    }
+
+    // Record requests for rate limiting
+    recordRequest(currentChunk.length);
+
+    // Process chunk in parallel (small batch, safe for rate limits)
+    const chunkPromises = currentChunk.map(async (req, idx) => {
+      try {
+        const tags = await getSuggestedTags(req, apiKey, tagVocabulary, supabaseClient);
+        return { assetId: req.assetId, tags, success: true };
+      } catch (error) {
+        console.error(`[auto_tag_asset] ❌ Failed to tag ${req.assetId}:`, error instanceof Error ? error.message : error);
+        return { assetId: req.assetId, tags: [] as string[], success: false };
+      }
+    });
+
+    const chunkResults = await Promise.all(chunkPromises);
+
+    // Update database with chunk results (progressive feedback)
+    for (const result of chunkResults) {
+      allResults.push({ assetId: result.assetId, tags: result.tags });
+
+      // Update asset in database immediately so user sees progress
+      const { error: updateError } = await supabaseClient
+        .from('assets')
+        .update({
+          tags: result.tags,
+          auto_tag_status: result.tags.length > 0 ? 'completed' : 'completed', // Mark completed even if no tags
+        })
+        .eq('id', result.assetId);
+
+      if (updateError) {
+        console.error(`[auto_tag_asset] ❌ Failed to update asset ${result.assetId}:`, updateError);
+      }
+    }
+
+    const chunkSuccessCount = chunkResults.filter(r => r.tags.length > 0).length;
+    console.log(`[auto_tag_asset] ✅ Chunk ${i + 1}/${chunks.length} complete: ${chunkSuccessCount}/${currentChunk.length} tagged`);
+
+    // Delay before next chunk (unless this is the last chunk)
+    if (i < chunks.length - 1) {
+      console.log(`[auto_tag_asset] ⏳ Waiting ${CHUNK_DELAY_MS}ms before next chunk...`);
+      await sleep(CHUNK_DELAY_MS);
+    }
+  }
+
+  const totalSuccessCount = allResults.filter(r => r.tags.length > 0).length;
+  console.log(`[auto_tag_asset] ✅✅✅ Chunked processing complete: ${totalSuccessCount}/${totalImages} tagged ✅✅✅`);
+
+  return allResults;
+}
+
+// OpenAI Batch API: Create batch job for large uploads (async, 50% cost savings)
 async function createOpenAIBatch(
   requests: AutoTagRequest[],
   apiKey: string,
@@ -1780,15 +1963,38 @@ Deno.serve(async (req) => {
       let tagResults: TagResult[] = [];
 
       try {
-        // Check if we should use Batch API (20+ images)
-        // Use original batchBody.assets.length, not assetsToProcess.length, because:
-        // - User requested 20+ images, so we should use Batch API
-        // - assetsToProcess might be < 20 if some assets aren't committed yet (race condition)
-        // - Missing assets will get empty tags anyway
-        if (batchBody.assets.length >= BATCH_API_THRESHOLD) {
+        // Determine processing strategy based on image count
+        const strategy = getProcessingStrategy(batchBody.assets.length);
+        console.log(`[auto_tag_asset] 📊 Processing strategy for ${batchBody.assets.length} images: ${strategy.type}`);
+
+        // Check server-side rate limit before any processing (for real-time APIs)
+        if (strategy.type === 'immediate' || strategy.type === 'chunked') {
+          if (!canMakeRequest()) {
+            const retryAfter = getRateLimitRetryAfter();
+            console.warn(`[auto_tag_asset] ⚠️ Server rate limit reached, retryAfter=${retryAfter}s`);
+            return new Response(JSON.stringify({
+              error: 'Server rate limit reached - please try again shortly',
+              code: 'RATE_LIMIT',
+              retryAfter,
+            }), {
+              status: 429,
+              headers: {
+                ...corsHeaders,
+                'Content-Type': 'application/json',
+                'Retry-After': String(retryAfter),
+              },
+            });
+          }
+        }
+
+        // Strategy: BATCH (101+ images) - Use OpenAI Batch API with progressive sizing
+        if (strategy.type === 'batch') {
           console.log(`[auto_tag_asset] 🚀 Using OpenAI Batch API for ${batchBody.assets.length} requested images (${assetsToProcess.length} found, ${missingAssetIds.length} missing, threshold: ${BATCH_API_THRESHOLD})...`);
           console.log(`[auto_tag_asset] 🚀 Batch API provides 50% cost savings and async processing`);
-          
+          if (strategy.batchSizes) {
+            console.log(`[auto_tag_asset] 🚀 Progressive batch sizes: [${strategy.batchSizes.join(', ')}]`);
+          }
+
           // Only create batch if we have at least some assets to process
           if (assetsToProcess.length === 0) {
             console.warn(`[auto_tag_asset] ⚠️  No assets found to process, but Batch API was requested for ${batchBody.assets.length} images`);
@@ -1799,7 +2005,7 @@ Deno.serve(async (req) => {
               headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             });
           }
-          
+
           try {
             const { batchId, fileId } = await createOpenAIBatch(
               assetsToProcess,
@@ -1832,19 +2038,37 @@ Deno.serve(async (req) => {
             });
           } catch (batchError) {
             console.error(`[auto_tag_asset] ❌ Batch API failed:`, batchError);
-            console.error(`[auto_tag_asset] Falling back to regular chat/completions API...`);
-            // Fall through to regular processing
+            console.error(`[auto_tag_asset] Falling back to chunked processing...`);
+            // Fall through to chunked processing as fallback
           }
         }
-        
-        // Regular processing for < 20 images or if Batch API failed
-        console.log(`[auto_tag_asset] 🎯 CALLING getSuggestedTagsBatch with ${assetsToProcess.length} found assets (${missingAssetIds.length} missing)...`);
-        console.log(`[auto_tag_asset] 🎯 OpenAI API key present: ${!!openAiKey}`);
-        console.log(`[auto_tag_asset] 🎯 Tag vocabulary length: ${tagVocabulary.length}`);
-        // Only process assets that were found in the database
-        const processingResults = assetsToProcess.length > 0 
-          ? await getSuggestedTagsBatch(assetsToProcess, openAiKey, tagVocabulary, supabaseClient)
-          : [];
+
+        // Strategy: IMMEDIATE (1-5 images) - All in parallel, no delays
+        // Also used as fallback when Batch API fails
+        let processingResults: TagResult[] = [];
+
+        if (assetsToProcess.length === 0) {
+          console.log(`[auto_tag_asset] ⚠️ No assets found to process`);
+          processingResults = [];
+        } else if (strategy.type === 'immediate') {
+          // Record requests for rate limiting
+          recordRequest(assetsToProcess.length);
+
+          console.log(`[auto_tag_asset] ⚡ IMMEDIATE processing: ${assetsToProcess.length} images in parallel`);
+          console.log(`[auto_tag_asset] 🎯 OpenAI API key present: ${!!openAiKey}`);
+          console.log(`[auto_tag_asset] 🎯 Tag vocabulary length: ${tagVocabulary.length}`);
+
+          processingResults = await getSuggestedTagsBatch(assetsToProcess, openAiKey, tagVocabulary, supabaseClient);
+        } else if (strategy.type === 'chunked' || (strategy.type === 'batch' && assetsToProcess.length > 0)) {
+          // Strategy: CHUNKED (6-100 images) - Process in chunks of 5 with delays
+          // Also used as fallback for failed batch processing
+          const reason = strategy.type === 'batch' ? '(fallback from failed Batch API)' : '';
+          console.log(`[auto_tag_asset] 🔄 CHUNKED processing: ${assetsToProcess.length} images in chunks of ${CHUNK_SIZE} ${reason}`);
+          console.log(`[auto_tag_asset] 🎯 OpenAI API key present: ${!!openAiKey}`);
+          console.log(`[auto_tag_asset] 🎯 Tag vocabulary length: ${tagVocabulary.length}`);
+
+          processingResults = await getSuggestedTagsChunked(assetsToProcess, openAiKey!, tagVocabulary, supabaseClient);
+        }
         
         // Create a map of results by assetId for easy lookup
         const resultsMap = new Map(processingResults.map(r => [r.assetId, r]));
