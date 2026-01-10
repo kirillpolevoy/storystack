@@ -83,6 +83,23 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [user?.id]);
 
+  // Force session refresh to ensure JWT is up-to-date
+  // This is important after email confirmation where JWT might be stale
+  const refreshSession = useCallback(async () => {
+    try {
+      const { createClient } = await import('@/lib/supabase/client');
+      const supabase = createClient();
+      const { error } = await supabase.auth.refreshSession();
+      if (error) {
+        console.warn('[WorkspaceContext] Session refresh failed:', error);
+      } else {
+        console.log('[WorkspaceContext] Session refreshed successfully');
+      }
+    } catch (err) {
+      console.warn('[WorkspaceContext] Session refresh error:', err);
+    }
+  }, []);
+
   // Load active workspace
   const loadActiveWorkspace = useCallback(async () => {
     if (!user?.id) {
@@ -238,8 +255,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (user?.id) {
       setLoading(true);
-      loadWorkspaces().then(() => {
-        loadActiveWorkspace();
+      // Refresh session first to ensure JWT is up-to-date
+      // This is critical after email confirmation where the JWT might be stale
+      refreshSession().then(() => {
+        loadWorkspaces().then(() => {
+          loadActiveWorkspace();
+        });
       });
     } else {
       setActiveWorkspaceIdState(null);
@@ -248,7 +269,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setUserRole(null);
       setLoading(false);
     }
-  }, [user?.id, loadWorkspaces, loadActiveWorkspace]);
+  }, [user?.id, loadWorkspaces, loadActiveWorkspace, refreshSession]);
 
   // Update active workspace when workspaces list changes
   useEffect(() => {
