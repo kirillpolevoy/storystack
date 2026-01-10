@@ -164,18 +164,22 @@ export async function setActiveWorkspaceId(
  * Get or create default workspace for user
  * If user has no active workspace, returns their first workspace or creates one
  * Always prioritizes workspace created by user (their own workspace)
+ *
+ * NOTE: For new signups, the workspace is created by a database trigger on auth.users INSERT.
+ * However, RLS policies may not immediately recognize the new user's session.
+ * We retry a few times to handle this timing issue.
  */
 export async function getOrCreateDefaultWorkspace(
   userId: string
 ): Promise<string> {
   // Check if user has an active workspace
   const activeWorkspaceId = await getActiveWorkspaceId(userId);
-  
+
   // If we have an active workspace, validate it's still valid
   if (activeWorkspaceId) {
     const workspaces = await getUserWorkspaces(userId);
     const isValidWorkspace = workspaces.some((w) => w.id === activeWorkspaceId);
-    
+
     if (isValidWorkspace) {
       // Valid workspace - but ensure it's the user's own workspace if they have one
       const ownWorkspace = workspaces.find((w) => w.created_by === userId);
@@ -194,8 +198,26 @@ export async function getOrCreateDefaultWorkspace(
     }
   }
 
-  // Get user's workspaces
-  const workspaces = await getUserWorkspaces(userId);
+  // Get user's workspaces with retry logic
+  // New users may not immediately see their workspace due to RLS timing after email confirmation
+  let workspaces: Awaited<ReturnType<typeof getUserWorkspaces>> = [];
+  const maxRetries = 5;
+  const retryDelays = [500, 1000, 2000, 3000, 5000]; // Progressive delays
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    workspaces = await getUserWorkspaces(userId);
+
+    if (workspaces.length > 0) {
+      console.log(`[getActiveWorkspace] Found ${workspaces.length} workspaces on attempt ${attempt + 1}`);
+      break;
+    }
+
+    if (attempt < maxRetries - 1) {
+      console.log(`[getActiveWorkspace] No workspaces found, retrying in ${retryDelays[attempt]}ms (attempt ${attempt + 1}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, retryDelays[attempt]));
+    }
+  }
+
   if (workspaces.length > 0) {
     // ALWAYS prioritize workspace created by user (their own workspace)
     const ownWorkspace = workspaces.find((w) => w.created_by === userId);
@@ -209,7 +231,9 @@ export async function getOrCreateDefaultWorkspace(
     return firstWorkspaceId;
   }
 
-  // Create default workspace
+  // Create default workspace only if retries exhausted and still no workspace
+  // This shouldn't normally happen since the database trigger should create one
+  console.log('[getActiveWorkspace] No workspaces found after retries, creating default workspace');
   const { createWorkspace } = await import('./workspaceHelpers');
   const workspace = await createWorkspace('My Workspace', userId);
   await setActiveWorkspaceId(userId, workspace.id);

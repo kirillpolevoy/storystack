@@ -160,16 +160,27 @@ function LibraryPageContent() {
     const isNewSignupFromUrl = searchParams?.get('welcome') === 'true'
     const isNewSignupFromSession = sessionStorage.getItem('@storystack:new_signup')
 
-    if (!welcomeShown && (isNewSignupFromUrl || isNewSignupFromSession)) {
+    // If URL has ?welcome=true, this is a fresh signup via email confirmation
+    // Show the modal regardless of localStorage (which might be stale from previous tests/sessions)
+    if (isNewSignupFromUrl) {
+      // Clear any stale localStorage flag to ensure fresh state
+      localStorage.removeItem(WELCOME_MODAL_KEY)
       // Small delay to let the page render first
       const timer = setTimeout(() => {
         setShowWelcomeModal(true)
         // Clear the session flag
         sessionStorage.removeItem('@storystack:new_signup')
-        // Clean up URL param if present
-        if (isNewSignupFromUrl) {
-          router.replace('/app/library', { scroll: false })
-        }
+        // Clean up URL param
+        router.replace('/app/library', { scroll: false })
+      }, 800)
+      return () => clearTimeout(timer)
+    }
+
+    // Fallback: check session storage for signups that didn't go through email confirmation
+    if (!welcomeShown && isNewSignupFromSession) {
+      const timer = setTimeout(() => {
+        setShowWelcomeModal(true)
+        sessionStorage.removeItem('@storystack:new_signup')
       }, 800)
       return () => clearTimeout(timer)
     }
