@@ -1,6 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 
+// Wait for workspace to be visible (created by trigger, might take a moment for RLS)
+async function waitForWorkspace(supabase: Awaited<ReturnType<typeof createClient>>, userId: string, maxAttempts = 10): Promise<boolean> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const { data: workspaces } = await supabase
+      .from('workspace_members')
+      .select('workspace_id')
+      .eq('user_id', userId)
+      .limit(1)
+
+    if (workspaces && workspaces.length > 0) {
+      console.log(`[Auth Callback] Workspace found on attempt ${i + 1}`)
+      return true
+    }
+
+    // Wait before retry (500ms, 1s, 1.5s, etc.)
+    await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)))
+  }
+
+  console.warn('[Auth Callback] Workspace not found after retries')
+  return false
+}
+
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url)
   const code = requestUrl.searchParams.get('code')
@@ -31,8 +53,18 @@ export async function GET(request: NextRequest) {
     })
 
     if (!error) {
-      // For signup confirmations, add welcome param to show welcome modal
       const isSignup = type === 'signup'
+
+      // For signups, wait for workspace to be created/visible before redirecting
+      // The database trigger creates workspace on auth.users INSERT, but RLS might delay visibility
+      if (isSignup) {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          console.log('[Auth Callback] Waiting for workspace to be visible for user:', user.id)
+          await waitForWorkspace(supabase, user.id)
+        }
+      }
+
       const redirectUrl = isSignup ? `${origin}${next}?welcome=true` : `${origin}${next}`
       return NextResponse.redirect(redirectUrl)
     }
