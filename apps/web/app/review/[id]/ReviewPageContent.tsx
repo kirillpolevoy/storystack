@@ -391,7 +391,7 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
             </div>
 
             {/* Media area - constrained to 60vh max to guarantee space for controls */}
-            <div className="flex-1 flex items-center justify-center px-2">
+            <div className="flex items-center justify-center px-2">
               {selectedAsset.asset_type === 'video' ? (
                 <video
                   src={selectedAsset.publicUrl}
