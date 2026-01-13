@@ -35,6 +35,7 @@ import {
 import { MobileMenuButton } from '@/components/app/MobileMenuButton'
 import { useActiveWorkspace } from '@/hooks/useActiveWorkspace'
 import { useToast } from '@/components/ui/use-toast'
+import { ReviewLinkManager } from '@/components/share/ReviewLinkManager'
 
 interface Workspace {
   id: string
@@ -375,13 +376,22 @@ export default function WorkspaceSettingsPage() {
             {/* Team Members Section */}
             {workspace?.id && (
               <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-                <WorkspaceMembersSection 
+                <WorkspaceMembersSection
                   key={workspace.id} // Force remount when workspace changes
-                  workspaceId={workspace.id} 
+                  workspaceId={workspace.id}
                   currentUserId={user?.id}
                   hasAdminRole={member ? hasRole('admin') : false}
                   hasOwnerRole={member ? hasRole('owner') : false}
                 />
+              </div>
+            )}
+
+            {/* Client Review Links Section */}
+            {workspace?.id && (
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                <div className="px-8 py-6">
+                  <ReviewLinkManager />
+                </div>
               </div>
             )}
 

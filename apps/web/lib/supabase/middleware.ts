@@ -123,6 +123,12 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
+  // Allow public review and story share pages (no auth required)
+  if (pathname.startsWith('/review/') || pathname.startsWith('/story/')) {
+    console.log(`[Middleware] Allowing public share route: ${pathname}`)
+    return supabaseResponse
+  }
+
   // Protect /app routes
   if (!user && pathname.startsWith('/app')) {
     console.log(`[Middleware] Blocking protected route: ${pathname} (no user)`)

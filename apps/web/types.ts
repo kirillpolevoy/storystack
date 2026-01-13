@@ -8,6 +8,10 @@ export type Campaign = {
 
 export type AssetSource = 'local' | 'imported' | 'generated';
 
+export type AssetType = 'image' | 'video';
+
+export type AssetRating = 'approved' | 'maybe' | 'rejected';
+
 export type Asset = {
   id: string;
   user_id?: string;
@@ -31,6 +35,18 @@ export type Asset = {
   story_ids?: string[];
   story_names?: string[];
   story_count?: number;
+  // Video fields
+  asset_type?: AssetType;
+  thumbnail_frames?: string[] | null; // Array of storage paths for video thumbnails
+  thumbnailFrameUrls?: string[]; // Computed public URLs for thumbnail frames
+  video_duration_seconds?: number | null;
+  video_width?: number | null;
+  video_height?: number | null;
+  // Rating fields
+  rating?: AssetRating | null;
+  rating_note?: string | null;
+  rated_at?: string | null;
+  rated_by?: string | null;
 };
 
 export type Sequence = {
@@ -67,4 +83,31 @@ export type StoryWithAssets = Story & {
 };
 
 export type TagVocabulary = string;
+
+// Review link for client approval
+export type ReviewLink = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  allowed_tags: string[];
+  allowed_asset_ids: string[];
+  expires_at?: string | null;
+  is_active: boolean;
+  allow_rating: boolean;
+  allow_notes: boolean;
+  created_by: string;
+  created_at: string;
+};
+
+// Story share link
+export type StoryLink = {
+  id: string;
+  story_id: string;
+  name: string;
+  expires_at?: string | null;
+  is_active: boolean;
+  created_by: string;
+  created_at: string;
+  view_count: number;
+};
 

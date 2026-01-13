@@ -4,11 +4,12 @@ import { useCallback, useState, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { useAssetUpload } from '@/hooks/useAssetUpload'
 import { Button } from '@/components/ui/button'
-import { Upload, X, CheckCircle2, AlertCircle, Image as ImageIcon, RotateCcw } from 'lucide-react'
+import { Upload, X, CheckCircle2, AlertCircle, Image as ImageIcon, RotateCcw, Film } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { UploadProgress } from '@/utils/upload'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { computeImageHash, checkForDuplicates } from '@/utils/duplicateDetection'
+import { isVideoFile } from '@/utils/videoProcessing'
 import { DuplicateDetectionDialog } from './DuplicateDetectionDialog'
 import { createClient } from '@/lib/supabase/client'
 import { useQueryClient } from '@tanstack/react-query'
@@ -321,7 +322,17 @@ export function UploadZone({ open, onOpenChange, onUploadComplete, onBatchTaggin
         .catch((error: Error | unknown) => {
           console.error(`[UploadZone] ❌ Upload error for ${file.name}:`, error)
           // Provide more user-friendly error messages
-          const errorMessage = error instanceof Error ? error.message : String(error)
+          // Handle various error types (Error, Supabase errors, plain objects)
+          let errorMessage: string
+          if (error instanceof Error) {
+            errorMessage = error.message
+          } else if (error && typeof error === 'object' && 'message' in error) {
+            errorMessage = String((error as { message: unknown }).message)
+          } else if (typeof error === 'string') {
+            errorMessage = error
+          } else {
+            errorMessage = 'Upload failed'
+          }
           let friendlyMessage = errorMessage || 'Upload failed'
           
           if (errorMessage && errorMessage.includes('duplicate') || errorMessage.includes('already exists')) {
@@ -498,7 +509,10 @@ export function UploadZone({ open, onOpenChange, onUploadComplete, onBatchTaggin
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
-      'image/*': ['.jpeg', '.jpg', '.png', '.gif', '.webp'],
+      'image/*': ['.jpeg', '.jpg', '.png', '.gif', '.webp', '.heic', '.heif'],
+      'video/mp4': ['.mp4'],
+      'video/quicktime': ['.mov'],
+      'video/webm': ['.webm'],
     },
     multiple: true,
     noClick: false,
@@ -601,20 +615,31 @@ export function UploadZone({ open, onOpenChange, onUploadComplete, onBatchTaggin
             })
           }, 1500)
         },
-        onError: (error: Error) => {
+        onError: (error: Error | unknown) => {
           // Provide more user-friendly error messages
-          let friendlyMessage = error.message
-          if (error.message.includes('duplicate') || error.message.includes('already exists')) {
+          // Handle various error types (Error, Supabase errors, plain objects)
+          let errorMessage: string
+          if (error instanceof Error) {
+            errorMessage = error.message
+          } else if (error && typeof error === 'object' && 'message' in error) {
+            errorMessage = String((error as { message: unknown }).message)
+          } else if (typeof error === 'string') {
+            errorMessage = error
+          } else {
+            errorMessage = 'Upload failed'
+          }
+          let friendlyMessage = errorMessage || 'Upload failed'
+          if (errorMessage.includes('duplicate') || errorMessage.includes('already exists')) {
             friendlyMessage = 'File already exists'
-          } else if (error.message.includes('size') || error.message.includes('too large')) {
+          } else if (errorMessage.includes('size') || errorMessage.includes('too large')) {
             friendlyMessage = 'File is too large'
-          } else if (error.message.includes('format') || error.message.includes('type')) {
+          } else if (errorMessage.includes('format') || errorMessage.includes('type')) {
             friendlyMessage = 'Unsupported file format'
-          } else if (error.message.includes('network') || error.message.includes('fetch')) {
+          } else if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
             friendlyMessage = 'Network error - please check your connection'
-          } else if (error.message.includes('permission') || error.message.includes('unauthorized')) {
+          } else if (errorMessage.includes('permission') || errorMessage.includes('unauthorized')) {
             friendlyMessage = 'Permission denied - please sign in again'
-          } else if (error.message.includes('Not authenticated')) {
+          } else if (errorMessage.includes('Not authenticated')) {
             friendlyMessage = 'Session expired - please sign in again'
           }
           
@@ -724,9 +749,9 @@ export function UploadZone({ open, onOpenChange, onUploadComplete, onBatchTaggin
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl p-0 gap-0 overflow-hidden">
         <DialogHeader className="px-6 pt-6 pb-4 border-b border-gray-100">
-          <DialogTitle className="text-lg font-semibold text-gray-900">Upload Images</DialogTitle>
+          <DialogTitle className="text-lg font-semibold text-gray-900">Upload Media</DialogTitle>
           <DialogDescription className="text-sm text-gray-500">
-            Drag and drop images here or click to browse
+            Drag and drop images or videos here, or click to browse
           </DialogDescription>
         </DialogHeader>
 
@@ -758,10 +783,10 @@ export function UploadZone({ open, onOpenChange, onUploadComplete, onBatchTaggin
               <p className={`text-sm font-medium mb-1 transition-colors ${
                 isDragActive ? 'text-accent' : 'text-gray-900'
               }`}>
-                {isDragActive ? 'Drop files to upload' : 'Drag images here'}
+                {isDragActive ? 'Drop files to upload' : 'Drag images or videos here'}
               </p>
               <p className="text-xs text-gray-500">
-                or click to select files
+                or click to select files (videos up to 50MB)
               </p>
             </div>
           </div>
@@ -814,6 +839,8 @@ export function UploadZone({ open, onOpenChange, onUploadComplete, onBatchTaggin
                           <CheckCircle2 className="h-5 w-5 text-green-600" />
                         ) : item.status === 'error' ? (
                           <AlertCircle className="h-5 w-5 text-red-600" />
+                        ) : isVideoFile(item.file) ? (
+                          <Film className="h-5 w-5 text-gray-400" />
                         ) : (
                           <ImageIcon className="h-5 w-5 text-gray-400" />
                         )}

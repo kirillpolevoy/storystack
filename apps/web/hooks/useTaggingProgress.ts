@@ -20,10 +20,10 @@ export function useTaggingProgress() {
   const queryClient = useQueryClient()
   const activeWorkspaceId = useActiveWorkspace()
   const channelRef = useRef<RealtimeChannel | null>(null)
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const pollIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const assetIdsRef = useRef<string[]>([])
   const isCompleteRef = useRef(false)
-  const dismissTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const dismissTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const startedAtRef = useRef<number | null>(null)
 
   const [progress, setProgress] = useState<TaggingProgress>({

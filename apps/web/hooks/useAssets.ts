@@ -8,6 +8,7 @@ import { useActiveWorkspace } from './useActiveWorkspace'
 const PAGE_SIZE = 50
 
 const LOCATION_PREFIX = '__LOCATION__'
+const RATING_PREFIX = '__RATING__'
 const NO_TAGS_FILTER = '__NO_TAGS__'
 const NO_LOCATION_FILTER = '__NO_LOCATION__'
 
@@ -19,6 +20,16 @@ const isLocationFilter = (value: string): boolean => {
 // Extract location name from location filter
 const getLocationName = (locationFilter: string): string => {
   return locationFilter.replace(LOCATION_PREFIX, '')
+}
+
+// Helper to check if a value is a rating filter
+const isRatingFilter = (value: string): boolean => {
+  return typeof value === 'string' && value.startsWith(RATING_PREFIX)
+}
+
+// Extract rating value from rating filter
+const getRatingValue = (ratingFilter: string): string => {
+  return ratingFilter.replace(RATING_PREFIX, '')
 }
 
 export type AssetViewFilter = 'all' | 'in-stories' | 'not-in-stories'
@@ -60,11 +71,13 @@ export function useAssets(
           throw new Error('Not authenticated')
         }
 
-      // Separate filters into tags and locations
+      // Separate filters into tags, locations, and ratings
       const hasNoTagsFilter = selectedFilters?.includes(NO_TAGS_FILTER)
       const hasNoLocationFilter = selectedFilters?.includes(NO_LOCATION_FILTER)
       const locationFilters = selectedFilters?.filter((f) => isLocationFilter(f)).map(getLocationName) || []
-      const regularTags = selectedFilters?.filter((f) => f !== NO_TAGS_FILTER && f !== NO_LOCATION_FILTER && !isLocationFilter(f)) || []
+      const ratingFilters = selectedFilters?.filter((f) => isRatingFilter(f)).map(getRatingValue) || []
+      const ratingFilter = ratingFilters.length > 0 ? ratingFilters[0] : null // Only one rating filter at a time
+      const regularTags = selectedFilters?.filter((f) => f !== NO_TAGS_FILTER && f !== NO_LOCATION_FILTER && !isLocationFilter(f) && !isRatingFilter(f)) || []
 
       // workspaceId is extracted from queryKey to ensure correct workspace
       if (!workspaceId) {
@@ -74,14 +87,15 @@ export function useAssets(
 
       console.log('[useAssets] Fetching assets for workspace:', workspaceId, '(from queryKey)')
 
-      // When searching, "No Tags", "No Location", or date filter is active, fetch all matching assets
+      // When searching, "No Tags", "No Location", rating, or date filter is active, fetch all matching assets
       // This ensures we don't miss matches due to pagination when client-side filtering is needed
       const hasDateFilter = dateRange && (dateRange.from || dateRange.to)
-      const needsClientSideFiltering = 
-        (searchQuery && searchQuery.trim()) || 
+      const needsClientSideFiltering =
+        (searchQuery && searchQuery.trim()) ||
         (hasNoTagsFilter && regularTags.length === 0) ||
         (hasNoLocationFilter && locationFilters.length === 0) ||
-        hasDateFilter
+        hasDateFilter ||
+        ratingFilter
       
       let query = supabase
         .from('assets')
@@ -233,7 +247,7 @@ export function useAssets(
           // Use date_taken if available, otherwise fall back to created_at
           const dateToUse = asset.date_taken || asset.created_at
           const assetDate = new Date(dateToUse)
-          
+
           if (dateRange.from && assetDate < dateRange.from) return false
           if (dateRange.to) {
             const toDate = new Date(dateRange.to)
@@ -244,7 +258,17 @@ export function useAssets(
         })
       }
 
-      // 5. Apply pagination client-side if we fetched all assets (for client-side filtering)
+      // 6. Apply rating filter client-side
+      if (ratingFilter) {
+        filteredData = filteredData.filter((asset: any) => {
+          if (ratingFilter === 'unrated') {
+            return !asset.rating
+          }
+          return asset.rating === ratingFilter
+        })
+      }
+
+      // 7. Apply pagination client-side if we fetched all assets (for client-side filtering)
       // Otherwise, pagination was already applied server-side
       let paginatedData = filteredData
       let hasMorePages = false

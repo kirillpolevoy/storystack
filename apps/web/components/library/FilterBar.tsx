@@ -4,16 +4,19 @@ import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Search, X, Tag, MapPin, Calendar } from 'lucide-react'
+import { Search, X, Tag, MapPin, Calendar, Check, Circle, ThumbsUp } from 'lucide-react'
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
+import { AssetRating } from '@/types'
 
 const NO_TAGS_FILTER = '__NO_TAGS__'
 const NO_LOCATION_FILTER = '__NO_LOCATION__'
+
+export type RatingFilter = AssetRating | 'unrated' | null
 
 interface FilterBarProps {
   searchQuery: string
@@ -30,6 +33,9 @@ interface FilterBarProps {
   locationCounts?: Map<string, number>
   noTagsCount?: number
   noLocationCount?: number
+  selectedRating?: RatingFilter
+  onRatingChange?: (rating: RatingFilter) => void
+  ratingCounts?: { approved: number; maybe: number; rejected: number; unrated: number }
 }
 
 export function FilterBar({
@@ -47,10 +53,14 @@ export function FilterBar({
   locationCounts = new Map(),
   noTagsCount = 0,
   noLocationCount = 0,
+  selectedRating,
+  onRatingChange,
+  ratingCounts = { approved: 0, maybe: 0, rejected: 0, unrated: 0 },
 }: FilterBarProps) {
   const [tagsOpen, setTagsOpen] = useState(false)
   const [locationOpen, setLocationOpen] = useState(false)
   const [dateOpen, setDateOpen] = useState(false)
+  const [ratingOpen, setRatingOpen] = useState(false)
 
   const isNoTagsSelected = selectedTags.includes(NO_TAGS_FILTER)
   const isNoLocationSelected = selectedLocation === NO_LOCATION_FILTER
@@ -94,7 +104,16 @@ export function FilterBar({
     setLocationOpen(false)
   }
 
-  const hasActiveFilters = selectedTags.length > 0 || selectedLocation || dateRange.from || dateRange.to
+  const handleRatingSelect = (rating: RatingFilter) => {
+    if (selectedRating === rating) {
+      onRatingChange?.(null)
+    } else {
+      onRatingChange?.(rating)
+    }
+    setRatingOpen(false)
+  }
+
+  const hasActiveFilters = selectedTags.length > 0 || selectedLocation || dateRange.from || dateRange.to || selectedRating
 
   return (
     <div className="space-y-3">
@@ -307,6 +326,95 @@ export function FilterBar({
           </PopoverContent>
         </Popover>
 
+        {/* Feedback Filter */}
+        {onRatingChange && (
+          <Popover open={ratingOpen} onOpenChange={setRatingOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant={selectedRating ? 'default' : 'outline'}
+                size="sm"
+                className="h-8 px-3 text-xs font-medium rounded-md border-gray-300 transition-all duration-200 hover:shadow-sm"
+              >
+                <ThumbsUp className="mr-1.5 h-3.5 w-3.5" />
+                Feedback
+                {selectedRating && (
+                  <span className="ml-1.5 px-1.5 py-0.5 bg-white/20 rounded text-xs font-medium">
+                    1
+                  </span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-56 p-3" align="start">
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-gray-900 mb-2">Filter by feedback</p>
+                <div className="space-y-1">
+                  <button
+                    onClick={() => handleRatingSelect('approved')}
+                    className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors flex items-center justify-between ${
+                      selectedRating === 'approved'
+                        ? 'bg-emerald-50 text-emerald-700 font-medium'
+                        : 'hover:bg-gray-50 text-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Check className="h-3.5 w-3.5 text-emerald-600" />
+                      <span>Approved</span>
+                    </div>
+                    {ratingCounts.approved > 0 && (
+                      <span className="text-xs text-gray-500">{ratingCounts.approved}</span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => handleRatingSelect('maybe')}
+                    className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors flex items-center justify-between ${
+                      selectedRating === 'maybe'
+                        ? 'bg-amber-50 text-amber-700 font-medium'
+                        : 'hover:bg-gray-50 text-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Circle className="h-3.5 w-3.5 text-amber-600" />
+                      <span>Maybe</span>
+                    </div>
+                    {ratingCounts.maybe > 0 && (
+                      <span className="text-xs text-gray-500">{ratingCounts.maybe}</span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => handleRatingSelect('rejected')}
+                    className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors flex items-center justify-between ${
+                      selectedRating === 'rejected'
+                        ? 'bg-gray-100 text-gray-700 font-medium'
+                        : 'hover:bg-gray-50 text-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <X className="h-3.5 w-3.5 text-gray-500" />
+                      <span>Rejected</span>
+                    </div>
+                    {ratingCounts.rejected > 0 && (
+                      <span className="text-xs text-gray-500">{ratingCounts.rejected}</span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => handleRatingSelect('unrated')}
+                    className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors flex items-center justify-between ${
+                      selectedRating === 'unrated'
+                        ? 'bg-gray-100 text-gray-700 font-medium'
+                        : 'hover:bg-gray-50 text-gray-700'
+                    }`}
+                  >
+                    <span>No Feedback</span>
+                    {ratingCounts.unrated > 0 && (
+                      <span className="text-xs text-gray-500">{ratingCounts.unrated}</span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
+
         {/* Clear All */}
         {hasActiveFilters && (
           <Button
@@ -316,6 +424,7 @@ export function FilterBar({
               onTagsChange([])
               onLocationChange(null)
               onDateRangeChange({ from: null, to: null })
+              onRatingChange?.(null)
             }}
             className="h-8 px-3 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-50 transition-colors"
           >
@@ -325,7 +434,7 @@ export function FilterBar({
       </div>
 
       {/* Active Filter Chips - Polished pills */}
-      {(selectedTags.length > 0 || selectedLocation || dateRange.from || dateRange.to) && (
+      {(selectedTags.length > 0 || selectedLocation || dateRange.from || dateRange.to || selectedRating) && (
         <div className="flex flex-wrap gap-2">
           {selectedTags.map((tag) => (
             <Badge
@@ -365,6 +474,31 @@ export function FilterBar({
               <button
                 onClick={() => onDateRangeChange({ from: null, to: null })}
                 className="ml-1.5 hover:text-gray-900 transition-colors"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          )}
+          {selectedRating && (
+            <Badge
+              variant="secondary"
+              className={`px-2.5 py-1 text-xs font-medium border-0 rounded-full hover:opacity-80 transition-colors ${
+                selectedRating === 'approved'
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : selectedRating === 'maybe'
+                  ? 'bg-amber-100 text-amber-700'
+                  : selectedRating === 'rejected'
+                  ? 'bg-gray-200 text-gray-700'
+                  : 'bg-gray-100 text-gray-700'
+              }`}
+            >
+              {selectedRating === 'approved' && 'Approved'}
+              {selectedRating === 'maybe' && 'Maybe'}
+              {selectedRating === 'rejected' && 'Rejected'}
+              {selectedRating === 'unrated' && 'No Feedback'}
+              <button
+                onClick={() => onRatingChange?.(null)}
+                className="ml-1.5 hover:opacity-70 transition-colors"
               >
                 <X className="h-3 w-3" />
               </button>

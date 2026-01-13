@@ -4,6 +4,12 @@ import { Asset } from '@/types'
 import exifr from 'exifr'
 import { computeImageHash } from './duplicateDetection'
 import { extractLocationFromEXIF } from './extractLocationFromEXIF'
+import {
+  isVideoFile,
+  validateVideoFile,
+  getVideoMetadata,
+  extractVideoThumbnails,
+} from './videoProcessing'
 // @ts-ignore - heic2any doesn't have TypeScript types
 import convert from 'heic2any'
 
@@ -234,7 +240,7 @@ export async function uploadAsset(
       upsert: false,
     })
 
-  if (a2Error) throw a2Error
+  if (a2Error) throw new Error(a2Error.message || 'Failed to upload image')
   console.log(`[upload] ✅ Uploaded A2 compressed image to: ${a2Path}`)
   onProgress?.(50)
 
@@ -247,7 +253,7 @@ export async function uploadAsset(
       upsert: false,
     })
 
-  if (previewError) throw previewError
+  if (previewError) throw new Error(previewError.message || 'Failed to upload preview')
   onProgress?.(70)
 
   // Upload thumb
@@ -259,7 +265,7 @@ export async function uploadAsset(
       upsert: false,
     })
 
-  if (thumbError) throw thumbError
+  if (thumbError) throw new Error(thumbError.message || 'Failed to upload thumbnail')
   onProgress?.(90)
 
   // Insert into database
@@ -293,7 +299,7 @@ export async function uploadAsset(
     .select('*')
     .single()
 
-  if (insertError) throw insertError
+  if (insertError) throw new Error(insertError.message || 'Failed to save asset to database')
   onProgress?.(95)
 
   // Update storage paths with actual asset_id (if different from temp)
@@ -329,5 +335,192 @@ export async function uploadAsset(
     previewUrl,
     thumbUrl,
   } as Asset
+}
+
+/**
+ * Upload a video asset with thumbnail frame extraction
+ */
+export async function uploadVideoAsset(
+  file: File,
+  onProgress?: (progress: number) => void,
+  workspaceIdParam?: string | null
+): Promise<Asset> {
+  const supabase = createClient()
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    throw new Error('Not authenticated')
+  }
+
+  // Validate video file
+  const validation = validateVideoFile(file)
+  if (!validation.valid) {
+    throw new Error(validation.error)
+  }
+
+  onProgress?.(5)
+
+  // Get video metadata
+  console.log('[upload] Extracting video metadata...')
+  const metadata = await getVideoMetadata(file)
+  console.log(`[upload] ✅ Video metadata: ${metadata.width}x${metadata.height}, duration: ${metadata.duration.toFixed(1)}s`)
+  onProgress?.(10)
+
+  // Extract thumbnail frames (10 frames at 0%, 10%, 20%, etc.)
+  console.log('[upload] Extracting video thumbnail frames...')
+  const thumbnails = await extractVideoThumbnails(file, 10, (progress) => {
+    // Map thumbnail extraction progress to 10-40%
+    onProgress?.(10 + Math.round(progress * 0.3))
+  })
+  console.log(`[upload] ✅ Extracted ${thumbnails.length} thumbnail frames`)
+  onProgress?.(40)
+
+  // Get active workspace ID
+  let finalWorkspaceId: string | null = workspaceIdParam ?? null
+  if (!finalWorkspaceId && typeof window !== 'undefined') {
+    finalWorkspaceId = localStorage.getItem('@storystack:active_workspace_id')
+  }
+
+  if (!finalWorkspaceId) {
+    try {
+      const { data: members } = await supabase
+        .from('workspace_members')
+        .select('workspace_id')
+        .eq('user_id', user.id)
+        .limit(1)
+        .single()
+
+      finalWorkspaceId = members?.workspace_id || null
+
+      if (finalWorkspaceId && typeof window !== 'undefined') {
+        localStorage.setItem('@storystack:active_workspace_id', finalWorkspaceId)
+      }
+    } catch (error) {
+      console.error('[upload] Error getting workspace:', error)
+    }
+  }
+
+  if (!finalWorkspaceId) {
+    throw new Error('No workspace found. Please select or create a workspace.')
+  }
+
+  // Generate unique file paths
+  const timestamp = Date.now()
+  const random = Math.random().toString(36).slice(2, 8)
+  const originalFileName = file.name
+  const fileExtension = file.name.split('.').pop()?.toLowerCase() || 'mp4'
+  const baseFileName = `${timestamp}-${random}`
+  const videoFileName = `${baseFileName}.${fileExtension}`
+
+  const tempAssetId = `${timestamp}-${random}`
+  const videoPath = `workspaces/${finalWorkspaceId}/assets/${tempAssetId}/${videoFileName}`
+
+  // Upload video file
+  console.log('[upload] Uploading video file...')
+  const videoArrayBuffer = await file.arrayBuffer()
+  const { error: videoError } = await supabase.storage
+    .from('assets')
+    .upload(videoPath, videoArrayBuffer, {
+      contentType: file.type || 'video/mp4',
+      upsert: false,
+    })
+
+  if (videoError) throw new Error(videoError.message || 'Failed to upload video')
+  console.log(`[upload] ✅ Uploaded video to: ${videoPath}`)
+  onProgress?.(60)
+
+  // Upload thumbnail frames
+  console.log('[upload] Uploading thumbnail frames...')
+  const thumbnailPaths: string[] = []
+  for (let i = 0; i < thumbnails.length; i++) {
+    const thumbPath = `workspaces/${finalWorkspaceId}/assets/${tempAssetId}/thumb_${i.toString().padStart(2, '0')}.jpg`
+    const thumbArrayBuffer = await thumbnails[i].blob.arrayBuffer()
+
+    const { error: thumbError } = await supabase.storage
+      .from('assets')
+      .upload(thumbPath, thumbArrayBuffer, {
+        contentType: 'image/jpeg',
+        upsert: false,
+      })
+
+    if (thumbError) {
+      console.warn(`[upload] Failed to upload thumbnail ${i}:`, thumbError)
+      // Continue with remaining thumbnails
+    } else {
+      thumbnailPaths.push(thumbPath)
+    }
+
+    // Update progress for thumbnail uploads (60-85%)
+    onProgress?.(60 + Math.round((i / thumbnails.length) * 25))
+  }
+  console.log(`[upload] ✅ Uploaded ${thumbnailPaths.length} thumbnail frames`)
+  onProgress?.(85)
+
+  // Insert into database
+  console.log(`[upload] Preparing database insert for video asset with workspace_id: ${finalWorkspaceId}`)
+
+  const insertData: any = {
+    user_id: user.id,
+    workspace_id: finalWorkspaceId,
+    storage_path: videoPath,
+    storage_path_preview: thumbnailPaths[0] || null, // First frame as preview
+    storage_path_thumb: thumbnailPaths[0] || null, // First frame as thumb
+    source: 'local',
+    auto_tag_status: 'pending',
+    original_filename: originalFileName,
+    asset_type: 'video',
+    thumbnail_frames: thumbnailPaths,
+    video_duration_seconds: metadata.duration,
+    video_width: metadata.width,
+    video_height: metadata.height,
+  }
+
+  const { data: inserted, error: insertError } = await supabase
+    .from('assets')
+    .insert(insertData)
+    .select('*')
+    .single()
+
+  if (insertError) throw new Error(insertError.message || 'Failed to save video to database')
+  onProgress?.(95)
+
+  // Get public URLs
+  const publicUrl = supabase.storage.from('assets').getPublicUrl(videoPath).data.publicUrl
+  const thumbUrl = thumbnailPaths[0]
+    ? supabase.storage.from('assets').getPublicUrl(thumbnailPaths[0]).data.publicUrl
+    : null
+  const previewUrl = thumbUrl
+
+  // Get thumbnail frame URLs
+  const thumbnailFrameUrls = thumbnailPaths.map(
+    (path) => supabase.storage.from('assets').getPublicUrl(path).data.publicUrl
+  )
+
+  onProgress?.(100)
+
+  return {
+    ...inserted,
+    publicUrl,
+    previewUrl,
+    thumbUrl,
+    thumbnailFrameUrls,
+  } as Asset
+}
+
+/**
+ * Smart upload function that detects file type and routes to appropriate handler
+ */
+export async function uploadFile(
+  file: File,
+  onProgress?: (progress: number) => void,
+  workspaceIdParam?: string | null
+): Promise<Asset> {
+  if (isVideoFile(file)) {
+    return uploadVideoAsset(file, onProgress, workspaceIdParam)
+  }
+  return uploadAsset(file, onProgress, workspaceIdParam)
 }
 

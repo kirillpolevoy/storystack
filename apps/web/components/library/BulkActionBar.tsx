@@ -1,13 +1,14 @@
 'use client'
 
 import { Button } from '@/components/ui/button'
-import { Plus, Tag, Trash2, X, Sparkles } from 'lucide-react'
+import { Plus, Tag, Trash2, X, Sparkles, Share2 } from 'lucide-react'
 
 interface BulkActionBarProps {
   selectedCount: number
   onAddToStory: () => void
   onAddTags: () => void
   onRetagWithAI: () => void
+  onShareForReview: () => void
   onDelete: () => void
   onClearSelection: () => void
 }
@@ -17,6 +18,7 @@ export function BulkActionBar({
   onAddToStory,
   onAddTags,
   onRetagWithAI,
+  onShareForReview,
   onDelete,
   onClearSelection,
 }: BulkActionBarProps) {
@@ -36,6 +38,15 @@ export function BulkActionBar({
         >
           <Plus className="mr-1.5 h-3.5 w-3.5" />
           Add to Story
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onShareForReview}
+          className="h-8 px-3 text-xs font-medium"
+        >
+          <Share2 className="mr-1.5 h-3.5 w-3.5" />
+          Share for Review
         </Button>
         <Button
           size="sm"

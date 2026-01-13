@@ -72,6 +72,87 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Retry helper with exponential backoff for rate limits
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: { maxRetries?: number; baseDelayMs?: number; context?: string } = {}
+): Promise<T> {
+  const { maxRetries = 3, baseDelayMs = 2000, context = 'operation' } = options;
+  let lastError: any;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+
+      // Only retry on rate limit errors
+      if (!error.isRateLimit) {
+        throw error;
+      }
+
+      if (attempt === maxRetries) {
+        console.error(`[auto_tag_asset] ❌ ${context} failed after ${maxRetries + 1} attempts`);
+        throw error;
+      }
+
+      // Calculate delay: use retryAfter header if available, otherwise exponential backoff
+      const retryAfterSeconds = error.retryAfter ? parseInt(error.retryAfter, 10) : null;
+      const exponentialDelay = baseDelayMs * Math.pow(2, attempt);
+      const delayMs = retryAfterSeconds ? retryAfterSeconds * 1000 : exponentialDelay;
+
+      console.log(`[auto_tag_asset] ⏳ Rate limited on ${context}, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1})`);
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError;
+}
+
+// Helper to get thumbnail URLs for video assets
+// Returns 5 evenly-spaced frames from the thumbnail_frames array
+async function getVideoThumbnailUrls(
+  thumbnailFrames: string[] | null,
+  supabaseClient: any
+): Promise<string[]> {
+  if (!thumbnailFrames || thumbnailFrames.length === 0) {
+    console.log('[auto_tag_asset] No thumbnail frames available for video');
+    return [];
+  }
+
+  // Select 5 evenly-spaced frames (or all if fewer than 5)
+  const frameCount = Math.min(5, thumbnailFrames.length);
+  const indices: number[] = [];
+
+  if (thumbnailFrames.length <= 5) {
+    // Use all available frames
+    for (let i = 0; i < thumbnailFrames.length; i++) {
+      indices.push(i);
+    }
+  } else {
+    // Select evenly-spaced frames
+    for (let i = 0; i < frameCount; i++) {
+      const index = Math.floor((i * (thumbnailFrames.length - 1)) / (frameCount - 1));
+      indices.push(index);
+    }
+  }
+
+  // Get public URLs for selected frames
+  const urls: string[] = [];
+  for (const index of indices) {
+    const framePath = thumbnailFrames[index];
+    if (framePath) {
+      const { data } = supabaseClient.storage.from('assets').getPublicUrl(framePath);
+      if (data?.publicUrl) {
+        urls.push(data.publicUrl);
+      }
+    }
+  }
+
+  console.log(`[auto_tag_asset] Selected ${urls.length} thumbnail frames for video tagging`);
+  return urls;
+}
+
 // Determine processing strategy based on image count
 // Root cause fix: Use Batch API for anything over 5 images to avoid TPM limits
 function getProcessingStrategy(imageCount: number): {
@@ -964,50 +1045,75 @@ async function getSuggestedTagsBatch(
   requests: AutoTagRequest[],
   apiKey?: string,
   tagVocabulary: string[] = [],
-  supabaseClient?: any
+  supabaseClient?: any,
+  assetMetadata?: Map<string, { asset_type?: string; thumbnail_frames?: string[] }>
 ): Promise<TagResult[]> {
   if (!apiKey) {
     console.warn('[auto_tag_asset] Missing OPENAI_API_KEY. Cannot generate tags.');
     throw new Error('OpenAI API key not configured');
   }
-  
+
   // Validate that tagVocabulary is provided and not empty
   if (!tagVocabulary || tagVocabulary.length === 0) {
     console.error('[auto_tag_asset] ❌ No tags provided in vocabulary - cannot generate tags');
     throw new Error('No tags enabled for auto-tagging');
   }
-  
+
   if (requests.length === 0) {
     return [];
   }
-  
-  console.log(`[auto_tag_asset] Processing batch of ${requests.length} images individually (for consistency with one-off tagging)`);
+
+  console.log(`[auto_tag_asset] Processing batch of ${requests.length} assets individually (for consistency with one-off tagging)`);
   console.log('[auto_tag_asset] Tag vocabulary for GPT-4:', tagVocabulary);
-  
-  // Process each image individually using getSuggestedTags for consistency
-  // This ensures each image is analyzed independently without cross-image context
-  console.log(`[auto_tag_asset] 🔄 Processing ${requests.length} images individually...`);
-  
+
+  // Process each asset individually using getSuggestedTags for consistency
+  // This ensures each asset is analyzed independently without cross-asset context
+  console.log(`[auto_tag_asset] 🔄 Processing ${requests.length} assets individually...`);
+
   const processingPromises = requests.map(async (req, idx) => {
-    console.log(`[auto_tag_asset]   Processing image ${idx + 1}/${requests.length}: ${req.assetId}`);
+    const metadata = assetMetadata?.get(req.assetId);
+    const isVideo = metadata?.asset_type === 'video';
+
+    console.log(`[auto_tag_asset]   Processing ${isVideo ? 'video' : 'image'} ${idx + 1}/${requests.length}: ${req.assetId}`);
     try {
-      const tags = await getSuggestedTags(req, apiKey, tagVocabulary, supabaseClient);
-      return { 
-        success: true, 
-        assetId: req.assetId, 
+      let tags: string[];
+
+      if (isVideo && metadata?.thumbnail_frames && metadata.thumbnail_frames.length > 0) {
+        // Video asset - use thumbnail frames for tagging
+        const frameUrls = await getVideoThumbnailUrls(metadata.thumbnail_frames, supabaseClient);
+        if (frameUrls.length > 0) {
+          tags = await withRetry(
+            () => tagVideoWithOpenAI(frameUrls, apiKey!, tagVocabulary, supabaseClient),
+            { context: `video ${req.assetId}` }
+          );
+        } else {
+          console.warn(`[auto_tag_asset] No frame URLs for video ${req.assetId}, skipping`);
+          tags = [];
+        }
+      } else {
+        // Image asset - use standard tagging
+        tags = await withRetry(
+          () => getSuggestedTags(req, apiKey, tagVocabulary, supabaseClient),
+          { context: `image ${req.assetId}` }
+        );
+      }
+
+      return {
+        success: true,
+        assetId: req.assetId,
         tags,
-        index: idx 
+        index: idx
       };
     } catch (error) {
-      console.error(`[auto_tag_asset] ❌ Failed to process image ${idx + 1} (${req.assetId}):`, error);
+      console.error(`[auto_tag_asset] ❌ Failed to process asset ${idx + 1} (${req.assetId}):`, error);
       console.error(`[auto_tag_asset] Error message:`, error instanceof Error ? error.message : String(error));
       console.error(`[auto_tag_asset] Error stack:`, error instanceof Error ? error.stack : 'N/A');
-      return { 
-        success: false, 
-        assetId: req.assetId, 
+      return {
+        success: false,
+        assetId: req.assetId,
         tags: [] as string[],
         index: idx,
-        error 
+        error
       };
     }
   });
@@ -1387,6 +1493,247 @@ Return tags that accurately reflect what is in the image.`,
   return { batchId, fileId };
 }
 
+// OpenAI Batch API for Videos: Create batch job for video assets (async, 50% cost savings)
+async function createOpenAIVideoBatch(
+  videoAssets: Array<{ assetId: string; thumbnailFrames: string[] }>,
+  apiKey: string,
+  tagVocabulary: string[],
+  supabaseClient: any,
+  workspaceId: string
+): Promise<{ batchId: string; fileId: string }> {
+  console.log(`[auto_tag_asset] 🎬 Creating OpenAI Batch API job for ${videoAssets.length} videos...`);
+
+  if (videoAssets.length === 0) {
+    throw new Error('Video Batch API requires at least 1 video');
+  }
+
+  // Step 1: Prepare all video frame URLs
+  console.log(`[auto_tag_asset] 🔄 Preparing frame URLs for ${videoAssets.length} videos...`);
+  const videoPromises = videoAssets.map(async (video, idx) => {
+    try {
+      const frameUrls = await getVideoThumbnailUrls(video.thumbnailFrames, supabaseClient);
+      if (frameUrls.length === 0) {
+        return { success: false, error: 'No frame URLs', assetId: video.assetId, index: idx };
+      }
+      return { success: true, frameUrls, assetId: video.assetId, index: idx };
+    } catch (error) {
+      console.error(`[auto_tag_asset] ❌ Failed to prepare video ${idx + 1} (${video.assetId}):`, error);
+      return { success: false, error, assetId: video.assetId, index: idx };
+    }
+  });
+
+  const preparationResults = await Promise.allSettled(videoPromises);
+  const successful: Array<{ frameUrls: string[]; assetId: string; index: number }> = [];
+  const failed: Array<{ assetId: string; index: number; error: any }> = [];
+
+  preparationResults.forEach((result, idx) => {
+    if (result.status === 'fulfilled') {
+      const prepResult = result.value;
+      if (prepResult.success && 'frameUrls' in prepResult) {
+        successful.push({ frameUrls: prepResult.frameUrls, assetId: prepResult.assetId, index: prepResult.index });
+      } else if ('error' in prepResult) {
+        failed.push({
+          assetId: prepResult.assetId,
+          index: prepResult.index,
+          error: prepResult.error
+        });
+      }
+    } else {
+      failed.push({
+        assetId: videoAssets[idx].assetId,
+        index: idx,
+        error: result.reason
+      });
+    }
+  });
+
+  console.log(`[auto_tag_asset] ✅ Prepared ${successful.length}/${videoAssets.length} videos successfully`);
+  if (failed.length > 0) {
+    console.warn(`[auto_tag_asset] ⚠️  ${failed.length} videos failed preparation`);
+  }
+
+  if (successful.length === 0) {
+    throw new Error(`All ${videoAssets.length} videos failed preparation`);
+  }
+
+  // Step 2: Create JSONL file content (one request per video, multiple frames per request)
+  console.log(`[auto_tag_asset] 📝 Creating JSONL file with ${successful.length} video requests...`);
+  const jsonlLines: string[] = [];
+
+  for (const video of successful) {
+    // Build content array with all frames for this video
+    const contentItems: any[] = [
+      {
+        type: 'text',
+        text: `Analyze these ${video.frameUrls.length} frames from a video and return 1-5 tags from this vocabulary: ${tagVocabulary.join(', ')}.
+
+CRITICAL: Only tag what you ACTUALLY see across the video frames. Only use tags from the provided vocabulary.
+
+ANALYSIS GUIDELINES:
+1. Look at all frames to understand the video content
+2. Identify the main subject(s), setting, and style
+3. Consider what is consistent across frames
+4. Select tags that best describe the overall video
+
+TAGGING RULES:
+- Use only tags from the provided vocabulary
+- Select 1-5 tags that best describe the video content
+- Be specific and accurate
+- If a tag doesn't clearly apply to the video, don't use it
+
+Return tags that accurately reflect what is shown in the video.`,
+      },
+    ];
+
+    // Add each frame as an image_url
+    for (const url of video.frameUrls) {
+      contentItems.push({
+        type: 'image_url',
+        image_url: { url },
+      });
+    }
+
+    const batchRequest = {
+      custom_id: video.assetId, // Use assetId as custom_id for mapping results back
+      method: 'POST',
+      url: '/v1/chat/completions',
+      body: {
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert video analyzer. Analyze the video frames objectively and return tags that accurately describe what you see. Only use tags from the provided vocabulary. Be honest and accurate about what the video shows.',
+          },
+          {
+            role: 'user',
+            content: contentItems,
+          },
+        ],
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'tag_response',
+            schema: {
+              type: 'object',
+              properties: {
+                tags: {
+                  type: 'array',
+                  items: {
+                    type: 'string',
+                    enum: tagVocabulary,
+                  },
+                  minItems: 1,
+                  maxItems: 5,
+                  description: `Array of 1-5 tags that accurately describe what is shown in the video. Must be from: ${tagVocabulary.join(', ')}`,
+                },
+              },
+              required: ['tags'],
+              additionalProperties: false,
+            },
+            strict: true,
+          },
+        },
+        temperature: 0.3,
+        max_tokens: 200,
+      },
+    };
+
+    jsonlLines.push(JSON.stringify(batchRequest));
+  }
+
+  if (jsonlLines.length === 0) {
+    throw new Error('No valid video requests to include in batch');
+  }
+
+  const jsonlContent = jsonlLines.join('\n');
+  console.log(`[auto_tag_asset] ✅ Created video JSONL file (${jsonlContent.length} bytes, ${jsonlLines.length} lines)`);
+
+  // Step 3: Upload file to OpenAI
+  console.log(`[auto_tag_asset] 📤 Uploading video JSONL file to OpenAI...`);
+  const fileBlob = new Blob([jsonlContent], { type: 'application/jsonl' });
+  const formData = new FormData();
+  formData.append('file', fileBlob, 'video_batch_input.jsonl');
+  formData.append('purpose', 'batch');
+
+  const uploadResponse = await fetch(OPENAI_FILES_API_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: formData,
+  });
+
+  if (!uploadResponse.ok) {
+    const errorText = await uploadResponse.text();
+    console.error(`[auto_tag_asset] ❌ Failed to upload video file: ${uploadResponse.status} ${uploadResponse.statusText}`);
+    console.error(`[auto_tag_asset] Error: ${errorText}`);
+    throw new Error(`Failed to upload video batch file: ${uploadResponse.status} ${errorText}`);
+  }
+
+  const uploadResult = await uploadResponse.json();
+  const fileId = uploadResult.id;
+  console.log(`[auto_tag_asset] ✅ Video file uploaded successfully: ${fileId}`);
+
+  // Step 4: Create batch job
+  console.log(`[auto_tag_asset] 🚀 Creating video batch job...`);
+  const batchResponse = await fetch(OPENAI_BATCH_API_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      input_file_id: fileId,
+      endpoint: '/v1/chat/completions',
+      completion_window: '24h',
+    }),
+  });
+
+  if (!batchResponse.ok) {
+    const errorText = await batchResponse.text();
+    console.error(`[auto_tag_asset] ❌ Failed to create video batch: ${batchResponse.status} ${batchResponse.statusText}`);
+    console.error(`[auto_tag_asset] Error: ${errorText}`);
+    throw new Error(`Failed to create video batch: ${batchResponse.status} ${errorText}`);
+  }
+
+  const batchResult = await batchResponse.json();
+  const batchId = batchResult.id;
+  console.log(`[auto_tag_asset] ✅ Video batch job created successfully: ${batchId}`);
+  console.log(`[auto_tag_asset] Video batch status: ${batchResult.status}`);
+
+  // Step 5: Store batch_id in database for polling
+  console.log(`[auto_tag_asset] 💾 Storing video batch_id in database...`);
+  const assetIds = successful.map(v => v.assetId);
+  const failedAssetIds = failed.map(f => f.assetId);
+
+  // Update assets with batch_id and mark as pending
+  const { error: updateError } = await supabaseClient
+    .from('assets')
+    .update({
+      openai_batch_id: batchId,
+      auto_tag_status: 'pending',
+    })
+    .in('id', assetIds);
+
+  if (updateError) {
+    console.error(`[auto_tag_asset] ❌ Failed to store video batch_id:`, updateError);
+    // Don't throw - batch was created successfully, we can still poll
+  } else {
+    console.log(`[auto_tag_asset] ✅ Stored video batch_id for ${assetIds.length} assets`);
+  }
+
+  // Mark failed assets as failed
+  if (failedAssetIds.length > 0) {
+    await supabaseClient
+      .from('assets')
+      .update({ auto_tag_status: 'failed' })
+      .in('id', failedAssetIds);
+    console.log(`[auto_tag_asset] ✅ Marked ${failedAssetIds.length} failed video assets`);
+  }
+
+  return { batchId, fileId };
+}
+
 // Process completed OpenAI Batch API results
 async function processBatchResults(
   batchId: string,
@@ -1702,6 +2049,159 @@ Return tags that accurately reflect what is in the image.`,
   return tags;
 }
 
+// Tag a video using multiple thumbnail frames
+async function tagVideoWithOpenAI(
+  frameUrls: string[],
+  apiKey: string,
+  tagVocabulary: string[],
+  supabaseClient?: any
+): Promise<string[]> {
+  if (!apiKey) {
+    console.warn('[auto_tag_asset] Missing OPENAI_API_KEY. Cannot generate tags.');
+    throw new Error('OpenAI API key not configured');
+  }
+
+  if (!tagVocabulary || tagVocabulary.length === 0) {
+    console.error('[auto_tag_asset] No tags provided in vocabulary - cannot generate tags');
+    throw new Error('No tags enabled for auto-tagging');
+  }
+
+  if (!frameUrls || frameUrls.length === 0) {
+    console.error('[auto_tag_asset] No frame URLs provided for video tagging');
+    throw new Error('No video frames available for tagging');
+  }
+
+  console.log(`[auto_tag_asset] Tagging video with ${frameUrls.length} frames`);
+  console.log('[auto_tag_asset] Tag vocabulary for GPT-4:', tagVocabulary);
+
+  // Build content array with all frames
+  const contentItems: any[] = [
+    {
+      type: 'text',
+      text: `Analyze these ${frameUrls.length} frames from a video and return 1-5 tags from this vocabulary: ${tagVocabulary.join(', ')}.
+
+CRITICAL: Only tag what you ACTUALLY see across the video frames. Only use tags from the provided vocabulary.
+
+ANALYSIS GUIDELINES:
+1. Look at all frames to understand the video content
+2. Identify the main subject(s), setting, and style
+3. Consider what is consistent across frames
+4. Select tags that best describe the overall video
+
+TAGGING RULES:
+- Use only tags from the provided vocabulary
+- Select 1-5 tags that best describe the video content
+- Be specific and accurate
+- If a tag doesn't clearly apply to the video, don't use it
+
+Return tags that accurately reflect what is shown in the video.`,
+    },
+  ];
+
+  // Add each frame as an image_url
+  for (const url of frameUrls) {
+    contentItems.push({
+      type: 'image_url',
+      image_url: { url },
+    });
+  }
+
+  const response = await fetch(OPENAI_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are an expert video analyzer. Analyze the video frames objectively and return tags that accurately describe what you see. Only use tags from the provided vocabulary. Be honest and accurate about what the video shows.',
+        },
+        {
+          role: 'user',
+          content: contentItems,
+        },
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'tag_response',
+          schema: {
+            type: 'object',
+            properties: {
+              tags: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  enum: tagVocabulary,
+                },
+                minItems: 1,
+                maxItems: 5,
+                description: 'Array of 1-5 tags that accurately describe what is shown in the video. Tags must be from the provided vocabulary.',
+              },
+            },
+            required: ['tags'],
+            additionalProperties: false,
+          },
+          strict: true,
+        },
+      },
+      temperature: 0.3,
+      max_tokens: 200,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('[auto_tag_asset] OpenAI API error for video:', errorText);
+
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('Retry-After');
+      const errorJson = JSON.parse(errorText);
+      const errorCode = errorJson?.error?.code || '';
+
+      if (errorCode === 'insufficient_quota') {
+        throw new Error('OpenAI quota exceeded - please check billing');
+      } else {
+        const rateLimitError: any = new Error('OpenAI rate limit exceeded - please try again later');
+        rateLimitError.isRateLimit = true;
+        rateLimitError.retryAfter = retryAfter;
+        throw rateLimitError;
+      }
+    } else if (response.status === 401) {
+      throw new Error('Invalid OpenAI API key');
+    } else {
+      throw new Error(`OpenAI API failed: ${response.status} - ${errorText}`);
+    }
+  }
+
+  const json = await response.json();
+  const content = json.choices?.[0]?.message?.content ?? '{}';
+
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch (e) {
+    console.error('[auto_tag_asset] Failed to parse JSON for video:', e);
+    throw new Error('Invalid JSON response from OpenAI');
+  }
+
+  const tags = Array.isArray(parsed.tags) ? parsed.tags : [];
+
+  // Validate tags are in the vocabulary
+  const invalidTags = tags.filter((tag: string) => !tagVocabulary.includes(tag));
+  if (invalidTags.length > 0) {
+    console.error('[auto_tag_asset] Invalid tags returned (not in vocabulary):', invalidTags);
+    const validTags = tags.filter((tag: string) => tagVocabulary.includes(tag));
+    return validTags;
+  }
+
+  return tags;
+}
+
 Deno.serve(async (req) => {
   const functionStartTime = Date.now();
   
@@ -1852,7 +2352,7 @@ Deno.serve(async (req) => {
         
         const result = await supabaseClient
           .from('assets')
-          .select('id, user_id, workspace_id')
+          .select('id, user_id, workspace_id, asset_type, thumbnail_frames')
           .in('id', assetIds);
         
         assetsError = result.error;
@@ -2017,50 +2517,117 @@ Deno.serve(async (req) => {
           }
 
           try {
-            // Progressive batching: split into smaller batches for faster first results
-            const batchSizes = strategy.batchSizes || [assetsToProcess.length];
+            // Build asset metadata map for video detection
+            const assetMetadataMap = new Map<string, { asset_type?: string; thumbnail_frames?: string[] }>();
+            for (const asset of foundAssets) {
+              assetMetadataMap.set(asset.id, {
+                asset_type: asset.asset_type,
+                thumbnail_frames: asset.thumbnail_frames,
+              });
+            }
+
+            // Separate videos from images - videos can't use Batch API
+            const imageAssets: typeof assetsToProcess = [];
+            const videoAssets: typeof assetsToProcess = [];
+
+            for (const asset of assetsToProcess) {
+              const metadata = assetMetadataMap.get(asset.assetId);
+              if (metadata?.asset_type === 'video') {
+                videoAssets.push(asset);
+              } else {
+                imageAssets.push(asset);
+              }
+            }
+
+            console.log(`[auto_tag_asset] 🎬 Asset breakdown: ${imageAssets.length} images, ${videoAssets.length} videos`);
+
+            // Both images AND videos use Batch API for reliability and cost savings
             const batchIds: string[] = [];
-            let assetIndex = 0;
 
-            console.log(`[auto_tag_asset] 🚀 Creating ${batchSizes.length} progressive batches: [${batchSizes.join(', ')}]`);
+            // Create video batch if we have videos
+            if (videoAssets.length > 0) {
+              console.log(`[auto_tag_asset] 🎬 Creating video batch for ${videoAssets.length} videos...`);
 
-            for (let i = 0; i < batchSizes.length; i++) {
-              const batchSize = batchSizes[i];
-              const batchAssets = assetsToProcess.slice(assetIndex, assetIndex + batchSize);
-              assetIndex += batchSize;
+              // Prepare video data with thumbnail frames
+              const videoBatchData = videoAssets.map(asset => {
+                const metadata = assetMetadataMap.get(asset.assetId);
+                return {
+                  assetId: asset.assetId,
+                  thumbnailFrames: metadata?.thumbnail_frames || [],
+                };
+              }).filter(v => v.thumbnailFrames.length > 0);
 
-              if (batchAssets.length === 0) break;
+              if (videoBatchData.length > 0) {
+                try {
+                  const { batchId: videoBatchId } = await createOpenAIVideoBatch(
+                    videoBatchData,
+                    openAiKey!,
+                    tagVocabulary,
+                    supabaseClient,
+                    workspaceId
+                  );
+                  batchIds.push(videoBatchId);
+                  console.log(`[auto_tag_asset] ✅ Video batch created: ${videoBatchId} (${videoBatchData.length} videos)`);
+                } catch (videoError) {
+                  console.error(`[auto_tag_asset] ❌ Failed to create video batch:`, videoError);
+                  // Mark videos as failed
+                  await supabaseClient
+                    .from('assets')
+                    .update({ auto_tag_status: 'failed' })
+                    .in('id', videoAssets.map(v => v.assetId));
+                }
+              } else {
+                console.warn(`[auto_tag_asset] ⚠️  No videos with thumbnail frames found`);
+                // Mark videos without frames as failed
+                await supabaseClient
+                  .from('assets')
+                  .update({ auto_tag_status: 'failed' })
+                  .in('id', videoAssets.map(v => v.assetId));
+              }
+            }
 
-              console.log(`[auto_tag_asset] 📦 Creating batch ${i + 1}/${batchSizes.length} with ${batchAssets.length} images...`);
+            // Create image batches if we have images
+            if (imageAssets.length > 0) {
+              // Progressive batching: split into smaller batches for faster first results
+              const batchSizes = strategy.batchSizes || [imageAssets.length];
+              let assetIndex = 0;
 
-              const { batchId, fileId } = await createOpenAIBatch(
-                batchAssets,
-                openAiKey!,
-                tagVocabulary,
-                supabaseClient,
-                workspaceId
-              );
+              console.log(`[auto_tag_asset] 🚀 Creating ${batchSizes.length} progressive batches for ${imageAssets.length} images: [${batchSizes.join(', ')}]`);
 
-              batchIds.push(batchId);
-              console.log(`[auto_tag_asset] ✅ Batch ${i + 1} created: ${batchId} (${batchAssets.length} images)`);
+              for (let i = 0; i < batchSizes.length; i++) {
+                const batchSize = batchSizes[i];
+                const batchAssets = imageAssets.slice(assetIndex, assetIndex + batchSize);
+                assetIndex += batchSize;
+
+                if (batchAssets.length === 0) break;
+
+                console.log(`[auto_tag_asset] 📦 Creating image batch ${i + 1}/${batchSizes.length} with ${batchAssets.length} images...`);
+
+                const { batchId } = await createOpenAIBatch(
+                  batchAssets,
+                  openAiKey!,
+                  tagVocabulary,
+                  supabaseClient,
+                  workspaceId
+                );
+
+                batchIds.push(batchId);
+                console.log(`[auto_tag_asset] ✅ Image batch ${i + 1} created: ${batchId} (${batchAssets.length} images)`);
+              }
             }
 
             console.log(`[auto_tag_asset] ✅ All ${batchIds.length} batches created: [${batchIds.join(', ')}]`);
-            console.log(`[auto_tag_asset] ⏳ Smaller batches complete faster - first results should appear soon`);
+            console.log(`[auto_tag_asset] ⏳ Batches process async - results will appear as they complete`);
 
-            // Return empty tags for now - results will be processed when batches complete
-            // The polling function will update assets with tags when each batch finishes
-            tagResults = batchBody.assets.map(asset => ({
-              assetId: asset.assetId,
-              tags: [], // Empty for now, will be filled when batches complete
-            }));
+            // Return empty tags for all assets - they'll be filled when batches complete
+            tagResults = batchBody.assets.map(asset => ({ assetId: asset.assetId, tags: [] }));
 
             // Return success response indicating batches were created
             return new Response(JSON.stringify({
               results: tagResults,
               batchIds, // Return array of batch IDs
               batchId: batchIds[0], // Keep single batchId for backwards compatibility
-              message: `${batchIds.length} batch jobs created. Smaller batches complete faster.`,
+              message: `${batchIds.length} batch jobs created (${imageAssets.length} images, ${videoAssets.length} videos). Processing async.`,
             }), {
               status: 200,
               headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -2083,18 +2650,45 @@ Deno.serve(async (req) => {
           // Record requests for rate limiting
           recordRequest(assetsToProcess.length);
 
-          console.log(`[auto_tag_asset] ⚡ IMMEDIATE processing: ${assetsToProcess.length} images in parallel`);
+          console.log(`[auto_tag_asset] ⚡ IMMEDIATE processing: ${assetsToProcess.length} assets in parallel`);
           console.log(`[auto_tag_asset] 🎯 OpenAI API key present: ${!!openAiKey}`);
           console.log(`[auto_tag_asset] 🎯 Tag vocabulary length: ${tagVocabulary.length}`);
 
-          processingResults = await getSuggestedTagsBatch(assetsToProcess, openAiKey, tagVocabulary, supabaseClient);
+          // Build asset metadata map for video detection
+          const assetMetadata = new Map<string, { asset_type?: string; thumbnail_frames?: string[] }>();
+          for (const asset of foundAssets) {
+            assetMetadata.set(asset.id, {
+              asset_type: asset.asset_type,
+              thumbnail_frames: asset.thumbnail_frames,
+            });
+          }
+          const videoCount = Array.from(assetMetadata.values()).filter(m => m.asset_type === 'video').length;
+          if (videoCount > 0) {
+            console.log(`[auto_tag_asset] 🎬 Detected ${videoCount} video assets in batch`);
+          }
+
+          processingResults = await getSuggestedTagsBatch(assetsToProcess, openAiKey, tagVocabulary, supabaseClient, assetMetadata);
         } else if (strategy.type === 'batch' && assetsToProcess.length > 0) {
           // Fallback: Batch API failed, use sequential processing with retry logic
-          console.log(`[auto_tag_asset] 🔄 FALLBACK sequential processing: ${assetsToProcess.length} images (Batch API failed)`);
+          console.log(`[auto_tag_asset] 🔄 FALLBACK sequential processing: ${assetsToProcess.length} assets (Batch API failed)`);
           console.log(`[auto_tag_asset] 🎯 OpenAI API key present: ${!!openAiKey}`);
           console.log(`[auto_tag_asset] 🎯 Tag vocabulary length: ${tagVocabulary.length}`);
 
-          processingResults = await getSuggestedTagsChunked(assetsToProcess, openAiKey!, tagVocabulary, supabaseClient);
+          // Build asset metadata map for video detection (same as immediate strategy)
+          const assetMetadata = new Map<string, { asset_type?: string; thumbnail_frames?: string[] }>();
+          for (const asset of foundAssets) {
+            assetMetadata.set(asset.id, {
+              asset_type: asset.asset_type,
+              thumbnail_frames: asset.thumbnail_frames,
+            });
+          }
+          const videoCount = Array.from(assetMetadata.values()).filter(m => m.asset_type === 'video').length;
+          if (videoCount > 0) {
+            console.log(`[auto_tag_asset] 🎬 Detected ${videoCount} video assets in fallback batch`);
+          }
+
+          // Use getSuggestedTagsBatch which handles videos properly
+          processingResults = await getSuggestedTagsBatch(assetsToProcess, openAiKey, tagVocabulary, supabaseClient, assetMetadata);
         }
         
         // Create a map of results by assetId for easy lookup
@@ -2363,7 +2957,7 @@ Deno.serve(async (req) => {
         
         const result = await supabaseClient
           .from('assets')
-          .select('id, user_id, workspace_id')
+          .select('id, user_id, workspace_id, asset_type, thumbnail_frames')
           .eq('id', singleBody.assetId)
           .single();
         
@@ -2449,7 +3043,28 @@ Deno.serve(async (req) => {
       let tags: string[] = [];
 
       try {
-        tags = await getSuggestedTags(singleBody, openAiKey, tagVocabulary, supabaseClient);
+        // Check if this is a video asset
+        if (asset.asset_type === 'video') {
+          console.log('[auto_tag_asset] Processing video asset with thumbnail frames');
+          const frameUrls = await getVideoThumbnailUrls(asset.thumbnail_frames, supabaseClient);
+
+          if (frameUrls.length > 0) {
+            tags = await withRetry(
+              () => tagVideoWithOpenAI(frameUrls, openAiKey!, tagVocabulary, supabaseClient),
+              { context: `video ${singleBody.assetId}` }
+            );
+          } else {
+            console.warn('[auto_tag_asset] No thumbnail frames available for video, skipping tagging');
+            tags = [];
+          }
+        } else {
+          // Image asset - use standard tagging
+          tags = await withRetry(
+            () => getSuggestedTags(singleBody, openAiKey, tagVocabulary, supabaseClient),
+            { context: `image ${singleBody.assetId}` }
+          );
+        }
+
         if (!tags || tags.length === 0) {
           console.error('[auto_tag_asset] No tags returned from GPT-4');
           tags = [];

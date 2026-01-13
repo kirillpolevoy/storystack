@@ -71,7 +71,7 @@ export function TaggingProgressBar({ progress, onDismiss }: TaggingProgressBarPr
                 {isComplete ? 'Tagging complete' : 'AI tagging in progress'}
               </p>
               <p className="text-xs text-gray-500 mt-0.5">
-                {completed} of {total} images
+                {completed} of {total} assets
                 {!isComplete && timeRemaining && (
                   <span className="text-gray-400"> · {timeRemaining}</span>
                 )}

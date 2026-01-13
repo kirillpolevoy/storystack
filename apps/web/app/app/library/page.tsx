@@ -11,10 +11,11 @@ import { useTaggingProgress } from '@/hooks/useTaggingProgress'
 import { AssetGrid } from '@/components/library/AssetGrid'
 import { TaggingProgressBar } from '@/components/library/TaggingProgressBar'
 import { UploadZone } from '@/components/library/UploadZone'
-import { FilterBar } from '@/components/library/FilterBar'
+import { FilterBar, RatingFilter } from '@/components/library/FilterBar'
 import { BulkActionBar } from '@/components/library/BulkActionBar'
 import { AddToStoryModal } from '@/components/library/AddToStoryModal'
 import { BulkAddTagsModal } from '@/components/library/BulkAddTagsModal'
+import { BulkShareReviewModal } from '@/components/library/BulkShareReviewModal'
 import { AssetDetailPanel } from '@/components/library/AssetDetailPanel'
 import { Asset } from '@/types'
 import { Button } from '@/components/ui/button'
@@ -47,11 +48,13 @@ function LibraryPageContent() {
     from: null,
     to: null,
   })
+  const [selectedRating, setSelectedRating] = useState<RatingFilter>(null)
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set())
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
   const [showUploadDialog, setShowUploadDialog] = useState(false)
   const [showAddToStoryModal, setShowAddToStoryModal] = useState(false)
   const [showAddTagsModal, setShowAddTagsModal] = useState(false)
+  const [showShareReviewModal, setShowShareReviewModal] = useState(false)
   const [assetToEditTags, setAssetToEditTags] = useState<Asset | null>(null)
   const [retaggingAssetIds, setRetaggingAssetIds] = useState<Set<string>>(new Set())
   const [showBulkRetagConfirm, setShowBulkRetagConfirm] = useState(false)
@@ -100,8 +103,11 @@ function LibraryPageContent() {
         filters.push(`__LOCATION__${selectedLocation}`)
       }
     }
+    if (selectedRating) {
+      filters.push(`__RATING__${selectedRating}`)
+    }
     return filters
-  }, [selectedTags, selectedLocation])
+  }, [selectedTags, selectedLocation, selectedRating])
 
   const {
     data,
@@ -221,7 +227,7 @@ function LibraryPageContent() {
         // Build query without tag filters, but with other filters
         let query = supabase
           .from('assets')
-          .select('id, tags, location, date_taken, created_at, storage_path, original_filename')
+          .select('id, tags, location, date_taken, created_at, storage_path, original_filename, rating')
           .eq('workspace_id', activeWorkspaceId)
           .is('deleted_at', null)
           .limit(10000) // Fetch all assets for accurate counts
@@ -360,6 +366,18 @@ function LibraryPageContent() {
     }).length
   }, [assetsForCounts])
 
+  const ratingCounts = useMemo(() => {
+    const counts = { approved: 0, maybe: 0, rejected: 0, unrated: 0 }
+    assetsForCounts.forEach((asset: Asset) => {
+      if (!asset) return
+      if (asset.rating === 'approved') counts.approved++
+      else if (asset.rating === 'maybe') counts.maybe++
+      else if (asset.rating === 'rejected') counts.rejected++
+      else counts.unrated++
+    })
+    return counts
+  }, [assetsForCounts])
+
   const deleteAsset = useDeleteAsset()
   const updateTags = useUpdateAssetTags()
 
@@ -386,6 +404,11 @@ function LibraryPageContent() {
   const handleBulkAddTags = useCallback(() => {
     setShowAddTagsModal(true)
   }, [])
+
+  const handleShareForReview = useCallback(() => {
+    if (selectedAssetIds.size === 0) return
+    setShowShareReviewModal(true)
+  }, [selectedAssetIds.size])
 
   const handleBulkRetagWithAI = useCallback(() => {
     if (selectedAssetIds.size === 0) return
@@ -1035,6 +1058,9 @@ function LibraryPageContent() {
               locationCounts={locationCounts}
               noTagsCount={noTagsCount}
               noLocationCount={noLocationCount}
+              selectedRating={selectedRating}
+              onRatingChange={setSelectedRating}
+              ratingCounts={ratingCounts}
             />
           </div>
         </div>
@@ -1132,12 +1158,13 @@ function LibraryPageContent() {
       </div>
 
       {/* Bulk Action Bar - Hide when modals are open */}
-      {!showAddToStoryModal && !showAddTagsModal && !showDeleteConfirmation && !showBulkDeleteModal && !showBulkRetagConfirm && (
+      {!showAddToStoryModal && !showAddTagsModal && !showShareReviewModal && !showDeleteConfirmation && !showBulkDeleteModal && !showBulkRetagConfirm && (
         <BulkActionBar
           selectedCount={selectedAssetIds.size}
           onAddToStory={handleBulkAddToStory}
           onAddTags={handleBulkAddTags}
           onRetagWithAI={handleBulkRetagWithAI}
+          onShareForReview={handleShareForReview}
           onDelete={handleBulkDelete}
           onClearSelection={handleClearSelection}
         />
@@ -1163,6 +1190,15 @@ function LibraryPageContent() {
             setShowAddTagsModal(false)
             handleClearSelection()
           }}
+          selectedAssetIds={Array.from(selectedAssetIds)}
+          onSuccess={handleClearSelection}
+        />
+      )}
+
+      {showShareReviewModal && (
+        <BulkShareReviewModal
+          open={showShareReviewModal}
+          onOpenChange={setShowShareReviewModal}
           selectedAssetIds={Array.from(selectedAssetIds)}
           onSuccess={handleClearSelection}
         />

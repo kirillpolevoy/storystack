@@ -1,15 +1,15 @@
 'use client'
 
 import { Asset } from '@/types'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Button } from '@/components/ui/button'
-import { Plus, Tag as TagIcon, Loader2, Sparkles, CheckCircle2 } from 'lucide-react'
-import { VideoTile } from './VideoTile'
+import { Plus, Tag as TagIcon, Loader2, Sparkles, CheckCircle2, Play } from 'lucide-react'
+import { formatVideoDuration } from '@/utils/videoProcessing'
 import { RatingBadge } from './AssetRating'
 
-interface AssetTileProps {
+interface VideoTileProps {
   asset: Asset
   onClick: () => void
   isSelected?: boolean
@@ -20,7 +20,7 @@ interface AssetTileProps {
   isCompleted?: boolean
 }
 
-export function AssetTile({
+export function VideoTile({
   asset,
   onClick,
   isSelected = false,
@@ -29,60 +29,77 @@ export function AssetTile({
   onEditTags,
   isRetagging = false,
   isCompleted = false,
-}: AssetTileProps) {
-  // Render VideoTile for video assets
-  if (asset.asset_type === 'video') {
-    return (
-      <VideoTile
-        asset={asset}
-        onClick={onClick}
-        isSelected={isSelected}
-        onSelectChange={onSelectChange}
-        onAddToStory={onAddToStory}
-        onEditTags={onEditTags}
-        isRetagging={isRetagging}
-        isCompleted={isCompleted}
-      />
-    )
-  }
+}: VideoTileProps) {
   const [imageError, setImageError] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isStoryBadgeOpen, setIsStoryBadgeOpen] = useState(false)
   const [isHovered, setIsHovered] = useState(false)
-  const [imageSrc, setImageSrc] = useState<string>('')
-  
-  // Properly prioritize thumbnail URLs - thumb is 800px, preview 2000px
-  // Use thumb for library grid (good quality, smaller file size)
-  // Fallback to preview for larger displays or if thumb unavailable
-  const imageUrl = asset.thumbUrl || asset.previewUrl || asset.publicUrl || ''
-  
-  // Initialize image source
-  useEffect(() => {
-    if (imageUrl) {
-      setImageSrc(imageUrl)
-      setImageError(false)
-      setIsLoading(true)
-    }
-  }, [imageUrl])
-  
+  const [currentFrameIndex, setCurrentFrameIndex] = useState(0)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const scrubIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Get thumbnail frame URLs
+  const thumbnailFrameUrls = asset.thumbnailFrameUrls || []
+  const frameCount = thumbnailFrameUrls.length
+
+  // Primary thumbnail (first frame or regular thumb)
+  const primaryThumbnail = thumbnailFrameUrls[0] || asset.thumbUrl || asset.previewUrl || asset.publicUrl || ''
+
+  // Current frame to display
+  const currentThumbnail = isHovered && frameCount > 1
+    ? (thumbnailFrameUrls[currentFrameIndex] || primaryThumbnail)
+    : primaryThumbnail
+
   const storyCount = asset.story_count || 0
   const storyNames = asset.story_names || []
-  
-  // Check if asset is recent (within last 48-72 hours) - based on created_at (when imported)
-  // Use created_at, not date_taken, because "NEW" should indicate recently imported assets
-  // Reduced to 48-72 hours for more meaningful "NEW" badge
+
+  // Check if asset is recent (within last 72 hours)
   const isRecent = (() => {
     if (!asset.created_at) return false
     const importDate = new Date(asset.created_at)
     const hoursAgo = (Date.now() - importDate.getTime()) / (1000 * 60 * 60)
-    return hoursAgo <= 72 // 3 days max
+    return hoursAgo <= 72
   })()
-  
+
   // Check if asset is currently being tagged
-  // Use both the database status AND the tracked retagging state
-  // This ensures we show the indicator immediately when bulk retagging starts
   const isTagging = isRetagging || asset.auto_tag_status === 'pending'
-  
+
+  // Handle mouse move for scrubbing through frames
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!containerRef.current || frameCount <= 1) return
+
+    const rect = containerRef.current.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const percentage = x / rect.width
+    const frameIndex = Math.min(
+      Math.floor(percentage * frameCount),
+      frameCount - 1
+    )
+    setCurrentFrameIndex(frameIndex)
+  }, [frameCount])
+
+  // Auto-cycle through frames when hovering (fallback for touch/no-movement)
+  useEffect(() => {
+    if (isHovered && frameCount > 1) {
+      // Start auto-scrub after 500ms of hover without mouse movement
+      scrubIntervalRef.current = setInterval(() => {
+        setCurrentFrameIndex((prev) => (prev + 1) % frameCount)
+      }, 400) // Change frame every 400ms
+    } else {
+      if (scrubIntervalRef.current) {
+        clearInterval(scrubIntervalRef.current)
+        scrubIntervalRef.current = null
+      }
+      setCurrentFrameIndex(0)
+    }
+
+    return () => {
+      if (scrubIntervalRef.current) {
+        clearInterval(scrubIntervalRef.current)
+      }
+    }
+  }, [isHovered, frameCount])
+
   const handleCheckboxClick = (e: React.MouseEvent) => {
     e.stopPropagation()
     onSelectChange?.(!isSelected)
@@ -90,10 +107,12 @@ export function AssetTile({
 
   return (
     <div
+      ref={containerRef}
       className="group relative w-full h-full cursor-pointer overflow-hidden rounded-lg bg-gray-50 transition-all duration-200 hover:shadow-md hover:scale-[1.01]"
       onClick={onClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      onMouseMove={handleMouseMove}
       style={{
         width: '100%',
         height: '100%',
@@ -115,6 +134,36 @@ export function AssetTile({
         </div>
       )}
 
+      {/* Video Play Icon Overlay - visible when not hovering */}
+      {!isHovered && !isTagging && !isCompleted && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+          <div className="h-12 w-12 rounded-full bg-black/50 flex items-center justify-center backdrop-blur-sm">
+            <Play className="h-6 w-6 text-white ml-1" fill="white" />
+          </div>
+        </div>
+      )}
+
+      {/* Video Duration Badge */}
+      {asset.video_duration_seconds && (
+        <div className="absolute bottom-2 right-2 z-10 px-2 py-0.5 bg-black/70 text-white text-[10px] font-medium rounded backdrop-blur-sm">
+          {formatVideoDuration(asset.video_duration_seconds)}
+        </div>
+      )}
+
+      {/* Frame Indicator Dots - visible on hover when multiple frames */}
+      {isHovered && frameCount > 1 && (
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 flex gap-1">
+          {thumbnailFrameUrls.slice(0, 10).map((_, i) => (
+            <div
+              key={i}
+              className={`w-1.5 h-1.5 rounded-full transition-all ${
+                i === currentFrameIndex ? 'bg-white' : 'bg-white/50'
+              }`}
+            />
+          ))}
+        </div>
+      )}
+
       {/* Success Indicator - shows briefly after tagging completes */}
       {isCompleted && !isTagging && (
         <div className={`absolute inset-0 z-10 flex items-center justify-center backdrop-blur-[2px] ${
@@ -130,8 +179,8 @@ export function AssetTile({
           </div>
         </div>
       )}
-      
-      {/* Tagging Status Indicator - subtle overlay */}
+
+      {/* Tagging Status Indicator */}
       {isTagging && (
         <div className="absolute inset-0 z-10 bg-accent/10 flex items-center justify-center backdrop-blur-[2px]">
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-accent/20 text-accent text-[10px] font-medium rounded-md shadow-card">
@@ -140,8 +189,8 @@ export function AssetTile({
           </div>
         </div>
       )}
-      
-      {/* NEW Indicator - subtle, reduced visual dominance */}
+
+      {/* NEW Indicator */}
       {isRecent && !isTagging && !asset.rating && (
         <div className="absolute top-2 right-2 z-10 px-2 py-0.5 bg-gray-700/80 text-white text-[10px] font-medium rounded-full backdrop-blur-sm">
           New
@@ -151,7 +200,7 @@ export function AssetTile({
       {/* Rating Badge - shows approval status */}
       {!isTagging && <RatingBadge rating={asset.rating} />}
 
-      {/* Story Badge - subtle, neutral color */}
+      {/* Story Badge */}
       {storyCount > 0 && (
         <Popover open={isStoryBadgeOpen} onOpenChange={setIsStoryBadgeOpen}>
           <PopoverTrigger asChild>
@@ -214,28 +263,22 @@ export function AssetTile({
           )}
         </div>
       )}
-      {imageSrc && !imageError ? (
+
+      {/* Thumbnail Image */}
+      {currentThumbnail && !imageError ? (
         <>
           {isLoading && (
             <div className="absolute inset-0 bg-gray-100 animate-pulse" />
           )}
           <img
-            src={imageSrc}
-            alt={asset.tags?.[0] || 'Asset'}
-            className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ${
+            src={currentThumbnail}
+            alt={asset.tags?.[0] || 'Video'}
+            className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-100 ${
               isLoading ? 'opacity-0' : 'opacity-100'
             }`}
             onError={() => {
-              // Try fallback URLs in order
-              if (imageSrc === asset.thumbUrl && asset.previewUrl) {
-                setImageSrc(asset.previewUrl)
-              } else if (imageSrc === asset.previewUrl && asset.publicUrl) {
-                setImageSrc(asset.publicUrl)
-              } else {
-                // All URLs failed
-                setImageError(true)
-                setIsLoading(false)
-              }
+              setImageError(true)
+              setIsLoading(false)
             }}
             onLoad={() => setIsLoading(false)}
             loading="lazy"
@@ -244,26 +287,13 @@ export function AssetTile({
       ) : (
         <div className="flex h-full items-center justify-center bg-gray-50">
           <div className="text-center p-4">
-            <svg
-              className="mx-auto h-8 w-8 text-gray-400"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.5}
-                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-              />
-            </svg>
-            <p className="text-xs text-gray-500 mt-2">Image unavailable</p>
+            <Play className="mx-auto h-8 w-8 text-gray-400" />
+            <p className="text-xs text-gray-500 mt-2">Video unavailable</p>
           </div>
         </div>
       )}
-      
-      
-      {/* Overlay with tag info - Stripe-style subtle */}
+
+      {/* Tag info overlay */}
       {asset.tags && asset.tags.length > 0 && (
         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 via-black/40 to-transparent p-3 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
           <p className="text-xs font-medium text-white truncate">

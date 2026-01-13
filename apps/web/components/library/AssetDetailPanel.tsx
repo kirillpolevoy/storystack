@@ -17,7 +17,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { X, Trash2, Plus, MapPin, Sparkles, Edit2, Calendar, FileText, Loader2, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ChevronDown, History, User, ChevronUp } from 'lucide-react'
+import { X, Trash2, Plus, MapPin, Sparkles, Edit2, Calendar, FileText, Loader2, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ChevronDown, History, User, ChevronUp, Play, Film } from 'lucide-react'
+import { VideoPlayerModal } from './VideoPlayerModal'
+import { formatVideoDuration } from '@/utils/videoProcessing'
+import { ClientFeedback } from './ClientFeedback'
+import { useUpdateAssetRating } from '@/hooks/useUpdateAssetRating'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
@@ -83,6 +87,7 @@ export function AssetDetailPanel({
   const [isAuditTrailExpanded, setIsAuditTrailExpanded] = useState(false)
   const [showSuccessIndicator, setShowSuccessIndicator] = useState(false)
   const [showErrorIndicator, setShowErrorIndicator] = useState(false)
+  const [showVideoPlayer, setShowVideoPlayer] = useState(false)
   const lastAssetIdRef = useRef<string | null>(null)
   const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -119,6 +124,7 @@ export function AssetDetailPanel({
   }, [availableTags, localAvailableTags])
   const updateTagsMutation = useUpdateAssetTags()
   const updateLocationMutation = useUpdateAssetLocation()
+  const updateRatingMutation = useUpdateAssetRating()
   const deleteAssetMutation = useDeleteAsset()
   const queryClient = useQueryClient()
   const supabase = createClient()
@@ -546,6 +552,46 @@ export function AssetDetailPanel({
     })
   }
 
+  const handleRatingChange = async (rating: 'approved' | 'maybe' | 'rejected' | null) => {
+    await withEditAccess(async () => {
+      updateRatingMutation.mutate(
+        {
+          assetId: currentAsset.id,
+          rating,
+        },
+        {
+          onSuccess: () => {
+            refetchAsset()
+            queryClient.invalidateQueries({ queryKey: ['assets'] })
+            // Refresh audit log
+            setTimeout(() => {
+              queryClient.invalidateQueries({ queryKey: ['assetAuditLog', currentAsset.id, workspaceId] })
+              refetchAuditLog()
+            }, 500)
+          },
+        }
+      )
+    })
+  }
+
+  const handleRatingNoteChange = async (note: string) => {
+    await withEditAccess(async () => {
+      updateRatingMutation.mutate(
+        {
+          assetId: currentAsset.id,
+          rating: currentAsset.rating || null,
+          note,
+        },
+        {
+          onSuccess: () => {
+            refetchAsset()
+            queryClient.invalidateQueries({ queryKey: ['assets'] })
+          },
+        }
+      )
+    })
+  }
+
   const handleDelete = async () => {
     if (!currentAsset?.id) {
       console.error('[AssetDetailPanel] Cannot delete: no asset ID')
@@ -599,8 +645,67 @@ export function AssetDetailPanel({
 
   const content = (
     <div className="space-y-5">
-      {/* Hero Image - Compact but prominent */}
-          {imageSrc && !imageError ? (
+      {/* Hero Image/Video - Compact but prominent */}
+      {currentAsset.asset_type === 'video' ? (
+        // Video thumbnail with play button
+        <div
+          className="relative w-full aspect-square overflow-hidden rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200/50 shadow-sm group cursor-pointer"
+          onClick={() => setShowVideoPlayer(true)}
+        >
+          <img
+            src={currentAsset.thumbUrl || currentAsset.previewUrl || ''}
+            alt={currentAsset.tags?.[0] || 'Video'}
+            className="absolute inset-0 w-full h-full object-contain p-2 z-0 transition-opacity duration-300"
+            loading="eager"
+          />
+
+          {/* Video play overlay */}
+          <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/30 transition-colors">
+            <div className="h-16 w-16 rounded-full bg-white/90 flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+              <Play className="h-8 w-8 text-gray-900 ml-1" fill="currentColor" />
+            </div>
+          </div>
+
+          {/* Video duration badge */}
+          {currentAsset.video_duration_seconds && (
+            <div className="absolute bottom-4 right-4 px-2 py-1 bg-black/70 text-white text-xs font-medium rounded backdrop-blur-sm">
+              {formatVideoDuration(currentAsset.video_duration_seconds)}
+            </div>
+          )}
+
+          {/* Video badge */}
+          <div className="absolute top-4 left-4 flex items-center gap-1.5 px-2 py-1 bg-black/70 text-white text-xs font-medium rounded backdrop-blur-sm">
+            <Film className="h-3 w-3" />
+            Video
+          </div>
+
+          {/* Success Indicator */}
+          {showSuccessIndicator && isAssetJustCompleted && !isAssetRetagging && (
+            <div className={`absolute inset-0 z-10 flex items-center justify-center backdrop-blur-sm animate-in fade-in duration-200 ${
+              currentAsset.tags && currentAsset.tags.length > 0 ? 'bg-green-50/90' : 'bg-gray-50/90'
+            }`}>
+              <div className={`flex items-center gap-1.5 px-3 py-1.5 bg-white text-[10px] font-medium rounded-md shadow-sm ${
+                currentAsset.tags && currentAsset.tags.length > 0
+                  ? 'border border-green-200 text-green-700'
+                  : 'border border-gray-200 text-gray-600'
+              }`}>
+                <CheckCircle2 className="h-3 w-3" />
+                <span>{currentAsset.tags && currentAsset.tags.length > 0 ? 'Tagged' : 'No tags'}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Tagging Status Indicator */}
+          {isAssetRetagging && (
+            <div className="absolute inset-0 z-10 bg-accent/10 flex items-center justify-center backdrop-blur-sm animate-in fade-in duration-200">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-accent/20 text-accent text-[10px] font-medium rounded-md shadow-sm">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span>Tagging...</span>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : imageSrc && !imageError ? (
         <div className="relative w-full aspect-square overflow-hidden rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200/50 shadow-sm group">
           <img
             src={imageSrc}
@@ -691,6 +796,28 @@ export function AssetDetailPanel({
             <Sparkles className="h-3.5 w-3.5 mr-1.5" />
             Rerun AI Tagging
           </Button>
+        </div>
+
+        {/* Feedback */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Feedback</span>
+            {currentAsset.rated_at && (
+              <span className="text-xs text-gray-400">
+                {new Date(currentAsset.rated_at).toLocaleDateString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                })}
+              </span>
+            )}
+          </div>
+          <ClientFeedback
+            value={currentAsset.rating}
+            onChange={handleRatingChange}
+            note={currentAsset.rating_note}
+            onNoteChange={handleRatingNoteChange}
+            disabled={updateRatingMutation.isPending}
+          />
         </div>
 
         {/* Tags Section - Tight, efficient design */}
@@ -1361,6 +1488,15 @@ export function AssetDetailPanel({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Video Player Modal (Mobile) */}
+        {currentAsset.asset_type === 'video' && (
+          <VideoPlayerModal
+            asset={currentAsset}
+            open={showVideoPlayer}
+            onClose={() => setShowVideoPlayer(false)}
+          />
+        )}
       </>
     )
   }
@@ -1463,6 +1599,15 @@ export function AssetDetailPanel({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Video Player Modal */}
+        {currentAsset.asset_type === 'video' && (
+          <VideoPlayerModal
+            asset={currentAsset}
+            open={showVideoPlayer}
+            onClose={() => setShowVideoPlayer(false)}
+          />
+        )}
     </>
   )
 }

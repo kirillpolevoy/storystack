@@ -12,6 +12,7 @@ import { ArrowLeft, Edit2, Check, X as XIcon, Download, Loader2 } from 'lucide-r
 import { useUpdateStory } from '@/hooks/useStories'
 import { useStoryAssets } from '@/hooks/useStoryAssets'
 import { downloadStoryAsZip } from '@/utils/downloadStory'
+import { StoryShareButton } from '@/components/stories/StoryShareButton'
 
 export default function StoryDetailPage() {
   const params = useParams()
@@ -142,6 +143,7 @@ export default function StoryDetailPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
+                <StoryShareButton storyId={storyId} storyName={story.name} />
                 <Button
                   onClick={handleDownloadStory}
                   disabled={isDownloading || !storyAssets || storyAssets.length === 0}
