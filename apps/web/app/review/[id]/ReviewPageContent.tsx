@@ -390,12 +390,13 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
               </button>
             </div>
 
-            {/* Media area - flex-1 takes remaining space, min-h-0 allows shrinking */}
-            <div className="flex-1 min-h-0 flex items-center justify-center px-2">
+            {/* Media area - constrained to 60vh max to guarantee space for controls */}
+            <div className="flex-1 flex items-center justify-center px-2">
               {selectedAsset.asset_type === 'video' ? (
                 <video
                   src={selectedAsset.publicUrl}
-                  className="max-w-full max-h-full object-contain rounded-lg"
+                  className="max-w-full object-contain rounded-lg"
+                  style={{ maxHeight: '60vh' }}
                   controls
                   autoPlay
                   playsInline
@@ -404,7 +405,8 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                 <img
                   src={selectedAsset.previewUrl || selectedAsset.publicUrl}
                   alt={selectedAsset.tags?.[0] || 'Asset'}
-                  className="max-w-full max-h-full object-contain rounded-lg"
+                  className="max-w-full object-contain rounded-lg"
+                  style={{ maxHeight: '60vh' }}
                 />
               )}
             </div>
