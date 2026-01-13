@@ -228,11 +228,11 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
 
       {/* Asset Detail Modal - Mobile Optimized */}
       {selectedAsset && (
-        <div className="fixed inset-0 z-50 bg-black">
-          {/* Mobile Layout - Vertical stack with fixed bottom controls */}
-          <div className="h-full flex flex-col md:flex-row">
-            {/* Asset Preview - Takes remaining space above controls */}
-            <div className="relative flex-1 flex items-center justify-center min-h-0 p-2">
+        <div className="fixed inset-0 z-50 bg-black overflow-hidden">
+          {/* Desktop Layout */}
+          <div className="hidden md:flex h-full">
+            {/* Asset Preview */}
+            <div className="relative flex-1 flex items-center justify-center p-4">
               {selectedAsset.asset_type === 'video' ? (
                 <video
                   src={selectedAsset.publicUrl}
@@ -248,28 +248,15 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                   className="max-w-full max-h-full object-contain rounded-lg"
                 />
               )}
-
-              {/* Close button */}
-              <button
-                onClick={() => {
-                  setSelectedAsset(null)
-                  setShowNoteInput(false)
-                }}
-                className="absolute top-2 right-2 z-50 h-9 w-9 rounded-full bg-black/60 hover:bg-black/80 flex items-center justify-center text-white transition-colors md:hidden"
-              >
-                <X className="h-5 w-5" />
-              </button>
-
               {/* Counter Badge */}
-              <div className="absolute top-2 left-2 px-2.5 py-1 bg-black/60 backdrop-blur-sm text-white text-sm font-medium rounded-full">
+              <div className="absolute top-4 left-4 px-3 py-1.5 bg-black/60 backdrop-blur-sm text-white text-sm font-medium rounded-full">
                 {currentIndex + 1} / {filteredAssets.length}
               </div>
             </div>
 
-            {/* Mobile: Fixed Bottom Controls / Desktop: Side Panel */}
-            <div className="bg-white md:w-96 md:h-full flex flex-col rounded-t-2xl md:rounded-none shrink-0">
-              {/* Desktop close button */}
-              <div className="hidden md:flex justify-end pt-3 pr-3">
+            {/* Desktop Side Panel */}
+            <div className="w-96 bg-white flex flex-col">
+              <div className="flex justify-end pt-3 pr-3">
                 <button
                   onClick={() => {
                     setSelectedAsset(null)
@@ -281,9 +268,9 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                 </button>
               </div>
 
-              {/* Feedback Control - Calm segmented design */}
+              {/* Desktop Feedback Control */}
               {linkInfo?.allow_rating && (
-                <div className="px-4 md:px-6 py-4 md:py-5">
+                <div className="px-6 py-5">
                   <div
                     role="radiogroup"
                     aria-label="Rate this asset"
@@ -302,22 +289,17 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                           type="button"
                           role="radio"
                           aria-checked={isSelected}
-                          onClick={() => handleRatingChange(
-                            selectedAsset,
-                            isSelected ? null : option.value
-                          )}
+                          onClick={() => handleRatingChange(selectedAsset, isSelected ? null : option.value)}
                           className={cn(
-                            'flex-1 flex items-center justify-center gap-1.5 py-3 md:py-3.5 rounded-lg',
-                            'text-sm font-medium',
-                            'transition-all duration-150 active:scale-[0.98]',
-                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-1',
+                            'flex-1 flex items-center justify-center gap-1.5 py-3.5 rounded-lg',
+                            'text-sm font-medium transition-all duration-150',
                             isSelected
                               ? cn(option.colors.bg, 'border', option.colors.border, option.colors.text, 'shadow-sm')
                               : 'text-gray-400 hover:text-gray-600 hover:bg-white/50 border border-transparent'
                           )}
                         >
                           <Icon className={cn('h-4 w-4 shrink-0', isSelected && option.colors.icon)} strokeWidth={2.5} />
-                          <span className="truncate">{option.label}</span>
+                          <span>{option.label}</span>
                         </button>
                       )
                     })}
@@ -325,9 +307,9 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                 </div>
               )}
 
-              {/* Note Section - Hidden on mobile by default, visible on desktop */}
+              {/* Desktop Note Section */}
               {linkInfo?.allow_notes && (
-                <div className="hidden md:block px-6 py-3 md:flex-1 md:overflow-y-auto border-t border-gray-100">
+                <div className="px-6 py-3 flex-1 overflow-y-auto border-t border-gray-100">
                   {showNoteInput ? (
                     <div className="space-y-3">
                       <textarea
@@ -336,126 +318,147 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                         placeholder="Add a note..."
                         rows={2}
                         autoFocus
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault()
-                            handleNoteSave()
-                          }
-                          if (e.key === 'Escape') {
-                            setShowNoteInput(false)
-                            setNoteValue(selectedAsset.rating_note || '')
-                          }
-                        }}
-                        className="w-full px-3 py-2.5 text-base bg-white border border-gray-200 rounded-lg resize-none placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-200 focus:border-gray-300"
+                        className="w-full px-3 py-2.5 text-base bg-white border border-gray-200 rounded-lg resize-none placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-200"
                       />
                       <div className="flex justify-end gap-2">
-                        <button
-                          onClick={() => {
-                            setShowNoteInput(false)
-                            setNoteValue(selectedAsset.rating_note || '')
-                          }}
-                          className="px-3 py-1.5 text-sm font-medium text-gray-500 hover:text-gray-700 rounded-md hover:bg-gray-100 transition-colors"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={handleNoteSave}
-                          className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
-                        >
-                          Save
-                        </button>
+                        <button onClick={() => { setShowNoteInput(false); setNoteValue(selectedAsset.rating_note || '') }} className="px-3 py-1.5 text-sm font-medium text-gray-500 hover:text-gray-700 rounded-md hover:bg-gray-100">Cancel</button>
+                        <button onClick={handleNoteSave} className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md">Save</button>
                       </div>
                     </div>
                   ) : selectedAsset.rating_note ? (
-                    <button
-                      onClick={() => {
-                        setNoteValue(selectedAsset.rating_note || '')
-                        setShowNoteInput(true)
-                      }}
-                      className="group w-full flex items-start gap-2 text-left px-2 py-2 -mx-2 rounded-lg hover:bg-gray-50 transition-colors"
-                    >
-                      <span className="text-base text-gray-600 leading-relaxed flex-1">
-                        "{selectedAsset.rating_note}"
-                      </span>
-                      <Pencil className="h-3.5 w-3.5 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity mt-1 shrink-0" />
+                    <button onClick={() => { setNoteValue(selectedAsset.rating_note || ''); setShowNoteInput(true) }} className="group w-full flex items-start gap-2 text-left">
+                      <span className="text-base text-gray-600">"{selectedAsset.rating_note}"</span>
+                      <Pencil className="h-3.5 w-3.5 text-gray-300 opacity-0 group-hover:opacity-100 mt-1 shrink-0" />
                     </button>
                   ) : (
-                    <button
-                      onClick={() => setShowNoteInput(true)}
-                      className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-500 transition-colors py-1"
-                    >
-                      <MessageSquare className="h-4 w-4" />
-                      <span>Add note</span>
+                    <button onClick={() => setShowNoteInput(true)} className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-500">
+                      <MessageSquare className="h-4 w-4" /><span>Add note</span>
                     </button>
                   )}
                 </div>
               )}
 
-              {/* Navigation Footer */}
-              <div className="px-4 md:px-6 py-3 md:py-4 border-t border-gray-100 bg-gray-50/50">
+              {/* Desktop Navigation */}
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/50">
                 <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={handlePrevious}
-                    disabled={currentIndex === 0}
-                    className="flex-1 h-11 md:h-12 rounded-xl border-gray-200 disabled:opacity-40 font-medium"
-                  >
-                    <ChevronLeft className="h-5 w-5 mr-1" />
-                    Prev
+                  <Button variant="outline" onClick={handlePrevious} disabled={currentIndex === 0} className="flex-1 h-12 rounded-xl border-gray-200 disabled:opacity-40 font-medium">
+                    <ChevronLeft className="h-5 w-5 mr-1" />Prev
                   </Button>
-                  {/* Mobile note button */}
-                  {linkInfo?.allow_notes && (
-                    <Button
-                      variant="outline"
-                      onClick={() => setShowNoteInput(true)}
-                      className="h-11 md:hidden rounded-xl border-gray-200 px-3"
-                    >
-                      <MessageSquare className="h-4 w-4" />
-                    </Button>
-                  )}
-                  <Button
-                    onClick={handleNext}
-                    disabled={currentIndex === filteredAssets.length - 1}
-                    className="flex-1 h-11 md:h-12 rounded-xl bg-gray-900 hover:bg-gray-800 disabled:opacity-40 font-medium"
-                  >
-                    Next
-                    <ChevronRight className="h-5 w-5 ml-1" />
+                  <Button onClick={handleNext} disabled={currentIndex === filteredAssets.length - 1} className="flex-1 h-12 rounded-xl bg-gray-900 hover:bg-gray-800 disabled:opacity-40 font-medium">
+                    Next<ChevronRight className="h-5 w-5 ml-1" />
                   </Button>
                 </div>
               </div>
+            </div>
+          </div>
 
-              {/* Mobile Note Modal */}
-              {showNoteInput && (
-                <div className="md:hidden fixed inset-x-0 bottom-0 z-50 bg-white rounded-t-2xl shadow-2xl border-t border-gray-200 p-4 pb-8">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-sm font-medium text-gray-700">Add Note</span>
-                    <button
-                      onClick={() => {
-                        setShowNoteInput(false)
-                        setNoteValue(selectedAsset.rating_note || '')
-                      }}
-                      className="text-gray-400 hover:text-gray-600"
-                    >
-                      <X className="h-5 w-5" />
-                    </button>
+          {/* Mobile Layout - Completely separate */}
+          <div className="md:hidden h-full flex flex-col">
+            {/* Asset area - constrained to leave room for controls */}
+            <div className="flex-1 relative flex items-center justify-center p-2 pb-[180px]">
+              {selectedAsset.asset_type === 'video' ? (
+                <video
+                  src={selectedAsset.publicUrl}
+                  className="max-w-full max-h-full object-contain rounded-lg"
+                  controls
+                  autoPlay
+                  playsInline
+                />
+              ) : (
+                <img
+                  src={selectedAsset.previewUrl || selectedAsset.publicUrl}
+                  alt={selectedAsset.tags?.[0] || 'Asset'}
+                  className="max-w-full max-h-full object-contain rounded-lg"
+                />
+              )}
+
+              {/* Close button */}
+              <button
+                onClick={() => { setSelectedAsset(null); setShowNoteInput(false) }}
+                className="absolute top-2 right-2 h-9 w-9 rounded-full bg-black/60 flex items-center justify-center text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
+
+              {/* Counter */}
+              <div className="absolute top-2 left-2 px-2.5 py-1 bg-black/60 text-white text-sm font-medium rounded-full">
+                {currentIndex + 1} / {filteredAssets.length}
+              </div>
+            </div>
+
+            {/* Fixed bottom controls */}
+            <div className="fixed bottom-0 left-0 right-0 bg-white rounded-t-2xl shadow-2xl">
+              {/* Rating buttons */}
+              {linkInfo?.allow_rating && (
+                <div className="px-4 pt-4 pb-2">
+                  <div className="flex w-full p-1 rounded-xl bg-gray-100/80 border border-gray-200/50 gap-1">
+                    {([
+                      { value: 'approved' as const, label: 'Approved', icon: Check, colors: { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-700', icon: 'text-emerald-600' } },
+                      { value: 'maybe' as const, label: 'Maybe', icon: Circle, colors: { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-700', icon: 'text-amber-600' } },
+                      { value: 'rejected' as const, label: 'Rejected', icon: X, colors: { bg: 'bg-gray-100', border: 'border-gray-300', text: 'text-gray-700', icon: 'text-gray-500' } },
+                    ]).map((option) => {
+                      const isSelected = selectedAsset.rating === option.value
+                      const Icon = option.icon
+                      return (
+                        <button
+                          key={option.value}
+                          onClick={() => handleRatingChange(selectedAsset, isSelected ? null : option.value)}
+                          className={cn(
+                            'flex-1 flex items-center justify-center gap-1 py-2.5 rounded-lg text-sm font-medium transition-all',
+                            isSelected
+                              ? cn(option.colors.bg, 'border', option.colors.border, option.colors.text, 'shadow-sm')
+                              : 'text-gray-400 border border-transparent'
+                          )}
+                        >
+                          <Icon className={cn('h-4 w-4', isSelected && option.colors.icon)} strokeWidth={2.5} />
+                          <span>{option.label}</span>
+                        </button>
+                      )
+                    })}
                   </div>
-                  <textarea
-                    value={noteValue}
-                    onChange={(e) => setNoteValue(e.target.value)}
-                    placeholder="Add a note..."
-                    rows={3}
-                    autoFocus
-                    className="w-full px-3 py-2.5 text-base bg-gray-50 border border-gray-200 rounded-lg resize-none placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-200 focus:border-gray-300"
-                  />
-                  <Button
-                    onClick={handleNoteSave}
-                    className="w-full mt-3 h-11 rounded-xl bg-gray-900 hover:bg-gray-800"
-                  >
-                    Save Note
-                  </Button>
                 </div>
               )}
+
+              {/* Navigation */}
+              <div className="px-4 pb-6 pt-2">
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" onClick={handlePrevious} disabled={currentIndex === 0} className="flex-1 h-11 rounded-xl border-gray-200 disabled:opacity-40 font-medium">
+                    <ChevronLeft className="h-5 w-5 mr-1" />Prev
+                  </Button>
+                  {linkInfo?.allow_notes && (
+                    <Button variant="outline" onClick={() => setShowNoteInput(true)} className="h-11 rounded-xl border-gray-200 px-3">
+                      <MessageSquare className="h-4 w-4" />
+                    </Button>
+                  )}
+                  <Button onClick={handleNext} disabled={currentIndex === filteredAssets.length - 1} className="flex-1 h-11 rounded-xl bg-gray-900 hover:bg-gray-800 disabled:opacity-40 font-medium">
+                    Next<ChevronRight className="h-5 w-5 ml-1" />
+                  </Button>
+                </div>
+              </div>
             </div>
+
+            {/* Mobile Note Modal */}
+            {showNoteInput && (
+              <div className="fixed inset-x-0 bottom-0 z-50 bg-white rounded-t-2xl shadow-2xl p-4 pb-8">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-medium text-gray-700">Add Note</span>
+                  <button onClick={() => { setShowNoteInput(false); setNoteValue(selectedAsset.rating_note || '') }} className="text-gray-400">
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <textarea
+                  value={noteValue}
+                  onChange={(e) => setNoteValue(e.target.value)}
+                  placeholder="Add a note..."
+                  rows={3}
+                  autoFocus
+                  className="w-full px-3 py-2.5 text-base bg-gray-50 border border-gray-200 rounded-lg resize-none"
+                />
+                <Button onClick={handleNoteSave} className="w-full mt-3 h-11 rounded-xl bg-gray-900 hover:bg-gray-800">
+                  Save Note
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       )}
