@@ -469,9 +469,9 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
               </div>
             </div>
 
-            {/* Mobile Note Modal */}
+            {/* Mobile Note Modal - fixed so it doesn't affect layout */}
             {showNoteInput && (
-              <div className="absolute inset-x-0 bottom-0 z-20 bg-white rounded-t-2xl shadow-2xl p-4" style={{ paddingBottom: 'max(2rem, env(safe-area-inset-bottom, 2rem))' }}>
+              <div className="fixed inset-x-0 bottom-0 z-[60] bg-white rounded-t-2xl shadow-2xl p-4" style={{ paddingBottom: 'max(2rem, env(safe-area-inset-bottom, 2rem))' }}>
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-sm font-medium text-gray-700">Add Note</span>
                   <button onClick={() => { setShowNoteInput(false); setNoteValue(selectedAsset.rating_note || '') }} className="text-gray-400">
