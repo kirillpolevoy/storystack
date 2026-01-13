@@ -469,27 +469,31 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
               </div>
             </div>
 
-            {/* Mobile Note Modal - fixed so it doesn't affect layout */}
-            {showNoteInput && (
-              <div className="fixed inset-x-0 bottom-0 z-[60] bg-white rounded-t-2xl shadow-2xl p-4" style={{ paddingBottom: 'max(2rem, env(safe-area-inset-bottom, 2rem))' }}>
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm font-medium text-gray-700">Add Note</span>
-                  <button onClick={() => { setShowNoteInput(false); setNoteValue(selectedAsset.rating_note || '') }} className="text-gray-400">
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
-                <textarea
-                  value={noteValue}
-                  onChange={(e) => setNoteValue(e.target.value)}
-                  placeholder="Add a note..."
-                  rows={3}
-                  className="w-full px-3 py-2.5 text-base bg-gray-50 border border-gray-200 rounded-lg resize-none"
-                />
-                <Button onClick={handleNoteSave} className="w-full mt-3 h-11 rounded-xl bg-gray-900 hover:bg-gray-800">
-                  Save Note
-                </Button>
-              </div>
-            )}
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Note Modal - outside modal for proper stacking */}
+      {selectedAsset && showNoteInput && (
+        <div className="md:hidden fixed inset-0 z-[100]">
+          <div className="absolute inset-0 bg-black/50" onClick={() => { setShowNoteInput(false); setNoteValue(selectedAsset.rating_note || '') }} />
+          <div className="absolute inset-x-0 bottom-0 bg-white rounded-t-2xl shadow-2xl p-4" style={{ paddingBottom: 'max(2rem, env(safe-area-inset-bottom, 2rem))' }}>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-medium text-gray-700">Add Note</span>
+              <button onClick={() => { setShowNoteInput(false); setNoteValue(selectedAsset.rating_note || '') }} className="text-gray-400">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <textarea
+              value={noteValue}
+              onChange={(e) => setNoteValue(e.target.value)}
+              placeholder="Add a note..."
+              rows={3}
+              className="w-full px-3 py-2.5 text-base bg-gray-50 border border-gray-200 rounded-lg resize-none"
+            />
+            <Button onClick={handleNoteSave} className="w-full mt-3 h-11 rounded-xl bg-gray-900 hover:bg-gray-800">
+              Save Note
+            </Button>
           </div>
         </div>
       )}
