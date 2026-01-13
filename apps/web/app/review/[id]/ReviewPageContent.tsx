@@ -148,16 +148,18 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-xl font-semibold text-gray-900">{linkInfo?.name}</h1>
+          {/* Title row */}
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-lg sm:text-xl font-semibold text-gray-900 truncate">{linkInfo?.name}</h1>
               <p className="text-sm text-gray-500 mt-0.5">
-                {linkInfo?.workspace_name} | {filteredAssets.length} assets
+                {filteredAssets.length} assets
               </p>
             </div>
+            {/* Rating legend - hidden on mobile */}
             {linkInfo?.allow_rating && (
-              <div className="flex items-center gap-2 text-sm text-gray-600">
-                <span>Rate each asset:</span>
+              <div className="hidden sm:flex items-center gap-2 text-sm text-gray-600 shrink-0">
+                <span className="text-gray-400">Rate:</span>
                 <RatingLegend />
               </div>
             )}
@@ -170,7 +172,7 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                 variant={selectedTag === null ? 'default' : 'outline'}
                 size="sm"
                 onClick={() => setSelectedTag(null)}
-                className="h-7 text-xs"
+                className="h-8 text-xs"
               >
                 All ({assets?.length || 0})
               </Button>
@@ -182,7 +184,7 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                     variant={selectedTag === tag ? 'default' : 'outline'}
                     size="sm"
                     onClick={() => setSelectedTag(tag)}
-                    className="h-7 text-xs"
+                    className="h-8 text-xs"
                   >
                     {tag} ({count})
                   </Button>
