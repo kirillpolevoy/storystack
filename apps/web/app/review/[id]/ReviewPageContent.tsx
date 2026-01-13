@@ -352,10 +352,10 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
             </div>
           </div>
 
-          {/* Mobile Layout - Completely separate */}
-          <div className="md:hidden h-full flex flex-col">
-            {/* Asset area - constrained to leave room for controls */}
-            <div className="flex-1 relative flex items-center justify-center p-2 pb-[180px]">
+          {/* Mobile Layout */}
+          <div className="md:hidden flex flex-col h-full">
+            {/* Asset area - flex-1 takes remaining space, min-h-0 allows shrinking */}
+            <div className="flex-1 min-h-0 relative flex items-center justify-center p-2 bg-black">
               {selectedAsset.asset_type === 'video' ? (
                 <video
                   src={selectedAsset.publicUrl}
@@ -386,8 +386,8 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
               </div>
             </div>
 
-            {/* Fixed bottom controls */}
-            <div className="fixed bottom-0 left-0 right-0 bg-white rounded-t-2xl shadow-2xl">
+            {/* Bottom controls - fixed height, won't shrink */}
+            <div className="shrink-0 bg-white rounded-t-2xl shadow-2xl">
               {/* Rating buttons */}
               {linkInfo?.allow_rating && (
                 <div className="px-4 pt-4 pb-2">
@@ -419,8 +419,8 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                 </div>
               )}
 
-              {/* Navigation */}
-              <div className="px-4 pb-6 pt-2">
+              {/* Navigation - pb handles safe area for iOS home indicator */}
+              <div className="px-4 pt-2" style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom, 1.5rem))' }}>
                 <div className="flex items-center gap-2">
                   <Button variant="outline" onClick={handlePrevious} disabled={currentIndex === 0} className="flex-1 h-11 rounded-xl border-gray-200 disabled:opacity-40 font-medium">
                     <ChevronLeft className="h-5 w-5 mr-1" />Prev
