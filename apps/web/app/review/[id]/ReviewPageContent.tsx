@@ -228,26 +228,15 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
 
       {/* Asset Detail Modal - Mobile Optimized */}
       {selectedAsset && (
-        <div className="fixed inset-0 z-50 bg-black/95 md:bg-black/80">
-          {/* Close button - only visible on mobile, desktop has it in side panel */}
-          <button
-            onClick={() => {
-              setSelectedAsset(null)
-              setShowNoteInput(false)
-            }}
-            className="absolute top-4 right-4 z-50 h-10 w-10 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-colors md:hidden"
-          >
-            <X className="h-5 w-5" />
-          </button>
-
-          {/* Mobile Layout */}
+        <div className="fixed inset-0 z-50 bg-black">
+          {/* Mobile Layout - Vertical stack with fixed bottom controls */}
           <div className="h-full flex flex-col md:flex-row">
-            {/* Asset Preview */}
-            <div className="relative flex-1 flex items-center justify-center min-h-0">
+            {/* Asset Preview - Takes remaining space above controls */}
+            <div className="relative flex-1 flex items-center justify-center min-h-0 p-2">
               {selectedAsset.asset_type === 'video' ? (
                 <video
                   src={selectedAsset.publicUrl}
-                  className="max-w-full max-h-full object-contain"
+                  className="max-w-full max-h-full object-contain rounded-lg"
                   controls
                   autoPlay
                   playsInline
@@ -256,49 +245,37 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                 <img
                   src={selectedAsset.previewUrl || selectedAsset.publicUrl}
                   alt={selectedAsset.tags?.[0] || 'Asset'}
-                  className="max-w-full max-h-full object-contain"
+                  className="max-w-full max-h-full object-contain rounded-lg"
                 />
               )}
 
+              {/* Close button */}
+              <button
+                onClick={() => {
+                  setSelectedAsset(null)
+                  setShowNoteInput(false)
+                }}
+                className="absolute top-2 right-2 z-50 h-9 w-9 rounded-full bg-black/60 hover:bg-black/80 flex items-center justify-center text-white transition-colors md:hidden"
+              >
+                <X className="h-5 w-5" />
+              </button>
+
               {/* Counter Badge */}
-              <div className="absolute top-4 left-4 px-3 py-1.5 bg-black/60 backdrop-blur-sm text-white text-sm font-medium rounded-full">
+              <div className="absolute top-2 left-2 px-2.5 py-1 bg-black/60 backdrop-blur-sm text-white text-sm font-medium rounded-full">
                 {currentIndex + 1} / {filteredAssets.length}
               </div>
-
-              {/* Current Rating Badge on Image */}
-              {selectedAsset.rating && (
-                <div className="absolute top-4 left-20 flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-sm font-medium bg-white/90 backdrop-blur-sm shadow-sm">
-                  {selectedAsset.rating === 'approved' ? (
-                    <>
-                      <Check className="h-3.5 w-3.5 text-emerald-600" strokeWidth={2.5} />
-                      <span className="text-emerald-700">Approved</span>
-                    </>
-                  ) : selectedAsset.rating === 'maybe' ? (
-                    <>
-                      <Circle className="h-3.5 w-3.5 text-amber-600" strokeWidth={2.5} />
-                      <span className="text-amber-700">Maybe</span>
-                    </>
-                  ) : (
-                    <>
-                      <X className="h-3.5 w-3.5 text-gray-500" strokeWidth={2.5} />
-                      <span className="text-gray-700">Rejected</span>
-                    </>
-                  )}
-                </div>
-              )}
             </div>
 
-            {/* Mobile: Bottom Sheet / Desktop: Side Panel */}
-            <div className="bg-white md:w-96 md:h-full flex flex-col rounded-t-3xl md:rounded-none shadow-2xl md:shadow-none">
-              {/* Drag Handle (Mobile) / Close button (Desktop) */}
-              <div className="flex justify-center pt-3 pb-2 md:justify-end md:pt-3 md:pb-0 md:pr-3">
-                <div className="w-10 h-1 bg-gray-300 rounded-full md:hidden" />
+            {/* Mobile: Fixed Bottom Controls / Desktop: Side Panel */}
+            <div className="bg-white md:w-96 md:h-full flex flex-col rounded-t-2xl md:rounded-none shrink-0">
+              {/* Desktop close button */}
+              <div className="hidden md:flex justify-end pt-3 pr-3">
                 <button
                   onClick={() => {
                     setSelectedAsset(null)
                     setShowNoteInput(false)
                   }}
-                  className="hidden md:flex h-8 w-8 rounded-full bg-gray-100 hover:bg-gray-200 items-center justify-center text-gray-500 hover:text-gray-700 transition-colors"
+                  className="h-8 w-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 hover:text-gray-700 transition-colors"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -348,9 +325,9 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                 </div>
               )}
 
-              {/* Note Section - Compact and integrated */}
+              {/* Note Section - Hidden on mobile by default, visible on desktop */}
               {linkInfo?.allow_notes && (
-                <div className="px-4 md:px-6 py-3 flex-1 overflow-y-auto border-t border-gray-100">
+                <div className="hidden md:block px-6 py-3 md:flex-1 md:overflow-y-auto border-t border-gray-100">
                   {showNoteInput ? (
                     <div className="space-y-3">
                       <textarea
@@ -397,7 +374,7 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                       }}
                       className="group w-full flex items-start gap-2 text-left px-2 py-2 -mx-2 rounded-lg hover:bg-gray-50 transition-colors"
                     >
-                      <span className="text-sm md:text-base text-gray-600 leading-relaxed flex-1">
+                      <span className="text-base text-gray-600 leading-relaxed flex-1">
                         "{selectedAsset.rating_note}"
                       </span>
                       <Pencil className="h-3.5 w-3.5 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity mt-1 shrink-0" />
@@ -414,28 +391,70 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                 </div>
               )}
 
-              {/* Mobile Navigation Footer */}
-              <div className="px-4 md:px-6 py-4 border-t border-gray-100 bg-gray-50/50 safe-area-pb">
-                <div className="flex items-center gap-3">
+              {/* Navigation Footer */}
+              <div className="px-4 md:px-6 py-3 md:py-4 border-t border-gray-100 bg-gray-50/50">
+                <div className="flex items-center gap-2">
                   <Button
                     variant="outline"
                     onClick={handlePrevious}
                     disabled={currentIndex === 0}
-                    className="flex-1 h-12 rounded-xl border-gray-200 disabled:opacity-40 text-base font-medium"
+                    className="flex-1 h-11 md:h-12 rounded-xl border-gray-200 disabled:opacity-40 font-medium"
                   >
                     <ChevronLeft className="h-5 w-5 mr-1" />
-                    Previous
+                    Prev
                   </Button>
+                  {/* Mobile note button */}
+                  {linkInfo?.allow_notes && (
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowNoteInput(true)}
+                      className="h-11 md:hidden rounded-xl border-gray-200 px-3"
+                    >
+                      <MessageSquare className="h-4 w-4" />
+                    </Button>
+                  )}
                   <Button
                     onClick={handleNext}
                     disabled={currentIndex === filteredAssets.length - 1}
-                    className="flex-1 h-12 rounded-xl bg-gray-900 hover:bg-gray-800 disabled:opacity-40 text-base font-medium"
+                    className="flex-1 h-11 md:h-12 rounded-xl bg-gray-900 hover:bg-gray-800 disabled:opacity-40 font-medium"
                   >
                     Next
                     <ChevronRight className="h-5 w-5 ml-1" />
                   </Button>
                 </div>
               </div>
+
+              {/* Mobile Note Modal */}
+              {showNoteInput && (
+                <div className="md:hidden fixed inset-x-0 bottom-0 z-50 bg-white rounded-t-2xl shadow-2xl border-t border-gray-200 p-4 pb-8">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm font-medium text-gray-700">Add Note</span>
+                    <button
+                      onClick={() => {
+                        setShowNoteInput(false)
+                        setNoteValue(selectedAsset.rating_note || '')
+                      }}
+                      className="text-gray-400 hover:text-gray-600"
+                    >
+                      <X className="h-5 w-5" />
+                    </button>
+                  </div>
+                  <textarea
+                    value={noteValue}
+                    onChange={(e) => setNoteValue(e.target.value)}
+                    placeholder="Add a note..."
+                    rows={3}
+                    autoFocus
+                    className="w-full px-3 py-2.5 text-base bg-gray-50 border border-gray-200 rounded-lg resize-none placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-200 focus:border-gray-300"
+                  />
+                  <Button
+                    onClick={handleNoteSave}
+                    className="w-full mt-3 h-11 rounded-xl bg-gray-900 hover:bg-gray-800"
+                  >
+                    Save Note
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
         </div>
