@@ -476,8 +476,8 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
       {/* Mobile Note Modal - outside modal for proper stacking */}
       {selectedAsset && showNoteInput && (
         <div className="md:hidden fixed inset-0 z-[100]">
-          <div className="absolute inset-0 bg-black/50" onClick={() => { setShowNoteInput(false); setNoteValue(selectedAsset.rating_note || '') }} />
-          <div className="absolute inset-x-0 bottom-0 bg-white rounded-t-2xl shadow-2xl p-4" style={{ paddingBottom: 'max(2rem, env(safe-area-inset-bottom, 2rem))' }}>
+          <div className="absolute inset-0 bg-black/50 z-0" onClick={() => { setShowNoteInput(false); setNoteValue(selectedAsset.rating_note || '') }} />
+          <div className="absolute inset-x-0 bottom-0 z-10 bg-white rounded-t-2xl shadow-2xl p-4" style={{ paddingBottom: 'max(2rem, env(safe-area-inset-bottom, 2rem))' }}>
             <div className="flex items-center justify-between mb-3">
               <span className="text-sm font-medium text-gray-700">Add Note</span>
               <button onClick={() => { setShowNoteInput(false); setNoteValue(selectedAsset.rating_note || '') }} className="text-gray-400">
