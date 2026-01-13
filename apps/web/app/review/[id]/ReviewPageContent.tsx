@@ -483,7 +483,6 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                   onChange={(e) => setNoteValue(e.target.value)}
                   placeholder="Add a note..."
                   rows={3}
-                  autoFocus
                   className="w-full px-3 py-2.5 text-base bg-gray-50 border border-gray-200 rounded-lg resize-none"
                 />
                 <Button onClick={handleNoteSave} className="w-full mt-3 h-11 rounded-xl bg-gray-900 hover:bg-gray-800">
