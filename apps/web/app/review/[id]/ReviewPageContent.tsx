@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useReviewLinkInfo, useReviewLinkAssets } from '@/hooks/useReviewLinks'
 import { useUpdateAssetRatingViaReviewLink } from '@/hooks/useUpdateAssetRating'
 import { Asset, AssetRating } from '@/types'
@@ -25,6 +25,29 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
   const [showNoteInput, setShowNoteInput] = useState(false)
   const [noteValue, setNoteValue] = useState('')
+
+  // Lock body scroll when modal is open (prevents iOS Safari background scroll)
+  useEffect(() => {
+    if (selectedAsset) {
+      document.body.style.overflow = 'hidden'
+      document.body.style.position = 'fixed'
+      document.body.style.width = '100%'
+      document.body.style.top = `-${window.scrollY}px`
+    } else {
+      const scrollY = document.body.style.top
+      document.body.style.overflow = ''
+      document.body.style.position = ''
+      document.body.style.width = ''
+      document.body.style.top = ''
+      window.scrollTo(0, parseInt(scrollY || '0') * -1)
+    }
+    return () => {
+      document.body.style.overflow = ''
+      document.body.style.position = ''
+      document.body.style.width = ''
+      document.body.style.top = ''
+    }
+  }, [selectedAsset])
 
   // Get unique tags from assets or use allowed_tags from link
   const availableTags = useMemo(() => {
@@ -353,7 +376,7 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
           </div>
 
           {/* Mobile Layout - Overlay approach */}
-          <div className="md:hidden h-full bg-black">
+          <div className="md:hidden fixed inset-0 bg-black z-50">
             {/* Full-screen media */}
             <div className="absolute inset-0 flex items-center justify-center">
               {selectedAsset.asset_type === 'video' ? (
