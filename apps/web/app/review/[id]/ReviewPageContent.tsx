@@ -375,14 +375,27 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
             </div>
           </div>
 
-          {/* Mobile Layout - Overlay approach */}
-          <div className="md:hidden fixed inset-0 bg-black z-50">
-            {/* Full-screen media */}
-            <div className="absolute inset-0 flex items-center justify-center">
+          {/* Mobile Layout - Flexbox approach (guarantees controls always visible) */}
+          <div className="md:hidden fixed inset-0 bg-black z-50 flex flex-col">
+            {/* Top bar */}
+            <div className="shrink-0 p-3 flex items-center justify-between">
+              <div className="px-2.5 py-1 bg-white/10 backdrop-blur-sm text-white text-sm font-medium rounded-full">
+                {currentIndex + 1} / {filteredAssets.length}
+              </div>
+              <button
+                onClick={() => { setSelectedAsset(null); setShowNoteInput(false) }}
+                className="h-9 w-9 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Media area - flex-1 takes remaining space, min-h-0 allows shrinking */}
+            <div className="flex-1 min-h-0 flex items-center justify-center px-2">
               {selectedAsset.asset_type === 'video' ? (
                 <video
                   src={selectedAsset.publicUrl}
-                  className="w-full h-full object-contain"
+                  className="max-w-full max-h-full object-contain rounded-lg"
                   controls
                   autoPlay
                   playsInline
@@ -391,84 +404,66 @@ export function ReviewPageContent({ linkId }: ReviewPageContentProps) {
                 <img
                   src={selectedAsset.previewUrl || selectedAsset.publicUrl}
                   alt={selectedAsset.tags?.[0] || 'Asset'}
-                  className="w-full h-full object-contain"
+                  className="max-w-full max-h-full object-contain rounded-lg"
                 />
               )}
             </div>
 
-            {/* Top bar - Close & Counter */}
-            <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between z-10">
-              <div className="px-2.5 py-1 bg-black/60 backdrop-blur-sm text-white text-sm font-medium rounded-full">
-                {currentIndex + 1} / {filteredAssets.length}
-              </div>
-              <button
-                onClick={() => { setSelectedAsset(null); setShowNoteInput(false) }}
-                className="h-9 w-9 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center text-white"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Bottom controls - Fixed overlay with gradient */}
-            <div
-              className="absolute bottom-0 left-0 right-0 z-10"
-              style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
-            >
-              <div className="bg-gradient-to-t from-black/90 via-black/70 to-transparent pt-16 pb-4 px-4">
-                {/* Rating buttons */}
-                {linkInfo?.allow_rating && (
-                  <div className="flex w-full p-1 rounded-xl bg-white/10 backdrop-blur-sm border border-white/20 gap-1 mb-3">
-                    {([
-                      { value: 'approved' as const, label: 'Approved', icon: Check, colors: { active: 'bg-emerald-500 text-white border-emerald-400' } },
-                      { value: 'maybe' as const, label: 'Maybe', icon: Circle, colors: { active: 'bg-amber-500 text-white border-amber-400' } },
-                      { value: 'rejected' as const, label: 'Rejected', icon: X, colors: { active: 'bg-gray-500 text-white border-gray-400' } },
-                    ]).map((option) => {
-                      const isSelected = selectedAsset.rating === option.value
-                      const Icon = option.icon
-                      return (
-                        <button
-                          key={option.value}
-                          onClick={() => handleRatingChange(selectedAsset, isSelected ? null : option.value)}
-                          className={cn(
-                            'flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-sm font-medium transition-all',
-                            isSelected
-                              ? cn(option.colors.active, 'border shadow-sm')
-                              : 'text-white/70 border border-transparent hover:bg-white/10'
-                          )}
-                        >
-                          <Icon className="h-4 w-4" strokeWidth={2.5} />
-                          <span>{option.label}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                )}
-
-                {/* Navigation */}
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handlePrevious}
-                    disabled={currentIndex === 0}
-                    className="flex-1 h-11 rounded-xl bg-white/10 backdrop-blur-sm border border-white/20 text-white font-medium flex items-center justify-center disabled:opacity-30 transition-all"
-                  >
-                    <ChevronLeft className="h-5 w-5 mr-1" />Prev
-                  </button>
-                  {linkInfo?.allow_notes && (
-                    <button
-                      onClick={() => setShowNoteInput(true)}
-                      className="h-11 w-11 rounded-xl bg-white/10 backdrop-blur-sm border border-white/20 text-white flex items-center justify-center"
-                    >
-                      <MessageSquare className="h-4 w-4" />
-                    </button>
-                  )}
-                  <button
-                    onClick={handleNext}
-                    disabled={currentIndex === filteredAssets.length - 1}
-                    className="flex-1 h-11 rounded-xl bg-white text-gray-900 font-medium flex items-center justify-center disabled:opacity-30 transition-all"
-                  >
-                    Next<ChevronRight className="h-5 w-5 ml-1" />
-                  </button>
+            {/* Bottom controls - shrink-0 ensures it never gets compressed */}
+            <div className="shrink-0 bg-black px-4 pt-3" style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 1rem))' }}>
+              {/* Rating buttons */}
+              {linkInfo?.allow_rating && (
+                <div className="flex w-full p-1 rounded-xl bg-white/10 border border-white/20 gap-1 mb-3">
+                  {([
+                    { value: 'approved' as const, label: 'Approved', icon: Check, colors: { active: 'bg-emerald-500 text-white border-emerald-400' } },
+                    { value: 'maybe' as const, label: 'Maybe', icon: Circle, colors: { active: 'bg-amber-500 text-white border-amber-400' } },
+                    { value: 'rejected' as const, label: 'Rejected', icon: X, colors: { active: 'bg-gray-500 text-white border-gray-400' } },
+                  ]).map((option) => {
+                    const isSelected = selectedAsset.rating === option.value
+                    const Icon = option.icon
+                    return (
+                      <button
+                        key={option.value}
+                        onClick={() => handleRatingChange(selectedAsset, isSelected ? null : option.value)}
+                        className={cn(
+                          'flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium transition-all',
+                          isSelected
+                            ? cn(option.colors.active, 'border shadow-sm')
+                            : 'text-white/70 border border-transparent'
+                        )}
+                      >
+                        <Icon className="h-4 w-4" strokeWidth={2.5} />
+                        <span>{option.label}</span>
+                      </button>
+                    )
+                  })}
                 </div>
+              )}
+
+              {/* Navigation */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handlePrevious}
+                  disabled={currentIndex === 0}
+                  className="flex-1 h-10 rounded-xl bg-white/10 border border-white/20 text-white font-medium flex items-center justify-center disabled:opacity-30"
+                >
+                  <ChevronLeft className="h-5 w-5 mr-1" />Prev
+                </button>
+                {linkInfo?.allow_notes && (
+                  <button
+                    onClick={() => setShowNoteInput(true)}
+                    className="h-10 w-10 rounded-xl bg-white/10 border border-white/20 text-white flex items-center justify-center"
+                  >
+                    <MessageSquare className="h-4 w-4" />
+                  </button>
+                )}
+                <button
+                  onClick={handleNext}
+                  disabled={currentIndex === filteredAssets.length - 1}
+                  className="flex-1 h-10 rounded-xl bg-white text-gray-900 font-medium flex items-center justify-center disabled:opacity-30"
+                >
+                  Next<ChevronRight className="h-5 w-5 ml-1" />
+                </button>
               </div>
             </div>
 
